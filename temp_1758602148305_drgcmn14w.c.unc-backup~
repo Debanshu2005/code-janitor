@@ -1,0 +1,10 @@
+#include <stdio.h>
+int main() {
+printf("Start");
+if(1) {
+printf("Inside if");
+}else{
+printf("Inside else");
+}
+return 0
+   }
