@@ -2,7 +2,8 @@ const { exec } = require('child_process');
 const fs = require('fs').promises;
 const path = require('path');
 const BaseFixer = require('./base-fixer');
-const FormatterPaths = require('./formatter-paths'); // Add this import
+const FormatterPaths = require(path.join(__dirname, '../formatter-paths'));
+const vscode = require('vscode');
 
 class JavaFixer extends BaseFixer {
   async analyze() {
@@ -31,7 +32,7 @@ class JavaFixer extends BaseFixer {
       let line = lines[i];
       let trimmed = line.trim();
 
-      // Handle comments
+      // Handle multi-line comments
       if (inMultiLineComment) {
         fixedLines.push(line);
         if (trimmed.includes('*/')) inMultiLineComment = false;
@@ -42,6 +43,7 @@ class JavaFixer extends BaseFixer {
         fixedLines.push(line);
         continue;
       }
+
       if (!trimmed || trimmed.startsWith('//')) {
         fixedLines.push(line);
         continue;
@@ -91,7 +93,6 @@ class JavaFixer extends BaseFixer {
       'return', 'break', 'continue'
     ];
 
-    // Already valid endings
     if (
       trimmed.endsWith(';') ||
       trimmed.endsWith('{') ||
@@ -102,13 +103,10 @@ class JavaFixer extends BaseFixer {
     if (trimmed.startsWith('@')) return false;
     if (blockKeywords.includes(firstWord)) return false;
 
-    // Method declaration vs method call
     if (trimmed.endsWith(')')) {
       const declStarters = ['public', 'private', 'protected', 'static', 'final', 'synchronized'];
-      if (declStarters.some(k => trimmed.startsWith(k))) {
-        return false; // method declaration
-      }
-      return true; // method call → needs ;
+      if (declStarters.some(k => trimmed.startsWith(k))) return false;
+      return true; // method call → needs semicolon
     }
 
     return true;
@@ -119,7 +117,6 @@ class JavaFixer extends BaseFixer {
     const tempFileName = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.java`;
     const tempFilePath = path.join(tempDir, tempFileName);
 
-    // Use the bundled Google Java Format path
     const jarPath = FormatterPaths.getJavaFormatterPath();
 
     try {
@@ -135,22 +132,18 @@ class JavaFixer extends BaseFixer {
             return reject(new Error(`Failed to read formatted file: ${readError.message}`));
           }
 
-          // Clean up temp file regardless of success
           await this._cleanupTempFile(tempFilePath);
 
           if (error) {
             console.warn(`Google Java Format had issues: ${stderr || error.message}`);
-            // Even if formatting fails, use the pre-fixed code
-            if (codeToFormat !== this.code) {
-              this.addFix(0, this.code.length, codeToFormat);
-            }
+            if (codeToFormat !== this.code) this.addFix(0, this.code.length, codeToFormat);
             return resolve();
           }
 
           if (formattedCode !== this.code) {
             this.addFix(0, this.code.length, formattedCode);
           }
-          
+
           console.log('✅ Java code formatted successfully with Google Java Format');
           resolve();
         });
@@ -165,7 +158,6 @@ class JavaFixer extends BaseFixer {
     try {
       await fs.unlink(filePath);
     } catch (error) {
-      // Ignore errors if file doesn't exist
       if (error.code !== 'ENOENT') {
         console.warn('Warning: Could not delete temp file:', filePath);
       }
@@ -174,11 +166,9 @@ class JavaFixer extends BaseFixer {
 
   async _fallbackFormatting() {
     console.log('Using fallback Java formatting...');
-    
-    // First apply syntax fixes
+
     let code = await this._fixBasicSyntaxAndBraces();
-    
-    // Then apply basic formatting
+
     const lines = code.split('\n');
     const fixedLines = [];
     const braceStack = [];
@@ -188,7 +178,6 @@ class JavaFixer extends BaseFixer {
       let line = lines[i];
       let trimmed = line.trim();
 
-      // Handle comments
       if (inComment) {
         fixedLines.push('    '.repeat(braceStack.length) + trimmed);
         if (trimmed.includes('*/')) inComment = false;
@@ -205,16 +194,12 @@ class JavaFixer extends BaseFixer {
         continue;
       }
 
-      // Handle closing brace before indent
       const closeBraces = (trimmed.match(/}/g) || []).length;
-      for (let j = 0; j < closeBraces && braceStack.length > 0; j++) {
-        braceStack.pop();
-      }
+      for (let j = 0; j < closeBraces && braceStack.length > 0; j++) braceStack.pop();
 
       const indentLevel = braceStack.length;
       const expectedIndent = '    '.repeat(indentLevel);
 
-      // Single-line control structures → wrap in braces
       const controlMatch = trimmed.match(/^(if|else|for|while)\b(.*)/);
       if (controlMatch) {
         const keyword = controlMatch[1];
@@ -234,12 +219,10 @@ class JavaFixer extends BaseFixer {
 
       fixedLines.push(expectedIndent + trimmed);
 
-      // Update brace tracking
       const openBraces = (trimmed.match(/{/g) || []).length;
       for (let j = 0; j < openBraces; j++) braceStack.push('{');
     }
 
-    // Close any unclosed braces
     if (braceStack.length > 0) {
       const missing = braceStack.length;
       console.log(`Added ${missing} missing closing brace(s) in fallback`);
@@ -250,11 +233,16 @@ class JavaFixer extends BaseFixer {
     }
 
     const formattedCode = fixedLines.join('\n');
-    if (formattedCode !== this.code) {
-      this.addFix(0, this.code.length, formattedCode);
-    }
-    
+    if (formattedCode !== this.code) this.addFix(0, this.code.length, formattedCode);
+
     console.log('✅ Fallback Java formatting completed');
+  }
+
+  /**
+   * Return the fully fixed/formatted code
+   */
+  getFixedCode() {
+    return this.applyFixes();
   }
 }
 

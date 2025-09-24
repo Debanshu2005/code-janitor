@@ -1,58 +1,87 @@
 {
   "name": "code-janitor",
-  "version": "0.1.0",
-  "description": "An autocorrect for code syntax across multiple languages (C, Java, JavaScript, Python).",
-  "main": "src/index.js",
-  "bin": {
-    "code-janitor": "./src/cli.js"
-  },
-  "files": [
-    "src/",
-    "uncrustify.cfg",
-    "README.md"
-  ],
-  "scripts": {
-    "start": "node src/cli.js",
-    "test": "jest",
-    "format:js": "prettier --write \"src/**/*.js\"",
-    "format:java": "google-java-format -r src/**/*.java",
-    "format:py": "black src/",
-    "format:c": "uncrustify -c uncrustify.cfg --replace src/**/*.c",
-    "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c",
-    "lint": "eslint src/**/*.js"
-  },
-  "keywords": [
-    "autocorrect",
-    "code",
-    "syntax",
-    "formatter",
-    "linter",
-    "multilanguage"
-  ],
-  "author": "Debanshu2005",
-  "license": "MIT",
+  "displayName": "Code Janitor",
+  "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, and Python inside VS Code.",
+  "version": "0.1.9",
+  "publisher": "Debanshu2005",
   "repository": {
     "type": "git",
     "url": "https://github.com/Debanshu2005/code-janitor.git"
   },
   "engines": {
+    "vscode": "^1.80.0",
     "node": ">=18"
   },
+  "categories": [
+    "Other",
+    "Linters",
+    "Formatters"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onCommand:codeJanitor.fixCode"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeJanitor.fixCode",
+        "title": "Code Janitor: Format Code",
+        "category": "Code Janitor"
+      }
+    ],
+    "menus": {
+      "command-palette": [
+        {
+          "command": "codeJanitor.fixCode"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codeJanitor.fixCode",
+        "key": "alt+d",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codeJanitor.fixCode",
+        "key": "alt+s",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "jest",
+    "format:js": "prettier --write \"src/**/*.js\"",
+    "format:java": "C:\\nvm4w\\nodejs\\google-java-format -r src/**/*.java",
+    "format:py": "C:\\nvm4w\\nodejs\\black src/",
+    "format:c": "C:\\nvm4w\\nodejs\\uncrustify -c src/core/fixers/uncrustify.cfg --replace src/**/*.{c,h,ino}",
+    "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c",
+    "lint": "eslint src/**/*.js",
+    "clean": "rimraf ./out",
+    "package": ".\\node_modules\\.bin\\vsce.cmd package",
+    "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
+  },
+  "files": [
+    "src/**/*",
+    "README.md",
+    "node_modules/**/*"
+
+  ],
   "dependencies": {
     "@babel/parser": "^7.23.0",
     "@babel/traverse": "^7.23.0",
+    "fs-extra": "^11.3.2",
     "tree-sitter": "^0.20.0",
-    "tree-sitter-python": "^0.20.0",
-    "tree-sitter-javascript": "^0.20.0"
+    "tree-sitter-javascript": "^0.20.0",
+    "tree-sitter-python": "^0.20.0"
   },
   "devDependencies": {
-    "prettier": "^3.0.0",
-    "google-java-format": "^1.15.0",
-    "black": "^23.7.0",
-    "uncrustify": "^0.81.0",
+    "@vscode/vsce": "^2.32.0",
+    "cross-env": "^7.0.3",
     "eslint": "^8.45.0",
     "jest": "^29.7.0",
-    "rimraf": "^5.0.1",
-    "cross-env": "^7.0.3"
+    "prettier": "^3.0.0",
+    "rimraf": "^5.0.1"
   }
 }
