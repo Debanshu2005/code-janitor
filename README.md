@@ -1,4 +1,4 @@
-# 🧹 Code Janitor - VSCode Extension
+#  Code Janitor - VSCode Extension
 
 ![VSCode Version](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
 ![Node Version](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
@@ -9,7 +9,7 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
 
 ---
 
-## 🔹 Features
+##  Features
 
 ### 1. Multi-language Support
 - **Python** (`.py` files)
@@ -65,7 +65,7 @@ code-janitor
 
 ---
 
-## 🔹 Installation (via VS Code)
+##  Installation (via VS Code)
 
 1. Clone the repository:
 
@@ -183,7 +183,7 @@ function greet() {
 
 
 ---
-## 🔹 Supported File Types
+##  Supported File Types
 
 | Language          | Extensions / VSCode languageId                  |
 | ----------------- | ----------------------------------------------- |
@@ -194,7 +194,7 @@ function greet() {
 
 
 ---
-## 🔹 Advanced Features
+##  Advanced Features
 
 1. MCU-specific C fixes for STM32, AVR, and ESP32.
 
@@ -224,7 +224,7 @@ function greet() {
 8. Create a Pull Request.
 
 ---
-## 🔹 Acknowledgements
+##  Acknowledgements
 1. https://github.com/psf/black --> Python Code Formatter
    
 2. https://github.com/uncrustify/uncrustify --> C/C++ code formatter
