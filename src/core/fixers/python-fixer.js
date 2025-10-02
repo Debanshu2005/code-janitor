@@ -1,131 +1,312 @@
-const { exec } = require('child_process');
-const fs = require('fs').promises;
-const path = require('path');
-const BaseFixer = require('./base-fixer');
-const FormatterPaths = require(path.join(__dirname, '../formatter-paths'));
+const { spawn } = require("child_process");
+const fs = require("fs").promises;
+const path = require("path");
+const BaseFixer = require("./base-fixer");
 
 class PythonFixer extends BaseFixer {
   async analyze() {
-    console.log('Analyzing Python file:', this.filePath);
-    await this._fixSyntaxAndFormatWithBlack();
+    console.log("Analyzing Python file:", this.filePath);
+
+    // Step 1: Apply manual critical fixes
+    await this._fixCriticalSyntaxErrors();
+
+    // Step 2: Use Black for proper formatting & indentation
+    await this._formatWithBlack();
   }
 
-  async _fixSyntaxAndFormatWithBlack() {
-    let currentCode = this.code;
-    const lines = currentCode.split('\n');
-    let fixedLines = [];
-    const indentSize = 4;
-    const levelStack = [0];
+  // ----------------- Manual fixes -----------------
+  async _fixCriticalSyntaxErrors() {
+    let code = this.code;
 
-    for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-      let line = lines[lineNum];
-      const trimmed = line.trim();
+    // Fix multiple statements on same line
+    code = this._fixMultipleStatementsOnSameLine(code);
+    code = this._fixMissingColons(code);
+    code = this._fixCriticalTypos(code);
+    code = this._fixMixedTabsSpaces(code);
+    code = this._fixPrintStatements(code);
 
-      if (!trimmed || trimmed.startsWith('#')) {
-        fixedLines.push(line);
-        continue;
-      }
+    if (code !== this.code) {
+      console.log("✅ Applied manual syntax fixes");
+      this.addFix(0, this.code.length, code);
+    }
+  }
 
-      let fixedLine = trimmed;
-      const blockKeywords = [
-        'if', 'elif', 'else',
-        'for', 'while', 'try',
-        'except', 'finally', 'with',
-        'def', 'class'
-      ];
-      const keyword = trimmed.split(/\s+/)[0];
+  _fixMultipleStatementsOnSameLine(code) {
+    return code.replace(/(print\([^)]*\))\s+(print\([^)]*\))/g, "$1\n$2");
+  }
 
-      // Step 1: Handle dedents
-      if (['elif', 'else', 'except', 'finally'].includes(keyword)) {
-        if (levelStack.length > 1) {
-          levelStack.pop();
-        }
-      }
+  _fixCriticalTypos(code) {
+    const typos = {
+      prinnt: "print",
+      imprt: "import",
+      improt: "import",
+      frmo: "from",
+      retrun: "return",
+      whiel: "while",
+      calss: "class",
+      excpet: "except",
+      fianlly: "finally",
+      Flase: "False",
+      "Non e": "None",
+      Ture: "True",
+      defn: "def",
+      retun: "return",
+      imort: "import",
+    };
 
-      const expectedIndentLevel = levelStack[levelStack.length - 1];
+    let fixed = code;
+    for (const [typo, correct] of Object.entries(typos)) {
+      fixed = fixed.replace(new RegExp(`\\b${typo}\\b`, "g"), correct);
+    }
+    return fixed;
+  }
 
-      // Step 2: Fix syntax (add colons, etc.)
-      if (/^def\s+[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
-        fixedLine = `${trimmed}():`;
-      } else if (/^class\s+[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
-        fixedLine = `${trimmed}:`;
-      } else if (blockKeywords.includes(keyword) && !trimmed.endsWith(':') && !trimmed.endsWith('\\')) {
-        fixedLine = `${trimmed}:`;
-      }
+  _fixMixedTabsSpaces(code) {
+    return code.replace(/\t/g, "    ");
+  }
 
-      // Step 3: Apply indent
-      const expectedIndent = expectedIndentLevel * indentSize;
-      fixedLines.push(' '.repeat(expectedIndent) + fixedLine);
+  _fixPrintStatements(code) {
+    // Fix Python 2 style print statements
+    return code.replace(
+      /^(\s*)print\s+([^()\n]+)$/gm,
+      (match, ws, content) => `${ws}print(${content.trim()})`,
+    );
+  }
 
-      // Step 4: Push new block level
-      if (fixedLine.endsWith(':')) {
-        levelStack.push(expectedIndentLevel + 1);
+  _fixMissingColons(code) {
+    const patterns = [
+      /\b(def\s+\w+\s*\([^)]*\))\s*$/gm,
+      /\b(class\s+\w+)\s*$/gm,
+      /\b(if\s+[^:\n]+)\s*$/gm,
+      /\b(elif\s+[^:\n]+)\s*$/gm,
+      /\b(else)\s*$/gm,
+      /\b(for\s+[^:\n]+)\s*$/gm,
+      /\b(while\s+[^:\n]+)\s*$/gm,
+      /\b(try)\s*$/gm,
+      /\b(except\s+[^:\n]*)\s*$/gm,
+      /\b(finally)\s*$/gm,
+      /\b(with\s+[^:\n]+)\s*$/gm,
+      /\b(if\s+__name__\s*==\s*["']__main__["'])\s*$/gm,
+    ];
+
+    let fixed = code;
+    for (const pattern of patterns) {
+      fixed = fixed.replace(pattern, (match, g1) =>
+        g1 && !g1.trim().endsWith(":") ? g1.trim() + ":" : match,
+      );
+    }
+    return fixed;
+  }
+
+  // ----------------- Black formatting -----------------
+  // Add this method to your PythonFixer class
+  async testBlack() {
+    console.log("🔧 Testing Black installation...");
+
+    const testCommands = [
+      { name: "black --version", cmd: "black", args: ["--version"] },
+      {
+        name: "python -m black --version",
+        cmd: "python",
+        args: ["-m", "black", "--version"],
+      },
+      { name: "black --help", cmd: "black", args: ["--help"] },
+    ];
+
+    for (const { name, cmd, args } of testCommands) {
+      try {
+        await new Promise((resolve, reject) => {
+          const proc = spawn(cmd, args, { shell: true });
+
+          let output = "";
+          proc.stdout.on("data", (data) => (output += data.toString()));
+          proc.stderr.on("data", (data) => (output += data.toString()));
+
+          proc.on("close", (code) => {
+            if (code === 0) {
+              console.log(`✅ ${name}: ${output.trim()}`);
+              resolve();
+            } else {
+              reject(new Error(`Exit code ${code}: ${output}`));
+            }
+          });
+
+          proc.on("error", reject);
+        });
+      } catch (error) {
+        console.log(`❌ ${name} failed: ${error.message}`);
       }
     }
+  }
+  // ----------------- Black formatting -----------------
+  async _formatWithBlack() {
+    const currentCode = this.fixes.length > 0 ? this.applyFixes() : this.code;
 
-    currentCode = fixedLines.join('\n');
-    if (!currentCode.endsWith('\n')) {
-      currentCode += '\n';
-    }
+    console.log("🔍 Current code before Black:");
+    console.log(currentCode);
+    console.log("---");
 
-    // Temp file for black
-    const tempDir = path.dirname(this.filePath);
-    const tempFileName = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.py`;
-    const tempFilePath = path.join(tempDir, tempFileName);
+    const tempFile = path.join(
+      __dirname,
+      `temp_python_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.py`,
+    );
 
     try {
-      await fs.writeFile(tempFilePath, currentCode);
+      await fs.writeFile(tempFile, currentCode);
+      console.log("📝 Temporary file created:", tempFile);
 
-      const blackPath = FormatterPaths.getBlackPath();
+      const formattedCode = await this._tryBlackCommands(tempFile);
 
-      return new Promise((resolve, reject) => {
-        exec(`"${blackPath}" "${tempFilePath}"`, async (error, stdout, stderr) => {
-          let formattedCode;
-          try {
-            formattedCode = await fs.readFile(tempFilePath, 'utf8');
-          } catch (readError) {
-            await this._cleanupTempFile(tempFilePath);
-            return reject(new Error(`Failed to read formatted file: ${readError.message}`));
-          }
+      if (formattedCode && formattedCode !== currentCode) {
+        console.log("✅ Black formatting successful!");
+        console.log("📝 Formatted code:");
+        console.log(formattedCode);
+        console.log("---");
 
-          // Always clean up
-          await this._cleanupTempFile(tempFilePath);
-
-          if (error) {
-            console.warn(`Black formatting had issues: ${stderr || error.message}`);
-            if (currentCode !== this.code) {
-              this.addFix(0, this.code.length, currentCode);
-            }
-            return resolve();
-          }
-
-          if (formattedCode !== this.code) {
-            this.addFix(0, this.code.length, formattedCode);
-          }
-
-          console.log('✅ Python code formatted successfully with Black');
-          resolve();
-        });
-      });
+        // CLEAR any existing fixes and add the Black-formatted code
+        this.fixes = []; // Clear previous fixes
+        this.addFix(0, currentCode.length, formattedCode);
+      } else if (formattedCode) {
+        console.log("ℹ️ Black: Code was already properly formatted");
+      } else {
+        console.warn(
+          "⚠️ Black formatting failed, using enhanced fallback formatting",
+        );
+        this._applyEnhancedFallbackFormatting(currentCode);
+      }
     } catch (error) {
-      await this._cleanupTempFile(tempFilePath);
-      throw error;
+      console.warn("❌ Black formatting error:", error.message);
+      this._applyEnhancedFallbackFormatting(currentCode);
+    } finally {
+      await this._cleanupTempFile(tempFile);
+    }
+  }
+  async _tryBlackCommands(tempFile) {
+    const commands = [
+      { name: "black direct", cmd: "black", args: ["--quiet", tempFile] },
+      {
+        name: "python -m black",
+        cmd: "python",
+        args: ["-m", "black", "--quiet", tempFile],
+      },
+      {
+        name: "py -m black",
+        cmd: "py",
+        args: ["-m", "black", "--quiet", tempFile],
+      },
+    ];
+
+    for (const { name, cmd, args } of commands) {
+      try {
+        console.log(`🔄 Trying: ${name} (${cmd} ${args.join(" ")})`);
+        const result = await this._spawnCommand(cmd, args, tempFile);
+
+        if (result) {
+          const fileContent = await fs.readFile(tempFile, "utf8");
+          console.log(`✅ Success with ${name}!`);
+          return fileContent;
+        }
+      } catch (error) {
+        console.log(`❌ ${name} failed:`, error.message);
+      }
+    }
+
+    return null;
+  }
+
+  _spawnCommand(cmd, args, tempFile) {
+    return new Promise((resolve, reject) => {
+      console.log(`🚀 Executing: ${cmd} ${args.join(" ")}`);
+
+      const proc = spawn(cmd, args, {
+        stdio: ["pipe", "pipe", "pipe"], // Capture all stdio
+        shell: true,
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        stdout += data.toString();
+        console.log(`Black stdout: ${data.toString().trim()}`);
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+        console.log(`Black stderr: ${data.toString().trim()}`);
+      });
+
+      proc.on("close", (code) => {
+        console.log(`Black process exited with code: ${code}`);
+
+        if (code === 0) {
+          resolve(true);
+        } else {
+          // Provide more detailed error information
+          const errorMsg =
+            stderr || stdout || `Process exited with code ${code}`;
+          console.log(`❌ Black failed with: ${errorMsg}`);
+          reject(new Error(`Exit code ${code}: ${errorMsg}`));
+        }
+      });
+
+      proc.on("error", (err) => {
+        console.log(`❌ Spawn error for ${cmd}:`, err.message);
+        reject(err);
+      });
+
+      // Add timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        proc.kill();
+        reject(new Error("Black process timeout"));
+      }, 10000); // 10 second timeout
+
+      proc.on("close", () => clearTimeout(timeout));
+    });
+  }
+  _applyEnhancedFallbackFormatting(currentCode) {
+    console.log("🛠️ Applying enhanced fallback formatting...");
+
+    let fixedCode = currentCode;
+
+    // Fix multiple statements on same line
+    fixedCode = fixedCode.replace(
+      /(print\([^)]*\))\s+(print\([^)]*\))/g,
+      "$1\n$2",
+    );
+
+    // Standardize indentation
+    const lines = fixedCode.split("\n");
+    const formattedLines = lines.map((line) => {
+      const indentMatch = line.match(/^(\s*)/);
+      const content = line.trimStart();
+      const currentIndent = indentMatch ? indentMatch[1].length : 0;
+
+      // Convert to standard 4-space indentation
+      const indentLevel = Math.max(0, Math.round(currentIndent / 4));
+      return " ".repeat(indentLevel * 4) + content;
+    });
+
+    fixedCode = formattedLines.join("\n");
+
+    // Ensure proper blank lines
+    fixedCode = fixedCode.replace(/\n{3,}/g, "\n\n");
+
+    if (fixedCode !== currentCode) {
+      this.addFix(0, currentCode.length, fixedCode);
+      console.log("✅ Applied enhanced fallback formatting");
     }
   }
 
   async _cleanupTempFile(filePath) {
     try {
       await fs.unlink(filePath);
+      console.log("🧹 Cleaned up temp file");
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.warn('Warning: Could not delete temp file:', filePath);
-      }
+      // Ignore cleanup errors
     }
   }
 
-  /**
-   * Return the fully fixed/ formatted code
-   */
   getFixedCode() {
     return this.applyFixes();
   }

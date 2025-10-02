@@ -1,246 +1,288 @@
-const { exec } = require('child_process');
-const fs = require('fs').promises;
-const path = require('path');
-const BaseFixer = require('./base-fixer');
-const FormatterPaths = require(path.join(__dirname, '../formatter-paths'));
-const vscode = require('vscode');
+const { exec } = require("child_process");
+const fs = require("fs").promises;
+const path = require("path");
+const BaseFixer = require("./base-fixer");
+const FormatterPaths = require(path.join(__dirname, "../formatter-paths"));
 
 class JavaFixer extends BaseFixer {
   async analyze() {
-    console.log('Analyzing Java file:', this.filePath);
+    console.log("Analyzing Java file:", this.filePath);
 
     try {
-      // Step 1: Fix syntax and braces
-      const codeWithFixedSyntax = await this._fixBasicSyntaxAndBraces();
-
-      // Step 2: Format with Google Java Format
-      await this._formatWithGoogleJavaFormat(codeWithFixedSyntax);
-
-    } catch (error) {
-      console.error('Google Java Format failed, using fallback:', error.message);
+      const code = await this._fixSyntaxAndTypos();
+      await this._formatWithGoogleJavaFormat(code);
+    } catch (err) {
+      console.error("Google Java Format failed, using fallback:", err.message);
       await this._fallbackFormatting();
     }
   }
 
+  async _fixSyntaxAndTypos() {
+    const code = await this._fixBasicSyntaxAndBraces();
+    return this._fixCommonTypos(code);
+  }
+
   async _fixBasicSyntaxAndBraces() {
-    const lines = this.code.split('\n');
+    const lines = this.code.split("\n");
     const fixedLines = [];
     const braceStack = [];
-    let inMultiLineComment = false;
+    let inMultiComment = false;
 
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i];
-      let trimmed = line.trim();
-
-      // Handle multi-line comments
-      if (inMultiLineComment) {
-        fixedLines.push(line);
-        if (trimmed.includes('*/')) inMultiLineComment = false;
-        continue;
-      }
-      if (trimmed.includes('/*') && !trimmed.includes('*/')) {
-        inMultiLineComment = true;
-        fixedLines.push(line);
+    for (const rawLine of lines) {
+      let line = rawLine.trim();
+      if (!line) {
+        fixedLines.push("");
         continue;
       }
 
-      if (!trimmed || trimmed.startsWith('//')) {
-        fixedLines.push(line);
+      if (inMultiComment) {
+        fixedLines.push(this._indent(braceStack.length) + line);
+        if (line.includes("*/")) inMultiComment = false;
+        continue;
+      }
+      if (line.includes("/*") && !line.includes("*/")) {
+        fixedLines.push(this._indent(braceStack.length) + line);
+        inMultiComment = true;
         continue;
       }
 
-      // Track braces
-      const openBraces = (line.match(/{/g) || []).length;
-      const closeBraces = (line.match(/}/g) || []).length;
-
-      for (let j = 0; j < openBraces; j++) braceStack.push('{');
-      for (let j = 0; j < closeBraces; j++) if (braceStack.length) braceStack.pop();
-
-      const firstWord = trimmed.split(/\s+/)[0];
-
-      // Package/import → always one semicolon
-      if (trimmed.startsWith('import ') || trimmed.startsWith('package ')) {
-        line = trimmed.replace(/;+$/, '') + ';';
-      }
-      // Regular statements
-      else if (this._shouldAddSemicolon(trimmed, firstWord)) {
-        line = trimmed + ';';
+      if (line.startsWith("//")) {
+        fixedLines.push(this._indent(braceStack.length) + line);
+        continue;
       }
 
-      // Deduplicate ;; and cleanup
-      line = line.replace(/;{2,}/g, ';').trimEnd();
+      const closeCount = (line.match(/}/g) || []).length;
+      for (let i = 0; i < closeCount && braceStack.length; i++)
+        braceStack.pop();
 
-      fixedLines.push(line);
+      const indent = this._indent(braceStack.length);
+
+      if (line.startsWith("import ") || line.startsWith("package ")) {
+        line = line.replace(/,([^;]+)/g, ".$1");
+        line = line.replace(/;+$/, "") + ";";
+      } else {
+        const firstWord = line.split(/\s+/)[0];
+        if (this._shouldAddSemicolon(line, firstWord)) line += ";";
+
+        const controlMatch = line.match(
+          /^(if|else if|else|for|while|do|switch|try|catch|finally)\b(.*)/,
+        );
+        // Better check for control structures vs method declarations
+        if (controlMatch) {
+          const keyword = controlMatch[1],
+            rest = controlMatch[2].trim();
+
+          // More accurate detection - control structures typically don't have return types
+          const hasReturnType = /^[\w<>\[\]]+\s+\w+\s*\(/.test(rest);
+          const isLikelyMethod =
+            rest.includes("(") && !rest.trim().endsWith(") {");
+
+          if (
+            !hasReturnType &&
+            !isLikelyMethod &&
+            !line.endsWith("{") &&
+            !line.endsWith(";")
+          ) {
+            line = rest ? `${keyword} ${rest} {` : `${keyword} {`;
+            braceStack.push("{");
+          }
+        }
+      }
+
+      fixedLines.push(indent + line);
+
+      const openCount = (line.match(/{/g) || []).length;
+      for (let i = 0; i < openCount; i++) braceStack.push("{");
     }
 
-    // Balance braces
-    if (braceStack.length > 0) {
-      const missingBraces = '\n' + '}'.repeat(braceStack.length);
-      console.log(`Added ${braceStack.length} missing closing brace(s)`);
-      fixedLines.push(missingBraces);
+    while (braceStack.length) {
+      fixedLines.push(this._indent(Math.max(0, braceStack.length - 1)) + "}");
+      braceStack.pop();
     }
 
-    return fixedLines.join('\n');
+    return fixedLines.join("\n");
+  }
+
+  _indent(level) {
+    return "    ".repeat(level);
   }
 
   _shouldAddSemicolon(trimmed, firstWord) {
-    const blockKeywords = [
-      'public', 'private', 'protected',
-      'class', 'interface', 'enum',
-      'if', 'else', 'for', 'while', 'do',
-      'switch', 'case', 'default',
-      'try', 'catch', 'finally',
-      'return', 'break', 'continue'
+    const keywords = [
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "switch",
+      "case",
+      "default",
+      "try",
+      "catch",
+      "finally",
+      "main",
     ];
 
     if (
-      trimmed.endsWith(';') ||
-      trimmed.endsWith('{') ||
-      trimmed.endsWith('}') ||
-      trimmed.endsWith(':')
-    ) return false;
+      trimmed.endsWith(";") ||
+      trimmed.endsWith("{") ||
+      trimmed.endsWith("}") ||
+      trimmed.endsWith(":")
+    )
+      return false;
+    if (trimmed.startsWith("@")) return false;
 
-    if (trimmed.startsWith('@')) return false;
-    if (blockKeywords.includes(firstWord)) return false;
+    // Match class/interface/enum
+    if (
+      /^\s*(public|private|protected|abstract|final|strictfp)?\s*(class|interface|enum|@interface)\s+\w+/.test(
+        trimmed,
+      )
+    )
+      return false;
 
-    if (trimmed.endsWith(')')) {
-      const declStarters = ['public', 'private', 'protected', 'static', 'final', 'synchronized'];
-      if (declStarters.some(k => trimmed.startsWith(k))) return false;
-      return true; // method call → needs semicolon
-    }
+    // Match any method or constructor
+    if (
+      /^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?(synchronized\s+)?(abstract\s+)?[\w<>\[\]]+\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(
+        trimmed,
+      ) ||
+      /^\s*(public|private|protected)\s+\w+\s*\([^)]*\)\s*\{?\s*$/.test(trimmed) // constructor
+    )
+      return false;
+
+    if (keywords.includes(firstWord)) return false;
 
     return true;
   }
 
+  _fixCommonTypos(code) {
+    return code
+      .replace(/\bpritnln\b/g, "println")
+      .replace(/\bpritnf\b/g, "printf")
+      .replace(/\bprintbln\b/g, "println")
+      .replace(/\bsyso\b/g, "System.out")
+      .replace(/\bpubic\b/g, "public")
+      .replace(/\bpritn\b/g, "print")
+      .replace(/\bStirng\b/g, "String")
+      .replace(/\bInteget\b/g, "Integer")
+      .replace(/\bDoube\b/g, "Double")
+      .replace(/\bFlot\b/g, "Float")
+      .replace(/\bCharr\b/g, "Char")
+      .replace(/\bBoolea\b/g, "Boolean")
+      .replace(/\bstatc\b/g, "static")
+      .replace(/\bvois\b/g, "void")
+      .replace(/\bpubilc\b/g, "public")
+      .replace(/\bprvate\b/g, "private")
+      .replace(/\bproected\b/g, "protected")
+      .replace(/\bmian\b/g, "main")
+      .replace(/\bStringg\b/g, "String")
+      .replace(/\bStrng\b/g, "String");
+  }
+
   async _formatWithGoogleJavaFormat(codeToFormat) {
     const tempDir = path.dirname(this.filePath);
-    const tempFileName = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.java`;
-    const tempFilePath = path.join(tempDir, tempFileName);
-
+    const tempFile = path.join(
+      tempDir,
+      `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.java`,
+    );
     const jarPath = FormatterPaths.getJavaFormatterPath();
 
     try {
-      await fs.writeFile(tempFilePath, codeToFormat);
-
+      await fs.writeFile(tempFile, codeToFormat);
       return new Promise((resolve, reject) => {
-        exec(`java -jar "${jarPath}" --aosp --replace "${tempFilePath}"`, async (error, stdout, stderr) => {
-          let formattedCode;
-          try {
-            formattedCode = await fs.readFile(tempFilePath, 'utf8');
-          } catch (readError) {
-            await this._cleanupTempFile(tempFilePath);
-            return reject(new Error(`Failed to read formatted file: ${readError.message}`));
-          }
-
-          await this._cleanupTempFile(tempFilePath);
-
-          if (error) {
-            console.warn(`Google Java Format had issues: ${stderr || error.message}`);
-            if (codeToFormat !== this.code) this.addFix(0, this.code.length, codeToFormat);
-            return resolve();
-          }
-
-          if (formattedCode !== this.code) {
-            this.addFix(0, this.code.length, formattedCode);
-          }
-
-          console.log('✅ Java code formatted successfully with Google Java Format');
-          resolve();
-        });
+        exec(
+          `java -jar "${jarPath}" --aosp --replace "${tempFile}"`,
+          async (err) => {
+            let formatted;
+            try {
+              formatted = await fs.readFile(tempFile, "utf8");
+            } catch (e) {
+              await this._cleanupTempFile(tempFile);
+              return reject(e);
+            }
+            await this._cleanupTempFile(tempFile);
+            if (err) {
+              console.warn(err.message);
+              await this._fallbackFormatting();
+              return resolve();
+            }
+            if (formatted !== this.code)
+              this.addFix(0, this.code.length, formatted);
+            console.log(
+              "✅ Java code formatted successfully with Google Java Format",
+            );
+            resolve();
+          },
+        );
       });
-    } catch (error) {
-      await this._cleanupTempFile(tempFilePath);
-      throw error;
+    } catch (err) {
+      await this._cleanupTempFile(tempFile);
+      throw err;
     }
   }
 
   async _cleanupTempFile(filePath) {
     try {
       await fs.unlink(filePath);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.warn('Warning: Could not delete temp file:', filePath);
-      }
-    }
+    } catch {}
   }
 
   async _fallbackFormatting() {
-    console.log('Using fallback Java formatting...');
-
-    let code = await this._fixBasicSyntaxAndBraces();
-
-    const lines = code.split('\n');
+    console.log("Using fallback Java formatting...");
+    const code = await this._fixSyntaxAndTypos();
     const fixedLines = [];
     const braceStack = [];
     let inComment = false;
 
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i];
-      let trimmed = line.trim();
+    for (const rawLine of code.split("\n")) {
+      let line = rawLine.trim();
+      if (!line) {
+        fixedLines.push("");
+        continue;
+      }
 
       if (inComment) {
-        fixedLines.push('    '.repeat(braceStack.length) + trimmed);
-        if (trimmed.includes('*/')) inComment = false;
+        fixedLines.push(this._indent(braceStack.length) + line);
+        if (line.includes("*/")) inComment = false;
         continue;
       }
-      if (trimmed.includes('/*')) {
-        fixedLines.push('    '.repeat(braceStack.length) + trimmed);
-        inComment = true;
-        if (trimmed.includes('*/')) inComment = false;
-        continue;
-      }
-      if (!trimmed || trimmed.startsWith('//')) {
-        fixedLines.push('    '.repeat(braceStack.length) + trimmed);
-        continue;
-      }
+      if (line.includes("/*")) inComment = true;
 
-      const closeBraces = (trimmed.match(/}/g) || []).length;
-      for (let j = 0; j < closeBraces && braceStack.length > 0; j++) braceStack.pop();
+      const closeCount = (line.match(/}/g) || []).length;
+      for (let i = 0; i < closeCount && braceStack.length; i++)
+        braceStack.pop();
 
-      const indentLevel = braceStack.length;
-      const expectedIndent = '    '.repeat(indentLevel);
-
-      const controlMatch = trimmed.match(/^(if|else|for|while)\b(.*)/);
+      const indent = this._indent(braceStack.length);
+      const controlMatch = line.match(
+        /^(if|else if|else|for|while|do|switch|try|catch|finally)\b(.*)/,
+      );
       if (controlMatch) {
-        const keyword = controlMatch[1];
-        const rest = controlMatch[2].trim();
-        if (rest && !rest.startsWith('{')) {
-          trimmed = `${keyword} ${rest} {`;
-          fixedLines.push(expectedIndent + trimmed);
-          braceStack.push('{');
-          continue;
+        const keyword = controlMatch[1],
+          rest = controlMatch[2].trim();
+        if (!line.endsWith("{") && !line.endsWith(";")) {
+          line = rest ? `${keyword} ${rest} {` : `${keyword} {`;
+          braceStack.push("{");
         }
       }
 
-      const firstWord = trimmed.split(/\s+/)[0];
-      if (this._shouldAddSemicolon(trimmed, firstWord) && !trimmed.endsWith(';')) {
-        trimmed = trimmed + ';';
-      }
+      const firstWord = line.split(/\s+/)[0];
+      if (this._shouldAddSemicolon(line, firstWord)) line += ";";
 
-      fixedLines.push(expectedIndent + trimmed);
+      fixedLines.push(indent + line);
 
-      const openBraces = (trimmed.match(/{/g) || []).length;
-      for (let j = 0; j < openBraces; j++) braceStack.push('{');
+      const openCount = (line.match(/{/g) || []).length;
+      for (let i = 0; i < openCount; i++) braceStack.push("{");
     }
 
-    if (braceStack.length > 0) {
-      const missing = braceStack.length;
-      console.log(`Added ${missing} missing closing brace(s) in fallback`);
-      for (let i = 0; i < missing; i++) {
-        const indent = '    '.repeat(Math.max(0, missing - i - 1));
-        fixedLines.push(indent + '}');
-      }
+    while (braceStack.length) {
+      fixedLines.push(this._indent(Math.max(0, braceStack.length - 1)) + "}");
+      braceStack.pop();
     }
 
-    const formattedCode = fixedLines.join('\n');
-    if (formattedCode !== this.code) this.addFix(0, this.code.length, formattedCode);
-
-    console.log('✅ Fallback Java formatting completed');
+    const formatted = fixedLines.join("\n");
+    if (formatted !== this.code) this.addFix(0, this.code.length, formatted);
+    console.log("✅ Fallback Java formatting completed");
   }
 
-  /**
-   * Return the fully fixed/formatted code
-   */
   getFixedCode() {
     return this.applyFixes();
   }

@@ -1,36 +1,174 @@
 // src/core/fixers/fixer-wrapper.js
-const PythonFixer = require('./python-fixer');
-const JavaScriptFixer = require('./javascript-fixer');
-const EmbeddedCFixer = require('./EmbeddedCFixer');
-const JavaFixer = require('./JavaFixer');
+const PythonFixer = require("./python-fixer");
+const JavaScriptFixer = require("./javascript-fixer");
+const EmbeddedCFixer = require("./EmbeddedCFixer");
+const JavaFixer = require("./JavaFixer");
+const HtmlFixer = require("./html-fixer");
 
-async function fixPythonBuffer(code, filePath = '') {
-  const fixer = new PythonFixer(code, filePath);
-  await fixer.analyze();
-  return fixer.applyFixes();
+async function fixPythonBuffer(code, filePath = "") {
+  try {
+    const fixer = new PythonFixer(code, filePath);
+    await fixer.analyze();
+    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+  } catch (error) {
+    console.error("Python fixer error:", error);
+    return code; // Return original code on error
+  }
 }
 
-async function fixJSBuffer(code, filePath = '') {
-  const fixer = new JavaScriptFixer(code, filePath);
-  await fixer.analyze();
-  return fixer.applyFixes();
+async function fixJSBuffer(code, filePath = "") {
+  try {
+    const fixer = new JavaScriptFixer(code, filePath);
+    await fixer.analyze();
+    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+  } catch (error) {
+    console.error("JavaScript fixer error:", error);
+    return code;
+  }
 }
 
-async function fixEmbeddedCBuffer(code, filePath = '') {
-  const fixer = new EmbeddedCFixer(code, filePath);
-  await fixer.analyze();
-  return fixer.applyFixes();
+async function fixEmbeddedCBuffer(code, filePath = "") {
+  try {
+    const fixer = new EmbeddedCFixer(code, filePath);
+    await fixer.analyze();
+    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+  } catch (error) {
+    console.error("Embedded C fixer error:", error);
+    return code;
+  }
 }
 
-async function fixJavaBuffer(code, filePath = '') {
-  const fixer = new JavaFixer(code, filePath);
-  await fixer.analyze();
-  return fixer.applyFixes();
+async function fixJavaBuffer(code, filePath = "") {
+  try {
+    const fixer = new JavaFixer(code, filePath);
+    await fixer.analyze();
+    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+  } catch (error) {
+    console.error("Java fixer error:", error);
+    return code;
+  }
 }
 
+async function fixHtmlBuffer(code, filePath = "") {
+  try {
+    const fixer = new HtmlFixer(code, filePath);
+    const result = await fixer.analyze();
+
+    // Handle different return patterns
+    if (result && result.formatted) {
+      return result.formatted;
+    }
+
+    if (result && result.success && result.formatted) {
+      return result.formatted;
+    }
+
+    // Fallback to standard methods
+    if (fixer.applyFixes) {
+      return fixer.applyFixes();
+    }
+
+    if (fixer.fixedCode) {
+      return fixer.fixedCode;
+    }
+
+    console.warn("HtmlFixer: No fixes applied, returning original code");
+    return code;
+  } catch (error) {
+    console.error("HTML fixer error:", error);
+    return code;
+  }
+}
+
+// Unified fixer function that detects language and routes appropriately
+async function fixCodeBuffer(code, filePath = "", language = "") {
+  const lang =
+    language ||
+    detectLanguageFromPath(filePath) ||
+    detectLanguageFromCode(code);
+
+  console.log(`🔧 Fixing code (${lang}) for: ${filePath || "buffer"}`);
+
+  switch (lang.toLowerCase()) {
+    case "python":
+    case "py":
+      return await fixPythonBuffer(code, filePath);
+
+    case "javascript":
+    case "js":
+    case "typescript":
+    case "ts":
+      return await fixJSBuffer(code, filePath);
+
+    case "c":
+    case "cpp":
+    case "c++":
+    case "embedded-c":
+      return await fixEmbeddedCBuffer(code, filePath);
+
+    case "java":
+      return await fixJavaBuffer(code, filePath);
+
+    case "html":
+    case "htm":
+      return await fixHtmlBuffer(code, filePath);
+
+    default:
+      console.warn(`No fixer available for language: ${lang}`);
+      return code;
+  }
+}
+
+// Helper functions
+function detectLanguageFromPath(filePath) {
+  if (!filePath) return "";
+
+  const ext = filePath.split(".").pop().toLowerCase();
+  const extensionMap = {
+    py: "python",
+    js: "javascript",
+    ts: "typescript",
+    c: "c",
+    cpp: "cpp",
+    h: "c",
+    java: "java",
+    html: "html",
+    htm: "html",
+  };
+
+  return extensionMap[ext] || "";
+}
+
+function detectLanguageFromCode(code) {
+  const firstLine = code.trim().split("\n")[0];
+
+  if (
+    firstLine.includes("#!/usr/bin/env python") ||
+    firstLine.includes("#!/usr/bin/python")
+  ) {
+    return "python";
+  }
+  if (firstLine.includes("<html") || code.includes("</html>")) {
+    return "html";
+  }
+  if (code.includes("public class") || code.includes("import java.")) {
+    return "java";
+  }
+  if (code.includes("#include") || code.includes("int main(")) {
+    return "c";
+  }
+
+  return "";
+}
+
+// Export all functions
 module.exports = {
   fixPythonBuffer,
   fixJSBuffer,
   fixEmbeddedCBuffer,
-  fixJavaBuffer
+  fixJavaBuffer,
+  fixHtmlBuffer,
+  fixCodeBuffer, // Unified interface
+  detectLanguageFromPath,
+  detectLanguageFromCode,
 };

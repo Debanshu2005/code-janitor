@@ -3,60 +3,47 @@ const fs = require('fs-extra');
 
 class FormatterPaths {
   static getUncrustifyPath() {
-    const basePath = path.join(__dirname, '..', '..', 'formatters', 'uncrustify');
-    
-    // Look for the uncrustify executable
-    if (process.platform === 'win32') {
-      const exePath = path.join(basePath, 'uncrustify-0.81.0_f-win64', 'bin', 'uncrustify.exe');
-      if (fs.existsSync(exePath)) return exePath;
-      
-      // Try alternative path structure
-      const altPath = path.join(basePath, 'bin', 'uncrustify.exe');
-      if (fs.existsSync(altPath)) return altPath;
-    } else {
-      const unixPath = path.join(basePath, 'uncrustify-0.81.0_f-' + (process.platform === 'darwin' ? 'macOS' : 'linux'), 'bin', 'uncrustify');
-      if (fs.existsSync(unixPath)) return unixPath;
-      
-      const altPath = path.join(basePath, 'bin', 'uncrustify');
-      if (fs.existsSync(altPath)) return altPath;
-    }
-    
-    // Fallback to system PATH
-    return 'uncrustify';
+    const basePath = path.join(__dirname, 'uncrustify');
+    const exeName = process.platform === 'win32' ? 'uncrustify.exe' : 'uncrustify';
+    const exePath = path.join(basePath, 'bin', exeName);
+    if (fs.existsSync(exePath)) return exePath;
+    return 'uncrustify'; // fallback to system PATH
   }
 
   static getJavaFormatterPath() {
-    const jarPath = path.join(__dirname, '..', '..', 'formatters', 'google-java-format', 'google-java-format.jar');
+    const jarPath = path.join(__dirname, 'google-java-format', 'google-java-format.jar');
     if (fs.existsSync(jarPath)) return jarPath;
-    return 'google-java-format';
+    return 'google-java-format'; // fallback
+  }
+
+  static getPythonPath() {
+    // Portable Python runtime bundled for Black
+    const basePath = path.join(__dirname, 'black', 'python');
+    const exePath =
+      process.platform === 'win32'
+        ? path.join(basePath, 'python.exe')
+        : path.join(basePath, 'bin', 'python3');
+    if (fs.existsSync(exePath)) return exePath;
+    return 'python3'; // fallback
   }
 
   static getBlackPath() {
-    const basePath = path.join(__dirname, '..', '..', 'formatters', 'black');
-    
-    if (process.platform === 'win32') {
-      const exePath = path.join(basePath, 'venv', 'Scripts', 'black.exe');
-      if (fs.existsSync(exePath)) return exePath;
-    } else {
-      const unixPath = path.join(basePath, 'venv', 'bin', 'black');
-      if (fs.existsSync(unixPath)) return unixPath;
-    }
-    
-    return 'black';
+    // Black module inside the portable Python environment
+    return '-m black';
   }
 
   static getPrettierPath() {
-    const basePath = path.join(__dirname, '..', '..', 'formatters', 'prettier');
-    const nodeModulesPath = path.join(basePath, 'node_modules', '.bin', 'prettier');
-    
-    if (process.platform === 'win32') {
-      const exePath = nodeModulesPath + '.CMD';
-      if (fs.existsSync(exePath)) return exePath;
-    } else {
-      if (fs.existsSync(nodeModulesPath)) return nodeModulesPath;
+    // Node bundled Prettier directly
+    try {
+      return require.resolve('prettier/bin-prettier.js');
+    } catch (err) {
+      return 'prettier'; // fallback
     }
-    
-    return 'prettier';
+  }
+
+  // 🔥 New: HTML uses Prettier, so just point to Prettier path
+  static getHtmlFormatterPath() {
+    return this.getPrettierPath();
   }
 }
 

@@ -2,6 +2,7 @@ const JavaScriptFixer = require('./javascript-fixer');
 const PythonFixer = require('./python-fixer');
 const EmbeddedCFixer = require('./EmbeddedCFixer');
 const JavaFixer = require('./java-fixer');
+const HtmlFixer = require('./html-fixer');
 
 // Map file extensions to their respective fixer classes
 const FIXER_MAP = {
@@ -19,6 +20,7 @@ const FIXER_MAP = {
   '.ino': EmbeddedCFixer,
   '.pde': EmbeddedCFixer,
   '.java': JavaFixer,
+  '.html': HtmlFixer,   
   // Add more languages here as you implement them
   // '.rb': RubyFixer,
   // '.php': PHPFixer,
@@ -64,5 +66,6 @@ module.exports = {
   JavaScriptFixer,
   PythonFixer,
   EmbeddedCFixer,
-  JavaFixer
+  JavaFixer,
+  HtmlFixer,   
 };

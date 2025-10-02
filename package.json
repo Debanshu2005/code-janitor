@@ -1,8 +1,8 @@
 {
   "name": "code-janitor",
   "displayName": "Code Janitor",
-  "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, and Python inside VS Code.",
-  "version": "0.1.9",
+  "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
+  "version": "0.3.14",
   "publisher": "Debanshu2005",
   "repository": {
     "type": "git",
@@ -41,12 +41,8 @@
         "command": "codeJanitor.fixCode",
         "key": "alt+d",
         "when": "editorTextFocus"
-      },
-      {
-        "command": "codeJanitor.fixCode",
-        "key": "alt+s",
-        "when": "editorTextFocus"
       }
+     
     ]
   },
   "scripts": {
@@ -56,7 +52,8 @@
     "format:java": "C:\\nvm4w\\nodejs\\google-java-format -r src/**/*.java",
     "format:py": "C:\\nvm4w\\nodejs\\black src/",
     "format:c": "C:\\nvm4w\\nodejs\\uncrustify -c src/core/fixers/uncrustify.cfg --replace src/**/*.{c,h,ino}",
-    "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c",
+    "format:html": "prettier --write \"src/**/*.html\"",
+    "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c && npm run format:html",
     "lint": "eslint src/**/*.js",
     "clean": "rimraf ./out",
     "package": ".\\node_modules\\.bin\\vsce.cmd package",
@@ -65,23 +62,27 @@
   "files": [
     "src/**/*",
     "README.md",
-    "node_modules/**/*"
-
+    "node_modules/**/*",
+    "src/core/fixers/google-java-format-1.28.0-all-deps.jar",
+    "src/core/fixers/uncrustify*",
+    "src/core/fixers/uncrustify.cfg",
+    "src/core/fixers/black/**/*"
   ],
   "dependencies": {
     "@babel/parser": "^7.23.0",
     "@babel/traverse": "^7.23.0",
     "fs-extra": "^11.3.2",
+    "parse5": "^8.0.0",
     "tree-sitter": "^0.20.0",
     "tree-sitter-javascript": "^0.20.0",
-    "tree-sitter-python": "^0.20.0"
+    "tree-sitter-python": "^0.20.0",
+    "prettier": "^3.6.2"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.32.0",
     "cross-env": "^7.0.3",
     "eslint": "^8.45.0",
     "jest": "^29.7.0",
-    "prettier": "^3.0.0",
     "rimraf": "^5.0.1"
   }
 }

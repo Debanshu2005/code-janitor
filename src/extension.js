@@ -18,6 +18,10 @@ function getFixerForDocument(document, code, fileName) {
         console.log('✓ Loading PythonFixer for Python file');
         const PythonFixer = require('./core/fixers/python-fixer');
         return new PythonFixer(code, fileName);
+    } else if (fileName.endsWith('.html') || document.languageId === 'html') { // ✅ HTML support
+        console.log('✓ Loading HtmlFixer for HTML file');
+        const HtmlFixer = require('./core/fixers/html-fixer');
+        return new HtmlFixer(code, fileName);
     }
     return null;
 }
@@ -41,7 +45,11 @@ async function runFixerAndApply(document, editor = null) {
             await Promise.resolve(fixer.analyze());
         }
 
-        const fixedCode = fixer.applyFixes ? fixer.applyFixes() : (fixer.getFixedCode ? fixer.getFixedCode() : code);
+        const fixedCode = fixer.applyFixes
+            ? fixer.applyFixes()
+            : fixer.getFixedCode
+            ? fixer.getFixedCode()
+            : code;
 
         if (fixedCode === code) {
             console.log('✨ No changes detected');
