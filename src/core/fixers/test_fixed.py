@@ -1,10 +1,4 @@
-def main():
-    print("Hello World")
-    if True:
-        print("ok")
-    else:
-        print("not ok")
-
-
-for i in range(3):
-    print(i)
+print("Hello World" @ ghgkjgj, hk)
+x = 5
+y = 10
+print(x, y)

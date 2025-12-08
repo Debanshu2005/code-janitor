@@ -2,8 +2,10 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "0.3.14",
+  "version": "0.4.8",
   "publisher": "Debanshu2005",
+  "icon": "src/images/code-janitor.jpg",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/Debanshu2005/code-janitor.git"
@@ -13,19 +15,31 @@
     "node": ">=18"
   },
   "categories": [
-    "Other",
+    "Formatters",
     "Linters",
-    "Formatters"
+    "Other"
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onCommand:codeJanitor.fixCode"
+    "onCommand:codeJanitor.fixCode",
+    "onCommand:codeJanitor.lintCode",
+    "onCommand:codeJanitor.livePreview"
   ],
   "contributes": {
     "commands": [
       {
         "command": "codeJanitor.fixCode",
-        "title": "Code Janitor: Format Code",
+        "title": "Format Code",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.lintCode",
+        "title": "Lint Code (ESLint)",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.livePreview",
+        "title": "Live HTML Preview (Unsaved)",
         "category": "Code Janitor"
       }
     ],
@@ -33,6 +47,12 @@
       "command-palette": [
         {
           "command": "codeJanitor.fixCode"
+        },
+        {
+          "command": "codeJanitor.lintCode"
+        },
+        {
+          "command": "codeJanitor.livePreview"
         }
       ]
     },
@@ -40,21 +60,31 @@
       {
         "command": "codeJanitor.fixCode",
         "key": "alt+d",
-        "when": "editorTextFocus"
+        "mac": "alt+d"
+      },
+      {
+        "command": "codeJanitor.lintCode",
+        "key": "alt+l", 
+        "mac": "alt+l"
+      },
+      {
+        "command": "codeJanitor.livePreview",
+        "key": "alt+p",
+        "mac": "alt+p"
       }
-     
     ]
   },
   "scripts": {
     "start": "node src/cli.js",
     "test": "jest",
+    "lint": "eslint src/**/*.js",
+    "lint:fix": "eslint --fix src/**/*.js",
     "format:js": "prettier --write \"src/**/*.js\"",
     "format:java": "C:\\nvm4w\\nodejs\\google-java-format -r src/**/*.java",
     "format:py": "C:\\nvm4w\\nodejs\\black src/",
     "format:c": "C:\\nvm4w\\nodejs\\uncrustify -c src/core/fixers/uncrustify.cfg --replace src/**/*.{c,h,ino}",
     "format:html": "prettier --write \"src/**/*.html\"",
     "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c && npm run format:html",
-    "lint": "eslint src/**/*.js",
     "clean": "rimraf ./out",
     "package": ".\\node_modules\\.bin\\vsce.cmd package",
     "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
@@ -73,15 +103,17 @@
     "@babel/traverse": "^7.23.0",
     "fs-extra": "^11.3.2",
     "parse5": "^8.0.0",
+    "prettier": "^3.6.2",
     "tree-sitter": "^0.20.0",
     "tree-sitter-javascript": "^0.20.0",
     "tree-sitter-python": "^0.20.0",
-    "prettier": "^3.6.2"
+    "eslint": "^8.57.1", 
+    "eslint-config-prettier": "^9.1.0", 
+    "eslint-plugin-prettier": "^5.1.3"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.32.0",
     "cross-env": "^7.0.3",
-    "eslint": "^8.45.0",
     "jest": "^29.7.0",
     "rimraf": "^5.0.1"
   }
