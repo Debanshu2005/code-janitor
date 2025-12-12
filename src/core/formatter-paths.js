@@ -32,13 +32,45 @@ class FormatterPaths {
     return '-m black';
   }
 
+  static getAutopep8Path() {
+    // Try bundled autopep8 first
+    const venvPath = path.join(__dirname, '..', '..', 'formatters', 'python-formatters', 'venv');
+    const autopep8Path = process.platform === 'win32' 
+      ? path.join(venvPath, 'Scripts', 'autopep8.exe')
+      : path.join(venvPath, 'bin', 'autopep8');
+    
+    if (fs.existsSync(autopep8Path)) {
+      return autopep8Path;
+    }
+    
+    // Fallback to system autopep8
+    return 'autopep8';
+  }
+
   static getPrettierPath() {
-    // Node bundled Prettier directly
+    // Node bundled Prettier CLI
     try {
       return require.resolve('prettier/bin-prettier.js');
     } catch (err) {
       return 'prettier'; // fallback
     }
+  }
+
+  static getPrettierModule() {
+    // Cache the result to avoid repeated require.resolve calls
+    if (!this._prettierModulePath) {
+      try {
+        this._prettierModulePath = require.resolve('prettier');
+      } catch (err) {
+        try {
+          const formatterPath = path.join(__dirname, '..', '..', 'formatters', 'prettier', 'node_modules', 'prettier');
+          this._prettierModulePath = require.resolve(formatterPath);
+        } catch (err2) {
+          this._prettierModulePath = null;
+        }
+      }
+    }
+    return this._prettierModulePath;
   }
 
   // 🔥 New: HTML uses Prettier, so just point to Prettier path

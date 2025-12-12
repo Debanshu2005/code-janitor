@@ -1,20 +1,40 @@
-# 🧹 Code Janitor - VSCode Extension
+# 🧹 Code Janitor - The VSCode Extension You Need
 
 ![VSCode Version](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
 ![Node Version](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![NPM Version](https://img.shields.io/badge/NPM-%3E%3D9-red?logo=npm)
 ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.7.0-orange)
 
-Code Janitor is a VSCode extension that automatically **analyzes, fixes, and formats code** for multiple programming languages, including Python, C/C++/Arduino, Java, and JavaScript. It ensures your code is clean, consistent, and follows proper syntax conventions.
+Code Janitor is a VSCode extension that automatically **analyzes, fixes, and formats code** for multiple programming languages, including Python, C/C++/Arduino, Java, HTML and JavaScript. It ensures your code is clean, consistent, and follows proper syntax conventions with intelligent auto-correction and real-time preview.
 
 ---
 
 ## 🔹 Features
 
-### 1. Multi-language Support
+### 1. **Real-Time Auto-Correction** ✨
+- **Automatic syntax fixing** as you type
+- **Smart indentation** correction
+- **Configurable delay** and language support
+- Works with Python, JavaScript, Java, C/C++, and HTML
+
+### 2. **Smart HTML Fixer with Auto-Preview** 🔍 NEW!
+- **Detailed change tracking** with line numbers
+- **Automatic preview** opens after fixes are applied
+- **Document structure fixes** (DOCTYPE, HTML, HEAD, BODY)
+- **Embedded CSS/JS formatting** within HTML files
+
+### 3. **Frontend Dependency Validation** 🔍
+- **Detects missing files** before saving (CSS, JS, images)
+- **Auto-creates missing files** when requested
+- **Validates imports** and links in HTML/CSS/JS
+- **Prevents broken dependencies** in frontend projects
+
+### 4. Multi-language Support
 - **Python** (`.py` files)
   - Fixes indentation, missing colons, and common syntax issues.
-  - Formats code using `black`.
+  - Converts JavaScript syntax to Python (var/let/const, braces, boolean values).
+  - Formats code using `autopep8` with intelligent fallback system.
 - **C / C++ / Arduino** (`.c`, `.cpp`, `.h`, `.ino` files)
   - Fixes semicolons, braces, function structure, and MCU-specific syntax.
   - Formats code using `uncrustify`.
@@ -27,14 +47,16 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
    - Fixes indentation issues.
    - Fixes syntax issues like missing closing tags.
 
-### 2. Automatic Fixing
+### 5. Automatic Fixing
 - Runs **before saving a file**.
 - Detects language automatically.
 - Applies fixes without manual intervention.
 
-### 3. Manual Command
+### 6. Manual Command
 - Run the **Code Janitor command** from the Command Palette:
 
+### 7. Preview 
+- You can now get a preview of your of your frontend page without saving the program allowing more efficient coding.
 
 ## Installation (via npm)
 
@@ -63,8 +85,16 @@ code-janitor
 
 - Instantly analyzes and fixes the active file.
 
-### Fallback Fixing
-- If primary formatters fail (`black` or `uncrustify`), the extension applies **basic syntax and formatting fixes** to keep your code functional.
+### Enhanced JavaScript Fixer
+- **Smart syntax cleanup**: Fixes trailing commas and malformed expressions
+- **Prettier integration**: Professional formatting with configurable options
+- **AST-based transformations**: Structural code improvements using Babel
+
+### Intelligent Python Formatting
+- **Two-stage approach**: Inline syntax fixes followed by `autopep8` formatting
+- **Smart detection**: Uses autopep8 only on pure Python code to prevent corruption
+- **JavaScript conversion**: Automatically converts JS syntax to Python equivalents
+- **Fallback system**: Ensures code remains functional even if formatters fail
 
 ---
 
@@ -86,7 +116,7 @@ cd code-janitor
 Python:
 
 ```bash
-pip install black
+pip install autopep8
 ```
 
 
@@ -129,7 +159,7 @@ npm run format:c      # C/C++
 
 ---
 
-## Example
+## Examples
 
 **Before:**
 
@@ -184,7 +214,39 @@ function greet() {
 }
 ```
 
+**Preview demo:**
 
+![WhatsApp Image 2025-12-08 at 19 50 51_99396141](https://github.com/user-attachments/assets/f2830549-e5c0-4755-8f52-1bd64361485a)
+
+
+
+---
+
+## 🔹 Activation commands
+
+-  **Alt+d** : To activate the formatter
+-  **Alt+l** : To lint JavaScript code
+-  **Alt+v** : To validate frontend dependencies
+-  **Alt+p** : For preview feature
+
+## 🔹 Real-Time Auto-Correction
+
+### How It Works
+1. **Real-time Detection**: Monitors document changes as you type
+2. **Debounced Processing**: Waits for you to stop typing (500ms by default)
+3. **Line-by-Line Fixing**: Only processes changed lines for performance
+4. **Context-Aware**: Uses surrounding code to determine proper indentation
+
+### Auto-Correction Features
+**Python**: Missing colons (`if True` → `if True:`), print statements (`print "hello"` → `print("hello")`), boolean values (`true` → `True`)
+
+**JavaScript/Java/C++**: Missing semicolons (`let x = 5` → `let x = 5;`), proper indentation
+
+### Configuration Settings
+- `codeJanitor.autoCorrection.enabled` - Enable/disable real-time fixes (default: true)
+- `codeJanitor.autoCorrection.delay` - Typing delay before correction (default: 500ms)
+- `codeJanitor.autoCorrection.languages` - Languages to auto-correct (default: all supported)
+  
 ---
 ## 🔹 Supported File Types
 
@@ -208,6 +270,90 @@ function greet() {
 
 4. Detailed logs for applied fixes, warnings, and errors in the console.
    
+### Examples
+
+**Python Auto-Correction:**
+```python
+# You type:
+def test()
+    if True
+        print "hello"
+    var x = true
+    if x === 5
+        return null
+
+# Auto-corrected to:
+def test():
+    if True:
+        print("hello")
+        x = True
+        if x == 5:
+            return None
+```
+
+**JavaScript Auto-Correction:**
+```javascript
+// You type:
+function test() {
+    let x = 5,;
+    console.log(x);
+    return x;
+}
+
+// Auto-corrected to:
+function test() {
+  let x = 5
+  console.log(x)
+  return x
+}
+```
+
+**HTML Auto-Correction with Preview:**
+```html
+<!-- You type: -->
+<div>
+<p>Hello world
+<span>Test</span>
+
+<!-- Auto-corrected to: -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Fixed Document</title>
+</head>
+<body>
+  <div>
+    <p>Hello world</p>
+    <span>Test</span>
+  </div>
+</body>
+</html>
+
+<!-- Changes shown: -->
+<!-- • Added DOCTYPE declaration -->
+<!-- • Added HTML root element -->
+<!-- • Added HEAD section with meta charset -->
+<!-- • Wrapped content in BODY element -->
+<!-- • Applied HTML formatting and indentation -->
+<!-- Preview automatically opens beside editor -->
+```
+
+### Frontend Validation Examples
+
+**Missing Files Detection:**
+```html
+<!-- Extension will warn if these files don't exist -->
+<link rel="stylesheet" href="styles/main.css">
+<script src="js/app.js"></script>
+<img src="images/logo.png" alt="Logo">
+```
+
+**Auto-Fix Options:**
+- **Create Files**: Automatically creates missing CSS/JS files
+- **Warning Only**: Shows warning but doesn't create files
+- **Validates**: CSS @imports, JS module imports, image sources
+
 ---
 ## Contributing
 
@@ -228,12 +374,65 @@ function greet() {
 8. Create a Pull Request.
 
 ---
+## 🔹 Advanced Features
+
+### Python Formatter Features
+**Syntax Fixes**
+- **Missing colons**: Automatically adds colons after `def`, `class`, `if`, `else`, `elif`, `for`, `while`, `try`, `except`, `finally`, `with`
+- **Print statements**: Converts Python 2 style `print "text"` to `print("text")`
+- **Indentation**: Intelligent block-level indentation with proper nesting
+- **Class/method structure**: Correct indentation for methods within classes
+
+**JavaScript to Python Conversion**
+- **Keywords**: Removes `var`, `let`, `const`, `function`, `new`
+- **Braces**: Converts `{` to `:` and removes `}`
+- **Operators**: Changes `===` to `==`, `!==` to `!=`
+- **Values**: Converts `true`/`false` to `True`/`False`, `null`/`undefined` to `None`
+
+**Professional Formatting**
+- **autopep8 integration**: Applied to clean Python code for PEP 8 compliance
+- **Conditional formatting**: Only uses autopep8 when no JavaScript artifacts remain
+- **Structure preservation**: Maintains code logic while improving style
+
+### JavaScript Formatter Features
+**Syntax Improvements**
+- **Trailing comma fixes**: Removes problematic trailing commas
+- **Arrow function fixes**: Corrects spacing in arrow functions
+- **AST transformations**: Uses Babel for structural improvements
+- **Smart cleanup**: Fixes malformed syntax patterns
+
+### HTML Formatter Features
+**Change Tracking**
+- **Detailed logging**: Shows exactly what was fixed with line numbers
+- **Document structure**: Adds missing DOCTYPE, HTML, HEAD, BODY elements
+- **Embedded content**: Formats CSS and JavaScript within HTML
+
+**Auto-Preview**
+- **Automatic display**: Opens preview beside editor when changes are made
+- **Non-intrusive**: Doesn't interfere with manual Alt+P preview
+- **Smart detection**: Only shows preview when actual fixes are applied
+
+## 🔹 What's New in v0.7.0
+
+### 🚀 Major Improvements
+- **Enhanced JavaScript Fixer**: Improved syntax cleanup and formatting
+- **Smart HTML Auto-Preview**: Automatically shows preview when HTML fixes are applied
+- **Detailed Change Tracking**: See exactly what was fixed with line numbers
+- **Improved Python Formatter**: Better handling of complex nested structures
+- **Comprehensive Error Handling**: Robust fallback systems for all formatters
+
+### 🐛 Bug Fixes
+- Fixed JavaScript syntax cleanup issues
+- Resolved HTML indentation problems
+- Improved Python autopep8 integration
+- Enhanced extension stability
+
 ## 🔹 Acknowledgements
-1. https://github.com/psf/black --> Python Code Formatter
-   
+1. https://github.com/hhatto/autopep8 --> Python Code Formatter
 2. https://github.com/uncrustify/uncrustify --> C/C++ code formatter
-   
-3. VSCode API & Extension Documentation
+3. https://prettier.io/ --> JavaScript/HTML/CSS formatter
+4. https://github.com/inikulin/parse5 --> HTML parser
+5. VSCode API & Extension Documentation
 
 ---
 

@@ -1,5 +1,17 @@
 const vscode = require("vscode");
-const prettier = require("prettier");
+const path = require("path");
+
+let prettier;
+try {
+  prettier = require(path.join(__dirname, '..', '..', 'node_modules', 'prettier'));
+} catch (error) {
+  try {
+    prettier = require('prettier');
+  } catch (e) {
+    prettier = null;
+    console.warn('Prettier not available for live preview');
+  }
+}
 
 // Global panel reference to manage the preview instance
 let currentPanel = undefined;
@@ -49,14 +61,16 @@ async function fixCode(code, languageId) {
   }
 
   try {
-    fixedCode = await prettier.format(code, {
-      parser: parserName,
-      tabWidth: 2,
-      printWidth: 120,
-      semi: true,
-      singleQuote: false,
-      trailingComma: "none"
-    });
+    if (prettier) {
+      fixedCode = await prettier.format(code, {
+        parser: parserName,
+        tabWidth: 2,
+        printWidth: 120,
+        semi: true,
+        singleQuote: false,
+        trailingComma: "none"
+      });
+    }
   } catch (error) {
     hasError = true;
     fixedCode = code;

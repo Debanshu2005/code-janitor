@@ -1,7 +1,7 @@
-const fs = require("fs").promises;
-const path = require("path");
+const fs = require("fs").promises
+const path = require("path")
 // IMPORTANT: Assuming the PythonFixer class is available at this path
-const PythonFixer = require("./python-fixer");
+const PythonFixer = require("./python-fixer")
 
 const testCases = [
   {
@@ -147,49 +147,49 @@ if True:
     print("System is running")
 `
   }
-];
+]
 
 async function runTests() {
-  const tempDir = __dirname;
-  console.log("Running Python Fixer Test Suite...");
+  const tempDir = __dirname
+  console.log("Running Python Fixer Test Suite...")
 
   for (const testCase of testCases) {
-    console.log(`\n--- Running, test: ${testCase.name} ---`);
-    const tempFile = path.join(tempDir, "test_messy.py");
+    console.log(`\n--- Running, test: ${testCase.name} ---`)
+    const tempFile = path.join(tempDir, "test_messy.py")
 
     // Write messy code
-    await fs.writeFile(tempFile, testCase.input);
+    await fs.writeFile(tempFile, testCase.input)
 
     // Initialize PythonFixer
-    const fixer = new PythonFixer();
-    fixer.filePath = tempFile;
-    fixer.code = testCase.input;
+    const fixer = new PythonFixer()
+    fixer.filePath = tempFile
+    fixer.code = testCase.input
 
     try {
       // Run analysis
-      await fixer.analyze();
+      await fixer.analyze()
 
       // Get fixed code
-      const fixedCode = fixer.getFixedCode();
+      const fixedCode = fixer.getFixedCode()
 
-      console.log("✅ Fixed, code:\n", fixedCode);
-      console.log("Expected, code:\n", testCase.expected);
+      console.log("✅ Fixed, code:\n", fixedCode)
+      console.log("Expected, code:\n", testCase.expected)
 
       if (fixedCode.trim() === testCase.expected.trim()) {
-        console.log("🎉 Test passed!");
+        console.log("🎉 Test passed!")
       } else {
         console.log(
           "❌ Test, failed: Fixed code did not match expected output."
-        );
+        )
       }
     } catch (error) {
       console.error(
         `❌ Test failed due to unexpected error in, fixer: ${error.message}`
-      );
+      )
     } finally {
       // Clean up the temporary file (optional, but good practice)
       try {
-        await fs.unlink(tempFile);
+        await fs.unlink(tempFile)
       } catch (err) {
         // Ignore file cleanup errors
       }
@@ -197,4 +197,4 @@ async function runTests() {
   }
 }
 
-runTests().catch((err) => console.error(err));
+runTests().catch((err) => console.error(err))

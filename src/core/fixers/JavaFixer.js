@@ -109,73 +109,97 @@ class JavaFixer extends BaseFixer {
 
   _shouldAddSemicolon(trimmed, firstWord) {
     const keywords = [
-      "if",
-      "else",
-      "for",
-      "while",
-      "do",
-      "switch",
-      "case",
-      "default",
-      "try",
-      "catch",
-      "finally",
-      "main",
+      "if", "else", "for", "while", "do", "switch", "case", "default",
+      "try", "catch", "finally", "class", "interface", "enum", "import",
+      "package", "extends", "implements", "throws", "synchronized"
     ];
 
-    if (
-      trimmed.endsWith(";") ||
-      trimmed.endsWith("{") ||
-      trimmed.endsWith("}") ||
-      trimmed.endsWith(":")
-    )
+    // Already has terminator
+    if (trimmed.endsWith(";") || trimmed.endsWith("{") || trimmed.endsWith("}") || trimmed.endsWith(":"))
       return false;
-    if (trimmed.startsWith("@")) return false;
-
-    // Match class/interface/enum
-    if (
-      /^\s*(public|private|protected|abstract|final|strictfp)?\s*(class|interface|enum|@interface)\s+\w+/.test(
-        trimmed,
-      )
-    )
+      
+    // Annotations, comments, or preprocessor directives
+    if (trimmed.startsWith("@") || trimmed.startsWith("//") || trimmed.startsWith("/*"))
       return false;
 
-    // Match any method or constructor
-    if (
-      /^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?(synchronized\s+)?(abstract\s+)?[\w<>\[\]]+\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(
-        trimmed,
-      ) ||
-      /^\s*(public|private|protected)\s+\w+\s*\([^)]*\)\s*\{?\s*$/.test(trimmed) // constructor
-    )
+    // Class/interface/enum declarations
+    if (/^\s*(public|private|protected|abstract|final|strictfp)?\s*(class|interface|enum|@interface)\s+\w+/.test(trimmed))
       return false;
 
+    // Method declarations (including generics and throws)
+    if (/^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?(synchronized\s+)?(abstract\s+)?(<[^>]+>\s+)?[\w<>\[\]]+\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(trimmed))
+      return false;
+
+    // Constructor declarations
+    if (/^\s*(public|private|protected)\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(trimmed))
+      return false;
+
+    // Control flow keywords
     if (keywords.includes(firstWord)) return false;
+
+    // Lambda expressions
+    if (trimmed.includes("->")) return false;
+
+    // Multi-line statements (ending with operators)
+    if (/[+\-*/&|^%<>=!]\s*$/.test(trimmed)) return false;
+
+    // Array initializations
+    if (trimmed.includes("{") && trimmed.includes("}")) return false;
 
     return true;
   }
 
   _fixCommonTypos(code) {
     return code
+      // Print statement typos
       .replace(/\bpritnln\b/g, "println")
       .replace(/\bpritnf\b/g, "printf")
       .replace(/\bprintbln\b/g, "println")
-      .replace(/\bsyso\b/g, "System.out")
-      .replace(/\bpubic\b/g, "public")
       .replace(/\bpritn\b/g, "print")
+      .replace(/\bsyso\b/g, "System.out")
+      .replace(/\bsout\b/g, "System.out")
+      // Access modifier typos
+      .replace(/\bpubic\b/g, "public")
+      .replace(/\bpubilc\b/g, "public")
+      .replace(/\bprvate\b/g, "private")
+      .replace(/\bpriavte\b/g, "private")
+      .replace(/\bproected\b/g, "protected")
+      .replace(/\bproteted\b/g, "protected")
+      // Type typos
       .replace(/\bStirng\b/g, "String")
+      .replace(/\bStringg\b/g, "String")
+      .replace(/\bStrng\b/g, "String")
       .replace(/\bInteget\b/g, "Integer")
+      .replace(/\bIntger\b/g, "Integer")
       .replace(/\bDoube\b/g, "Double")
+      .replace(/\bDoubl\b/g, "Double")
       .replace(/\bFlot\b/g, "Float")
       .replace(/\bCharr\b/g, "Char")
       .replace(/\bBoolea\b/g, "Boolean")
+      .replace(/\bBoolena\b/g, "Boolean")
+      // Keyword typos
       .replace(/\bstatc\b/g, "static")
+      .replace(/\bstaitc\b/g, "static")
       .replace(/\bvois\b/g, "void")
-      .replace(/\bpubilc\b/g, "public")
-      .replace(/\bprvate\b/g, "private")
-      .replace(/\bproected\b/g, "protected")
+      .replace(/\bviod\b/g, "void")
       .replace(/\bmian\b/g, "main")
-      .replace(/\bStringg\b/g, "String")
-      .replace(/\bStrng\b/g, "String");
+      .replace(/\bmain\b/g, "main")
+      .replace(/\bretrun\b/g, "return")
+      .replace(/\bretrn\b/g, "return")
+      .replace(/\bimoprt\b/g, "import")
+      .replace(/\bimprot\b/g, "import")
+      // Common method typos
+      .replace(/\blentgh\b/g, "length")
+      .replace(/\blenght\b/g, "length")
+      .replace(/\bequlas\b/g, "equals")
+      .replace(/\bequals\b/g, "equals")
+      // Fix missing 'new' keyword
+      .replace(/\b(\w+)\s+(\w+)\s*=\s*(ArrayList|HashMap|HashSet|LinkedList|Vector)\s*\(/g, '$1 $2 = new $3(')
+      // Fix C-style array declarations
+      .replace(/\b(int|String|double|float|char|boolean)\s+(\w+)\[(\d*)\]/g, '$1[] $2')
+      // Fix missing semicolons in common patterns
+      .replace(/(System\.out\.print(?:ln)?\([^)]*\))(?!;)/g, '$1;')
+      .replace(/(\w+\s*=\s*[^;\n]+)(?<!;)$/gm, '$1;');
   }
 
   async _formatWithGoogleJavaFormat(codeToFormat) {

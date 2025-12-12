@@ -40,24 +40,10 @@ class EmbeddedCFixer extends BaseFixer {
     const mcuFamily = this._detectMcuFamily(code);
     console.log(`Detected MCU family: ${mcuFamily}`);
 
-    const mcuPatterns = {
-      stm32: [
-        { regex: /(\w+)\s*->\s*(\w+)\s*=/g, replace: "$1->$2 = " },
-        { regex: /RCC\s*->\s*(\w+)/g, replace: "RCC->$1" },
-        { regex: /GPIO([A-Z])\s*->\s*(\w+)/g, replace: "GPIO$1->$2" },
-      ],
-      avr: [
-        { regex: /PORT([A-Z])\s*=/g, replace: "PORT$1 = " },
-        { regex: /DDR([A-Z])\s*=/g, replace: "DDR$1 = " },
-      ],
-      esp32: [
-        { regex: /gpio_config_t/g, replace: "gpio_config_t" },
-        { regex: /esp_err_t/g, replace: "esp_err_t" },
-      ],
-      generic: [],
-    };
+    // Fix common C syntax issues first
+    code = this._fixCommonCSyntax(code);
 
-    const patterns = mcuPatterns[mcuFamily] || mcuPatterns.generic;
+    const patterns = this._getMcuPatterns(mcuFamily);
     for (const pattern of patterns) {
       code = code.replace(pattern.regex, pattern.replace);
     }
@@ -65,26 +51,130 @@ class EmbeddedCFixer extends BaseFixer {
     return code;
   }
 
+  _getMcuPatterns(mcuFamily) {
+    const mcuPatterns = {
+      stm32: [
+        { regex: /(\w+)\s*->\s*(\w+)\s*=/g, replace: "$1->$2 = " },
+        { regex: /RCC\s*->\s*(\w+)/g, replace: "RCC->$1" },
+        { regex: /GPIO([A-Z])\s*->\s*(\w+)/g, replace: "GPIO$1->$2" },
+        { regex: /HAL_(\w+)\s*\(/g, replace: "HAL_$1(" },
+        { regex: /__HAL_(\w+)\s*\(/g, replace: "__HAL_$1(" },
+        { regex: /NVIC_(\w+)\s*\(/g, replace: "NVIC_$1(" },
+      ],
+      avr: [
+        { regex: /PORT([A-Z])\s*=/g, replace: "PORT$1 = " },
+        { regex: /DDR([A-Z])\s*=/g, replace: "DDR$1 = " },
+        { regex: /PIN([A-Z])\s*&/g, replace: "PIN$1 & " },
+        { regex: /_BV\s*\(\s*(\d+)\s*\)/g, replace: "_BV($1)" },
+        { regex: /sei\s*\(\s*\)/g, replace: "sei()" },
+        { regex: /cli\s*\(\s*\)/g, replace: "cli()" },
+      ],
+      esp32: [
+        { regex: /gpio_config_t/g, replace: "gpio_config_t" },
+        { regex: /esp_err_t/g, replace: "esp_err_t" },
+        { regex: /gpio_(\w+)\s*\(/g, replace: "gpio_$1(" },
+        { regex: /esp_(\w+)\s*\(/g, replace: "esp_$1(" },
+        { regex: /xTaskCreate\s*\(/g, replace: "xTaskCreate(" },
+      ],
+      arduino: [
+        { regex: /digitalWrite\s*\(/g, replace: "digitalWrite(" },
+        { regex: /digitalRead\s*\(/g, replace: "digitalRead(" },
+        { regex: /analogRead\s*\(/g, replace: "analogRead(" },
+        { regex: /analogWrite\s*\(/g, replace: "analogWrite(" },
+        { regex: /pinMode\s*\(/g, replace: "pinMode(" },
+        { regex: /delay\s*\(/g, replace: "delay(" },
+        { regex: /delayMicroseconds\s*\(/g, replace: "delayMicroseconds(" },
+      ],
+      generic: [],
+    };
+
+    return mcuPatterns[mcuFamily] || mcuPatterns.generic;
+  }
+
+  _fixCommonCSyntax(code) {
+    return code
+      // Fix common typos
+      .replace(/\bpritnf\b/g, "printf")
+      .replace(/\bprintff\b/g, "printf")
+      .replace(/\bscanff\b/g, "scanf")
+      .replace(/\bscnaf\b/g, "scanf")
+      .replace(/\bmian\b/g, "main")
+      .replace(/\bamin\b/g, "main")
+      .replace(/\bretrun\b/g, "return")
+      .replace(/\bretrn\b/g, "return")
+      .replace(/\bincude\b/g, "include")
+      .replace(/\bincldue\b/g, "include")
+      .replace(/\bstdio\.g\b/g, "stdio.h")
+      .replace(/\bstdlib\.g\b/g, "stdlib.h")
+      .replace(/\bstring\.g\b/g, "string.h")
+      // Fix array declarations
+      .replace(/(\w+)\s+(\w+)\[(\d+)\]\s*;/g, '$1 $2[$3];')
+      // Fix pointer declarations
+      .replace(/(\w+)\s*\*\s*(\w+)/g, '$1 *$2')
+      // Fix function calls spacing
+      .replace(/(\w+)\s*\(\s*/g, '$1(')
+      // Fix assignment operators
+      .replace(/=\s*=/g, '==')
+      .replace(/!\s*=/g, '!=')
+      // Fix logical operators
+      .replace(/&\s*&/g, '&&')
+      .replace(/\|\s*\|/g, '||')
+      // Fix increment/decrement
+      .replace(/\+\s*\+/g, '++')
+      .replace(/-\s*-/g, '--')
+      // Fix missing spaces around operators
+      .replace(/([a-zA-Z0-9_])([+\-*/%=<>!&|])([a-zA-Z0-9_])/g, '$1 $2 $3')
+      // Fix double spaces
+      .replace(/\s{2,}/g, ' ');
+  }
+
   _detectMcuFamily(code) {
+    // STM32 detection
     if (
       code.includes("HAL_") ||
+      code.includes("__HAL_") ||
       (code.includes("GPIO") && code.includes("->")) ||
-      code.includes("RCC->")
+      code.includes("RCC->") ||
+      code.includes("stm32") ||
+      code.includes("NVIC_")
     )
       return "stm32";
+    
+    // Arduino detection (check before AVR as Arduino uses AVR)
+    if (
+      code.includes("digitalWrite") ||
+      code.includes("digitalRead") ||
+      code.includes("analogRead") ||
+      code.includes("pinMode") ||
+      code.includes("Arduino.h") ||
+      code.includes("setup()") ||
+      code.includes("loop()")
+    )
+      return "arduino";
+    
+    // AVR detection
     if (
       code.includes("DDR") ||
       code.includes("PORT") ||
       code.includes("PIN") ||
-      code.includes("avr/io.h")
+      code.includes("avr/io.h") ||
+      code.includes("_BV(") ||
+      code.includes("sei()") ||
+      code.includes("cli()")
     )
       return "avr";
+    
+    // ESP32 detection
     if (
       code.includes("esp_") ||
       code.includes("gpio_config") ||
-      code.includes("freertos/FreeRTOS.h")
+      code.includes("freertos/FreeRTOS.h") ||
+      code.includes("esp_err_t") ||
+      code.includes("xTaskCreate") ||
+      code.includes("esp32")
     )
       return "esp32";
+    
     return "generic";
   }
 
@@ -373,8 +463,10 @@ class EmbeddedCFixer extends BaseFixer {
     try {
       await fs.unlink(filePath);
     } catch (error) {
-      if (error.code !== "ENOENT")
-        console.warn("Warning: Could not delete temp file:", filePath);
+      if (error.code !== "ENOENT") {
+        console.warn(`Warning: Could not delete temp file ${filePath}: ${error.message}`);
+      }
+      // Don't throw - cleanup failures shouldn't break the main process
     }
   }
 

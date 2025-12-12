@@ -13,7 +13,7 @@ module.exports = {
   // Extends standard JavaScript recommendations and the Prettier plugin configuration.
   // 'plugin:prettier/recommended' must be the last entry to properly disable
   // all conflicting stylistic ESLint rules.
-  extends: ["eslint:recommended", "plugin:prettier/recommended"],
+    extends: ["eslint:recommended", "plugin:prettier/recommended"],
 
   parserOptions: {
     ecmaVersion: 2021,
@@ -32,4 +32,4 @@ module.exports = {
   }
   // The lint script(npm, run, lint) is configured to run from the root,
   // so this configuration file must be in the project root directory.
-};
+}

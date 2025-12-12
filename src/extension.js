@@ -1,62 +1,71 @@
 const vscode = require("vscode");
+const Linter = require("./core/linter");
+const FrontendValidator = require("./core/frontend-validator");
 
 // Map file extensions / languageIds → fixer
 function getFixerForDocument(document, code, fileName) {
-  if (
-    /\.(c|h|cpp|ino)$/i.test(fileName) ||
-    ["c", "cpp", "cppm"].includes(document.languageId)
-  ) {
-    console.log("✓ Loading EmbeddedCFixer for C/C++/Arduino file");
-    const EmbeddedCFixer = require("./core/fixers/EmbeddedCFixer");
-    return new EmbeddedCFixer(code, fileName);
-  } else if (fileName.endsWith(".java") || document.languageId === "java") {
-    console.log("✓ Loading JavaFixer for Java file");
-    const JavaFixer = require("./core/fixers/JavaFixer");
-    return new JavaFixer(code, fileName);
-  } else if (
-    /\.(js|jsx)$/i.test(fileName) ||
-    ["javascript", "javascriptreact"].includes(document.languageId)
-  ) {
-    console.log("✓ Loading JavascriptFixer for JavaScript file");
-    const JavascriptFixer = require("./core/fixers/javascript-fixer");
-    return new JavascriptFixer(code, fileName);
-  } else if (fileName.endsWith(".py") || document.languageId === "python") {
-    console.log("✓ Loading PythonFixer for Python file");
-    const PythonFixer = require("./core/fixers/python-fixer");
-    return new PythonFixer(code, fileName);
-  } else if (fileName.endsWith(".html") || document.languageId === "html") {
-    // ✅ HTML support
-    console.log("✓ Loading HtmlFixer for HTML file");
-    const HtmlFixer = require("./core/fixers/html-fixer");
-    return new HtmlFixer(code, fileName);
+  console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`);
+  
+  const fixerMap = {
+    c: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
+    cpp: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
+    cppm: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
+    java: () => new (require("./core/fixers/JavaFixer"))(code, fileName),
+    javascript: () => new (require("./core/fixers/javascript-fixer"))(code, fileName),
+    javascriptreact: () => new (require("./core/fixers/javascript-fixer"))(code, fileName),
+    python: () => new (require("./core/fixers/python-fixer"))(code, fileName),
+    html: () => new (require("./core/fixers/html-fixer"))(code, fileName)
+  };
+
+  // Check by language ID first
+  if (fixerMap[document.languageId]) {
+    console.log(`Found fixer by language ID: ${document.languageId}`);
+    return fixerMap[document.languageId]();
   }
+
+  // Check by file extension
+  if (/\.(c|h|cpp|ino)$/i.test(fileName)) return fixerMap.c();
+  if (/\.(js|jsx)$/i.test(fileName)) {
+    console.log('Found JS file by extension');
+    return fixerMap.javascript();
+  }
+  if (fileName.endsWith(".java")) return fixerMap.java();
+  if (fileName.endsWith(".py")) return fixerMap.python();
+  if (fileName.endsWith(".html")) return fixerMap.html();
+
+  console.log(`No fixer found for languageId: ${document.languageId}, fileName: ${fileName}`);
   return null;
 }
 
-async function runFixerAndApply(document, editor = null) {
-  const code = document.getText();
-  const fileName = document.fileName;
+    async function runFixerAndApply(document, editor = null) {
+    const code = document.getText();
+    const fileName = document.fileName;
 
-  console.log(`✓ Processing, file: ${fileName}`);
-  console.log(`✓ File, languageId: ${document.languageId}`);
+    console.log(`✓ Processing file: ${fileName}`);
+    console.log(`✓ File languageId: ${document.languageId}`);
 
-  const fixer = getFixerForDocument(document, code, fileName);
-  if (!fixer) {
+    const fixer = getFixerForDocument(document, code, fileName);
+    if (!fixer) {
     vscode.window.showInformationMessage("Unsupported file type!");
     return false;
-  }
-
-  try {
-    console.log("✓ Fixer loaded successfully, analyzing code...");
-    if (fixer.analyze) {
-      await Promise.resolve(fixer.analyze());
     }
 
-    const fixedCode = fixer.applyFixes
-      ? fixer.applyFixes()
-      : fixer.getFixedCode
-        ? fixer.getFixedCode()
-        : code;
+    try {
+    console.log("✓ Fixer loaded successfully, analyzing code...");
+    let result = null;
+    
+    if (fixer.analyze) {
+      result = await fixer.analyze();
+    }
+
+    let fixedCode = code;
+    if (result && result.formatted) {
+      fixedCode = result.formatted;
+    } else if (fixer.applyFixes) {
+      fixedCode = fixer.applyFixes();
+    } else if (fixer.getFixedCode) {
+      fixedCode = fixer.getFixedCode();
+    }
 
     if (fixedCode === code) {
       console.log("✨ No changes detected");
@@ -76,69 +85,481 @@ async function runFixerAndApply(document, editor = null) {
       await document.save();
     }
 
+    // Show change log for HTML files
+    if (result && result.changeLog && result.changeLog.length > 0 && fileName.endsWith('.html')) {
+      const changes = result.changeLog.join('\n• ');
+      
+      if (result.warning) {
+        vscode.window.showWarningMessage(
+          `${result.warning}\n\nFixes applied:\n• ${changes}`,
+          { modal: false }
+        );
+      } else {
+        // Show changes with preview option
+        vscode.window.showInformationMessage(
+          `HTML fixes applied:\n• ${changes}`,
+          'Show Preview'
+        ).then(selection => {
+          if (selection === 'Show Preview') {
+            showHtmlPreview(result.formatted, document.fileName);
+          }
+        });
+        
+        // Also auto-show preview if enabled
+        if (result.shouldShowPreview) {
+          setTimeout(async () => {
+            try {
+              await showHtmlPreview(result.formatted, document.fileName);
+            } catch (error) {
+              console.warn('Could not show preview:', error.message);
+            }
+          }, 1000); // Delay to let user read the changes first
+        }
+      }
+    } else if (result && result.warning && fileName.endsWith('.html')) {
+      vscode.window.showWarningMessage(result.warning);
+    }
+
     console.log("✓ Code formatted successfully!");
     return true;
-  } catch (error) {
-    console.error("✗ Code Janitor, error:", error);
-    vscode.window.showErrorMessage(`Code Janitor, Error: ${error.message}`);
-
-    if (error.code === "MODULE_NOT_FOUND") {
-      vscode.window.showErrorMessage(`Missing, dependency: ${error.message}`);
-    }
+    } catch (error) {
+    console.error("✗ Code Janitor error:", error);
+    vscode.window.showErrorMessage(`Code Janitor Error: ${error.message}`);
     return false;
-  }
-}
+    }
+    }
 
-function activate(context) {
-  console.log("✓ Code Janitor extension is activating...");
+    function activate(context) {
+    console.log("✓ Code Janitor extension is activating...");
+
+  // Auto-correction state
+    let isAutoFixing = false;
+    let autoFixTimeout = null;
 
   // 1. Manual Fix Command
-  const fixDisposable = vscode.commands.registerCommand(
+    const fixDisposable = vscode.commands.registerCommand(
     "codeJanitor.fixCode",
     async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        vscode.window.showInformationMessage("No active editor found!");
-        return;
-      }
-
-      const changed = await runFixerAndApply(editor.document, editor);
-      if (changed) {
-        vscode.window.showInformationMessage("✅ Code formatted successfully!");
-      } else {
-        vscode.window.showInformationMessage("✨ Nothing to fix!");
-      }
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+    vscode.window.showInformationMessage("No active editor found!");
+    return;
     }
-  );
-  context.subscriptions.push(fixDisposable);
 
-  // 2. Live Preview Command(Protected, Activation)
-  try {
+    const changed = await runFixerAndApply(editor.document, editor);
+    if (changed) {
+      // Success message is now handled in runFixerAndApply for HTML files
+      if (!editor.document.fileName.endsWith('.html')) {
+        vscode.window.showInformationMessage("✅ Code formatted successfully!");
+      }
+    } else {
+      vscode.window.showInformationMessage("✨ Nothing to fix!");
+    }
+    }
+    );
+    context.subscriptions.push(fixDisposable);
+
+  // Create diagnostics collection for linting issues
+  const diagnosticCollection = vscode.languages.createDiagnosticCollection('codeJanitor');
+  context.subscriptions.push(diagnosticCollection);
+
+  // 2. Lint Command
+    const lintDisposable = vscode.commands.registerCommand(
+    "codeJanitor.lintCode",
+    async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+    vscode.window.showInformationMessage("No active editor found!");
+    return;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== 'javascript' && document.languageId !== 'javascriptreact') {
+    vscode.window.showInformationMessage("Linting is currently only supported for JavaScript files.");
+    return;
+    }
+
+    try {
+    const linter = new Linter(document.fileName);
+    const result = await linter.lint();
+        
+    if (result.success) {
+    if (result.issues && result.issues.length > 0) {
+      // Convert issues to VS Code diagnostics
+      const diagnostics = result.issues.map(issue => {
+        const range = new vscode.Range(
+          new vscode.Position(issue.line - 1, issue.column - 1),
+          new vscode.Position(issue.line - 1, issue.column - 1 + 10)
+        );
+        const severity = issue.severity === 2 ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
+        const diagnostic = new vscode.Diagnostic(range, issue.message, severity);
+        diagnostic.source = 'Code Janitor';
+        if (issue.ruleId) {
+          diagnostic.code = issue.ruleId;
+        }
+        return diagnostic;
+      });
+      
+      // Set diagnostics in Problems panel
+      diagnosticCollection.set(document.uri, diagnostics);
+      
+      const issueCount = result.issues.length;
+      vscode.window.showWarningMessage(`Found ${issueCount} linting issue(s). Check Problems panel for details.`);
+    } else {
+      // Clear diagnostics if no issues
+      diagnosticCollection.set(document.uri, []);
+      vscode.window.showInformationMessage("✅ No linting issues found!");
+    }
+    } else {
+    vscode.window.showErrorMessage(`Linting failed: ${result.message}`);
+    }
+    } catch (error) {
+    vscode.window.showErrorMessage(`Linter error: ${error.message}`);
+    }
+    }
+    )
+    context.subscriptions.push(lintDisposable);
+
+  // 3. Frontend Validation Command
+    const validateDisposable = vscode.commands.registerCommand(
+      "codeJanitor.validateFrontend",
+      async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+          vscode.window.showInformationMessage("No active editor found!");
+          return;
+        }
+
+        const document = editor.document;
+        const ext = document.fileName.toLowerCase();
+        
+        if (!ext.endsWith('.html') && !ext.endsWith('.css') && !ext.endsWith('.js')) {
+          vscode.window.showInformationMessage("Frontend validation is only supported for HTML, CSS, and JS files.");
+          return;
+        }
+
+        try {
+          const validator = new FrontendValidator(document.fileName, document.getText());
+          const result = validator.validate();
+          
+          if (result.hasIssues) {
+            const issueCount = result.issues.length;
+            const message = `Found ${issueCount} frontend issue(s):\n` + 
+              result.issues.map(issue => `• ${issue.message}`).join('\n');
+            
+            const action = await vscode.window.showWarningMessage(
+              `Found ${issueCount} missing file(s). Create missing files?`,
+              "Create Files", "Show Details", "Cancel"
+            );
+            
+            if (action === "Create Files") {
+              result._applyFixes();
+              vscode.window.showInformationMessage("✅ Missing files created successfully!");
+            } else if (action === "Show Details") {
+              vscode.window.showInformationMessage(message);
+            }
+          } else {
+            vscode.window.showInformationMessage("✅ No frontend validation issues found!");
+          }
+        } catch (error) {
+          vscode.window.showErrorMessage(`Frontend validation error: ${error.message}`);
+        }
+      }
+    );
+    context.subscriptions.push(validateDisposable);
+
+  // 4. Live Preview Command(Protected, Activation)
+    try {
     // Correctly require the 'live-preview.js' file
     const livePreviewer = require("./live-preview");
 
     const previewDisposable = vscode.commands.registerCommand(
-      "codeJanitor.livePreview",
-      () => livePreviewer(context)
+    "codeJanitor.livePreview",
+    () => livePreviewer(context)
     );
     context.subscriptions.push(previewDisposable);
     console.log("✓ Live Preview command registered.");
-  } catch (error) {
+    } catch (error) {
     // If the module import fails (e.g., file name typo or missing dependencies in live-preview.js),
     // the core extension activation continues, but we warn the user.
     console.warn(
-      "⚠️ Could not register codeJanitor.livePreview. Check that `./live-preview.js` exists and is accessible. Error:",
-      error.message
-    );
-  }
+    "⚠️ Could not register codeJanitor.livePreview. Check that `./live-preview.js` exists and is accessible. Error:",
+    error.message
+    )
+    }
 
-  // 3. Auto-fix before save
-  vscode.workspace.onWillSaveTextDocument(async (event) => {
-    console.log("🧹 Auto-fix triggered before save...");
-    await runFixerAndApply(event.document);
+  // 5. Real-time Auto-correction
+  const changeDisposable = vscode.workspace.onDidChangeTextDocument(async (event) => {
+    const config = vscode.workspace.getConfiguration('codeJanitor');
+    if (!config.get('autoCorrection.enabled', true)) return;
+    
+    const document = event.document;
+    const supportedLanguages = config.get('autoCorrection.languages', ['python', 'javascript', 'java', 'c', 'cpp', 'html']);
+    
+    if (!supportedLanguages.includes(document.languageId)) return;
+    if (isAutoFixing) return;
+    
+    // Clear previous timeout
+    if (autoFixTimeout) {
+      clearTimeout(autoFixTimeout);
+    }
+    
+    // Set new timeout for debounced auto-correction
+    const delay = config.get('autoCorrection.delay', 500);
+    autoFixTimeout = setTimeout(async () => {
+      if (isAutoFixing) return;
+      
+      try {
+        isAutoFixing = true;
+        await autoFixLine(document, vscode.window.activeTextEditor, event.contentChanges);
+      } catch (error) {
+        console.warn('Auto-correction error:', error.message);
+      } finally {
+        isAutoFixing = false;
+      }
+    }, delay);
   });
+  context.subscriptions.push(changeDisposable);
+
+  // 6. Auto-fix and validate before save
+    const saveDisposable = vscode.workspace.onWillSaveTextDocument(async (event) => {
+    console.log("🧹 Auto-fix triggered before save...");
+    
+    // Validate frontend files
+    const ext = event.document.fileName.toLowerCase();
+    if (ext.endsWith('.html') || ext.endsWith('.css') || ext.endsWith('.js')) {
+      await validateFrontendFile(event.document);
+    }
+    
+    // Apply fixes and show preview for HTML files
+    const changed = await runFixerAndApply(event.document);
+    
+    // For HTML files, the preview is already handled in runFixerAndApply
+    // No additional action needed here
+  });
+  context.subscriptions.push(saveDisposable);
 
   console.log("✓ Code Janitor extension activated successfully!");
+}
+
+// Helper function to check if file is supported
+function isSupportedFile(fileName, languageId) {
+  const supportedExtensions = /\.(c|h|cpp|ino|java|js|jsx|py|html)$/i;
+  const supportedLanguages = ['c', 'cpp', 'cppm', 'java', 'javascript', 'javascriptreact', 'python', 'html'];
+  
+  return supportedExtensions.test(fileName) || supportedLanguages.includes(languageId);
+}
+
+// Show HTML preview in webview
+async function showHtmlPreview(htmlContent, fileName) {
+  try {
+    const panel = vscode.window.createWebviewPanel(
+      'htmlPreview',
+      `Preview: ${fileName}`,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+    
+    panel.webview.html = htmlContent;
+  } catch (error) {
+    console.warn('Could not create webview preview:', error.message);
+  }
+}
+
+// Helper function to validate frontend files
+async function validateFrontendFile(document) {
+  try {
+    const validator = new FrontendValidator(document.fileName, document.getText());
+    const result = validator.validate();
+    
+    if (result.hasIssues) {
+      console.log(`Frontend validation found ${result.issues.length} issues in ${document.fileName}`);
+      // Silently log issues during save, don't interrupt the save process
+      result.issues.forEach(issue => {
+        console.log(`  - ${issue.message}`);
+      });
+    }
+  } catch (error) {
+    console.warn(`Frontend validation error for ${document.fileName}:`, error.message);
+  }
+}
+
+// Auto-fix specific lines that were changed
+async function autoFixLine(document, editor, contentChanges) {
+  try {
+    const edit = new vscode.WorkspaceEdit();
+    let hasChanges = false;
+    
+    for (const change of contentChanges) {
+      const startLine = change.range.start.line;
+      const endLine = change.range.end.line;
+      
+      // Get the affected line(s)
+      for (let lineNum = startLine; lineNum <= Math.min(endLine + 1, document.lineCount - 1); lineNum++) {
+        try {
+          const line = document.lineAt(lineNum);
+          const lineText = line.text;
+          
+          if (!lineText.trim()) continue; // Skip empty lines
+          
+          const fixedLine = await fixSingleLine(lineText, document.languageId, document, lineNum);
+          
+          if (fixedLine && fixedLine !== lineText) {
+            edit.replace(document.uri, line.range, fixedLine);
+            hasChanges = true;
+          }
+        } catch (lineError) {
+          console.warn(`Auto-fix failed for line ${lineNum}:`, lineError.message);
+        }
+      }
+    }
+    
+    // Apply all changes in a single batch
+    if (hasChanges) {
+      await vscode.workspace.applyEdit(edit);
+    }
+  } catch (error) {
+    console.error('Auto-fix error:', error.message);
+  }
+}
+
+// Fix a single line based on language
+async function fixSingleLine(lineText, languageId, document, lineNum) {
+  try {
+    const trimmed = lineText.trim();
+    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) {
+      return null; // Skip comments and empty lines
+    }
+    
+    let fixed = lineText;
+    
+    // Get proper indentation context
+    const indentLevel = getIndentLevel(document, lineNum);
+    const properIndent = ' '.repeat(Math.max(0, indentLevel * 4));
+    
+    switch (languageId) {
+      case 'python':
+        fixed = fixPythonLine(lineText, properIndent);
+        break;
+      case 'javascript':
+      case 'javascriptreact':
+        fixed = fixJavaScriptLine(lineText, properIndent);
+        break;
+      case 'java':
+        fixed = fixJavaLine(lineText, properIndent);
+        break;
+      case 'c':
+      case 'cpp':
+      case 'cppm':
+        fixed = fixCLine(lineText, properIndent);
+        break;
+      case 'html':
+        fixed = fixHtmlLine(lineText, properIndent);
+        break;
+      default:
+        return lineText;
+    }
+    
+    return fixed;
+  } catch (error) {
+    console.warn(`Fix single line error for ${languageId}:`, error.message);
+    return lineText;
+  }
+}
+
+// Get proper indentation level for a line
+function getIndentLevel(document, lineNum) {
+  try {
+    let indentLevel = 0;
+    
+    for (let i = lineNum - 1; i >= 0; i--) {
+      if (i < 0 || i >= document.lineCount) continue;
+      
+      const prevLine = document.lineAt(i).text.trim();
+      if (!prevLine) continue;
+      
+      if (prevLine.endsWith(':') || prevLine.endsWith('{')) {
+        indentLevel++;
+        break;
+      }
+      if (prevLine.match(/^(if|for|while|def|class|function|try|catch|else|elif)\b/)) {
+        indentLevel++;
+        break;
+      }
+    }
+    
+    return Math.max(0, indentLevel);
+  } catch (error) {
+    console.warn('Indent level calculation error:', error.message);
+    return 0;
+  }
+}
+
+// Language-specific line fixers
+function fixPythonLine(line, properIndent) {
+  let fixed = line.trim();
+  
+  // Fix missing colons
+  if (/^(if|elif|else|def|class|for|while|try|except|finally|with)\b/.test(fixed) && !fixed.endsWith(':') && !fixed.includes('#')) {
+    fixed += ':';
+  }
+  
+  // Fix print statements
+  fixed = fixed.replace(/^print\s+([^\(].+)$/, 'print($1)');
+  
+  // Fix boolean values
+  fixed = fixed.replace(/\btrue\b/g, 'True')
+               .replace(/\bfalse\b/g, 'False')
+               .replace(/\bnull\b/g, 'None')
+               .replace(/\bundefined\b/g, 'None');
+  
+  // Remove JS keywords only if they appear to be JavaScript syntax
+  if (/^(var|let|const)\s+\w+\s*=/.test(fixed) || /^function\s+\w+\s*\(/.test(fixed)) {
+    fixed = fixed.replace(/^(var|let|const|function)\s+/, '');
+  }
+  
+  return properIndent + fixed;
+}
+
+function fixJavaScriptLine(line, properIndent) {
+  let fixed = line.trim();
+  
+  // Add missing semicolons (but not for control structures or already terminated lines)
+  if (!/[;{}]$/.test(fixed) && !/^(if|else|for|while|function|class|const|let|var|import|export|try|catch|finally|switch|case|default|do)\b/.test(fixed) && !fixed.includes('//') && !/{\s*$/.test(fixed)) {
+    fixed += ';';
+  }
+  
+  return properIndent + fixed;
+}
+
+function fixJavaLine(line, properIndent) {
+  let fixed = line.trim();
+  
+  // Add missing semicolons
+  if (!/[;{}]$/.test(fixed) && !/^(if|else|for|while|public|private|protected|class|import|package|try|catch|finally|switch|case|default|do|static|final|abstract|@\w+)\b/.test(fixed) && !fixed.includes('//') && !/{\s*$/.test(fixed) && !/\)\s*$/.test(fixed)) {
+    fixed += ';';
+  }
+  
+  return properIndent + fixed;
+}
+
+function fixCLine(line, properIndent) {
+  let fixed = line.trim();
+  
+  // Add missing semicolons
+  if (!/[;{}]$/.test(fixed) && !/^(if|for|while|#|int|char|float|double|void|struct|typedef)\b/.test(fixed) && !fixed.includes('//')) {
+    fixed += ';';
+  }
+  
+  return properIndent + fixed;
+}
+
+function fixHtmlLine(line, properIndent) {
+  // Basic HTML formatting - just apply proper indentation
+  return properIndent + line.trim();
 }
 
 function deactivate() {

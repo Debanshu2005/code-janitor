@@ -1,0 +1,97 @@
+# Exclude everything by default
+**
+
+# Include only essential files
+!src/**
+!formatters/**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+
+# Exclude most node_modules but include essential runtime dependencies
+node_modules/**
+!node_modules/@babel/**
+!node_modules/eslint/**
+!node_modules/@eslint/**
+!node_modules/fs-extra/**
+!node_modules/parse5/**
+!node_modules/prettier/**
+!node_modules/universalify/**
+!node_modules/graceful-fs/**
+!node_modules/jsonfile/**
+!node_modules/entities/**
+!node_modules/espree/**
+!node_modules/esquery/**
+!node_modules/estraverse/**
+!node_modules/esutils/**
+!node_modules/acorn/**
+!node_modules/acorn-jsx/**
+!node_modules/parent-module/**
+!node_modules/import-fresh/**
+!node_modules/callsites/**
+!node_modules/globals/**
+!node_modules/glob-parent/**
+# Exclude tests and docs from included modules
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/*.md
+node_modules/**/docs/**
+node_modules/**/examples/**
+
+# Exclude development files
+.vscode/**
+.vscode-test/**
+test/**
+tests/**
+**/*test*
+**/*.test.*
+**/*.spec.*
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+.eslintrc.*
+jsconfig.json
+tsconfig.json
+
+# Exclude documentation and examples
+**/*.md
+!README.md
+!CHANGELOG.md
+**/docs/**
+**/examples/**
+**/demo/**
+
+# Exclude build artifacts
+**/*.vsix
+**/out/**
+**/dist/**
+**/build/**
+
+# Exclude temporary files
+temp_*
+**/temp_*
+**/*.tmp
+**/*.temp
+**/*.backup.*
+**/.python-fixer-backups/**
+
+# Exclude OS and IDE files
+.DS_Store
+Thumbs.db
+**/.idea/**
+**/*.swp
+**/*.swo
+
+# Exclude logs
+**/*.log
+**/logs/**
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Exclude coverage and test artifacts
+**/coverage/**
+**/.nyc_output/**
+**/*.tgz
+**/.yarn-integrity
