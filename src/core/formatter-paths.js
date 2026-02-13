@@ -11,7 +11,7 @@ class FormatterPaths {
   }
 
   static getJavaFormatterPath() {
-    const jarPath = path.join(__dirname, 'google-java-format', 'google-java-format.jar');
+    const jarPath = path.join(__dirname, 'fixers', 'google-java-format-1.28.0-all-deps.jar');
     if (fs.existsSync(jarPath)) return jarPath;
     return 'google-java-format'; // fallback
   }

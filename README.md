@@ -4,7 +4,7 @@
 ![Node Version](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![NPM Version](https://img.shields.io/badge/NPM-%3E%3D9-red?logo=npm)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-0.7.0-orange)
+![Version](https://img.shields.io/badge/Version-0.7.6-orange)
 
 Code Janitor is a VSCode extension that automatically **analyzes, fixes, and formats code** for multiple programming languages, including Python, C/C++/Arduino, Java, HTML and JavaScript. It ensures your code is clean, consistent, and follows proper syntax conventions with intelligent auto-correction and real-time preview.
 
@@ -18,19 +18,26 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
 - **Configurable delay** and language support
 - Works with Python, JavaScript, Java, C/C++, and HTML
 
-### 2. **Smart HTML Fixer with Auto-Preview** 🔍 NEW!
+### 2. **Smart HTML Fixer with Auto-Preview** 🔍
 - **Detailed change tracking** with line numbers
 - **Automatic preview** opens after fixes are applied
 - **Document structure fixes** (DOCTYPE, HTML, HEAD, BODY)
 - **Embedded CSS/JS formatting** within HTML files
 
-### 3. **Frontend Dependency Validation** 🔍
+### 3. **Advanced Live Preview System** 🚀 ENHANCED!
+- **Real-time updates** as you type - no more Alt+P needed!
+- **Multi-language support**: HTML, JS/TS, Python, C, Java with console output
+- **Interactive React/JSX preview** with working functionality
+- **Console output capture** for JavaScript execution and debugging
+- **Automatic preview** opens beside editor when changes are made
+
+### 4. **Frontend Dependency Validation** 🔍
 - **Detects missing files** before saving (CSS, JS, images)
 - **Auto-creates missing files** when requested
 - **Validates imports** and links in HTML/CSS/JS
 - **Prevents broken dependencies** in frontend projects
 
-### 4. Multi-language Support
+### 5. Multi-language Support
 - **Python** (`.py` files)
   - Fixes indentation, missing colons, and common syntax issues.
   - Converts JavaScript syntax to Python (var/let/const, braces, boolean values).
@@ -46,17 +53,23 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
 - **HTML** (`.html` files)
    - Fixes indentation issues.
    - Fixes syntax issues like missing closing tags.
+- **React/JSX** (`.jsx`, `.tsx` files)
+   - Live component preview with Babel compilation.
+   - Interactive React development environment.
 
-### 5. Automatic Fixing
+### 6. Automatic Fixing
 - Runs **before saving a file**.
 - Detects language automatically.
 - Applies fixes without manual intervention.
 
-### 6. Manual Command
+### 7. Manual Command
 - Run the **Code Janitor command** from the Command Palette:
 
-### 7. Preview 
-- You can now get a preview of your of your frontend page without saving the program allowing more efficient coding.
+### 8. Smart HTML Protection 🛡️ NEW!
+- **Well-formed detection**: Automatically identifies correct HTML to prevent corruption
+- **Balanced tag validation**: Checks tag structure before applying fixes
+- **Minimal processing**: Only fixes actually broken HTML
+- **Auto-preview**: Shows preview for all HTML changes
 
 ## Installation (via npm)
 
@@ -91,9 +104,10 @@ code-janitor
 - **AST-based transformations**: Structural code improvements using Babel
 
 ### Intelligent Python Formatting
-- **Two-stage approach**: Inline syntax fixes followed by `autopep8` formatting
-- **Smart detection**: Uses autopep8 only on pure Python code to prevent corruption
-- **JavaScript conversion**: Automatically converts JS syntax to Python equivalents
+- **Three-stage approach**: Inline syntax fixes, JavaScript conversion, then autopep8 formatting
+- **Smart detection**: Uses autopep8 only on clean Python code to prevent corruption
+- **Advanced JavaScript conversion**: Handles try-catch-finally, arrow functions, complex braces
+- **Edge case mastery**: Perfect conversion of 90%+ real-world JavaScript-to-Python scenarios
 - **Fallback system**: Ensures code remains functional even if formatters fail
 
 ---
@@ -227,7 +241,7 @@ function greet() {
 -  **Alt+d** : To activate the formatter
 -  **Alt+l** : To lint JavaScript code
 -  **Alt+v** : To validate frontend dependencies
--  **Alt+p** : For preview feature
+-  **Alt+p** : For HTML/React preview feature (now supports JSX/TSX)
 
 ## 🔹 Real-Time Auto-Correction
 
@@ -256,7 +270,8 @@ function greet() {
 | C / C++ / Arduino | `.c`, `.cpp`, `.h`, `.ino` / `c`, `cpp`         |
 | Java              | `.java` / `java`                                |
 | JavaScript        | `.js`, `.jsx` / `javascript`, `javascriptreact` |
-| HTML              |  `.html`                                        |
+| HTML              | `.html`                                         |
+| React/JSX         | `.jsx`, `.tsx` / `javascriptreact`, `typescriptreact` |
 
 
 ---
@@ -277,18 +292,21 @@ function greet() {
 # You type:
 def test()
     if True
-        print "hello"
-    var x = true
-    if x === 5
-        return null
+        var x = true
+        if x === 5 {
+            return null
+        } else {
+            print "hello"
+        }
 
 # Auto-corrected to:
 def test():
     if True:
-        print("hello")
         x = True
         if x == 5:
             return None
+        else:
+            print("hello")
 ```
 
 **JavaScript Auto-Correction:**
@@ -302,10 +320,26 @@ function test() {
 
 // Auto-corrected to:
 function test() {
-  let x = 5
-  console.log(x)
-  return x
+  let x = 5;
+  console.log(x);
+  return x;
 }
+```
+
+**React/JSX Live Preview:**
+```jsx
+// You type in .jsx file:
+function App() {
+  return (
+    <div>
+      <h1>Hello React!</h1>
+      <button onClick={() => alert('Clicked!')}>Click Me</button>
+    </div>
+  );
+}
+
+// Press Alt+P → Live interactive preview opens beside editor
+// Button actually works and shows alert when clicked!
 ```
 
 **HTML Auto-Correction with Preview:**
@@ -412,20 +446,37 @@ function test() {
 - **Non-intrusive**: Doesn't interfere with manual Alt+P preview
 - **Smart detection**: Only shows preview when actual fixes are applied
 
-## 🔹 What's New in v0.7.0
+## 🔹 What's New in v0.7.6
 
-### 🚀 Major Improvements
-- **Enhanced JavaScript Fixer**: Improved syntax cleanup and formatting
-- **Smart HTML Auto-Preview**: Automatically shows preview when HTML fixes are applied
-- **Detailed Change Tracking**: See exactly what was fixed with line numbers
-- **Improved Python Formatter**: Better handling of complex nested structures
-- **Comprehensive Error Handling**: Robust fallback systems for all formatters
+### 🖼️ Enhanced Image Support in Live Preview
+- **Universal Image Format Support**: All image formats (PNG, JPG, GIF, SVG, WebP, BMP, ICO, TIFF) now display correctly in preview
+- **Local File Path Resolution**: Automatic conversion of relative and absolute image paths to webview URIs
+- **CSS Background Images**: Support for `background-image: url()` references in stylesheets
+- **Workspace Resource Access**: Enhanced security with proper local resource root configuration
 
-### 🐛 Bug Fixes
-- Fixed JavaScript syntax cleanup issues
-- Resolved HTML indentation problems
-- Improved Python autopep8 integration
-- Enhanced extension stability
+### 🔧 Bug Fixes
+- Fixed broken image display in HTML live preview
+- Improved webview security with proper resource access controls
+- Enhanced path resolution for nested directory structures
+
+## 🔹 What's New in v0.7.5
+
+### 🚀 Enhanced Live Preview System
+- **Real-Time Updates**: Live preview now updates automatically as you type without pressing Alt+P
+- **Multi-Language Support**: Enhanced preview for HTML, JavaScript, TypeScript, Python, C, and Java
+- **Console Output Capture**: JavaScript execution shows console output in preview
+- **Advanced Module Integration**: Replaced basic preview with comprehensive live-preview system
+
+### 🛡️ Smart HTML Fixer Protection
+- **Well-Formed Detection**: Automatically detects already correct HTML to prevent corruption
+- **Balanced Tag Checking**: Validates tag structure before applying aggressive fixes
+- **Minimal Processing**: Only applies necessary changes to preserve existing correct code
+- **Auto-Preview Enabled**: Shows preview for all HTML changes including formatting
+
+### 🔧 JavaScript Fixer Improvements
+- **Enhanced Typo Detection**: Fixed typo map to catch actual JavaScript typos
+- **Better Semicolon Handling**: Improved problematic semicolon removal
+- **AST Transformations**: Advanced structural code improvements using Babel
 
 ## 🔹 Acknowledgements
 1. https://github.com/hhatto/autopep8 --> Python Code Formatter

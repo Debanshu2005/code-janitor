@@ -92,13 +92,108 @@ class HtmlFixer {
     return str.replace(regex, () => data.shift())
     }
 
-  // --- Core Logic ---
+  // Check if HTML is already well-formed
+  isWellFormedHtml(html) {
+    const trimmed = html.trim()
+    
+    // If it's a complete document, check basic structure
+    if (trimmed.includes('<!DOCTYPE') && trimmed.includes('<html') && trimmed.includes('</html>')) {
+      return this.hasBalancedTags(trimmed)
+    }
+    
+    // If it's a fragment, check if tags are balanced
+    if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+      return this.hasBalancedTags(trimmed)
+    }
+    
+    // If it's just text content, it's fine as is
+    if (!trimmed.includes('<')) {
+      return true
+    }
+    
+    return false
+  }
+  
+  // Check if HTML tags are balanced
+  hasBalancedTags(html) {
+    const stack = []
+    const voidTags = ['br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'source', 'track', 'wbr']
+    
+    // Simple regex to find tags
+    const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g
+    let match
+    
+    while ((match = tagRegex.exec(html)) !== null) {
+      const tagName = match[1].toLowerCase()
+      const isClosing = match[0].startsWith('</')
+      const isSelfClosing = match[0].endsWith('/>')
+      
+      if (voidTags.includes(tagName) || isSelfClosing) {
+        continue // Skip void and self-closing tags
+      }
+      
+      if (isClosing) {
+        if (stack.length === 0 || stack.pop() !== tagName) {
+          return false // Unmatched closing tag
+        }
+      } else {
+        stack.push(tagName)
+      }
+    }
+    
+    return stack.length === 0 // All tags should be closed
+  }
 
     async analyze() {
     try {
     let code = this.code
     const original = code
     const changeLog = []
+      
+    // Check if HTML is already well-formed before making changes
+    if (this.isWellFormedHtml(code)) {
+      console.log('HTML appears to be well-formed, applying minimal fixes only')
+      
+      // Only apply formatting if prettier is available
+      if (prettier) {
+        try {
+          const formatted = await prettier.format(code, {
+            parser: "html",
+            htmlWhitespaceSensitivity: "css",
+            printWidth: 80
+          })
+          
+          if (formatted !== code) {
+            changeLog.push('Applied HTML formatting and indentation')
+            this.fixedCode = formatted
+            await this.saveFile(formatted)
+            
+            return {
+              success: true,
+              formatted,
+              changes: { formatting: true },
+              changeLog,
+              originalLength: original.length,
+              formattedLength: formatted.length,
+              shouldShowPreview: true // Enable auto-preview for formatting changes
+            }
+          }
+        } catch (error) {
+          console.warn('Prettier formatting failed on well-formed HTML:', error.message)
+        }
+      }
+      
+      // Return original if no changes needed
+      return {
+        success: true,
+        formatted: code,
+        changes: {},
+        changeLog: [],
+        originalLength: original.length,
+        formattedLength: code.length,
+        shouldShowPreview: false
+      }
+    }
       
     if (!parse5) {
     console.warn('parse5 not available, using basic HTML fixes')

@@ -1,6 +1,7 @@
 const vscode = require("vscode");
 const Linter = require("./core/linter");
 const FrontendValidator = require("./core/frontend-validator");
+const livePreviewer = require("./live-preview");
 
 // Map file extensions / languageIds → fixer
 function getFixerForDocument(document, code, fileName) {
@@ -101,23 +102,23 @@ function getFixerForDocument(document, code, fileName) {
           'Show Preview'
         ).then(selection => {
           if (selection === 'Show Preview') {
-            showHtmlPreview(result.formatted, document.fileName);
-          }
-        });
+    livePreviewer(globalContext);
+    }
+    });
         
         // Also auto-show preview if enabled
-        if (result.shouldShowPreview) {
-          setTimeout(async () => {
-            try {
-              await showHtmlPreview(result.formatted, document.fileName);
-            } catch (error) {
-              console.warn('Could not show preview:', error.message);
-            }
-          }, 1000); // Delay to let user read the changes first
-        }
-      }
+    if (result.shouldShowPreview) {
+    setTimeout(async () => {
+    try {
+    await livePreviewer(globalContext);
+    } catch (error) {
+    console.warn('Could not show preview:', error.message);
+    }
+    }, 1000); // Delay to let user read the changes first
+    }
+    }
     } else if (result && result.warning && fileName.endsWith('.html')) {
-      vscode.window.showWarningMessage(result.warning);
+    vscode.window.showWarningMessage(result.warning);
     }
 
     console.log("✓ Code formatted successfully!");
@@ -129,8 +130,11 @@ function getFixerForDocument(document, code, fileName) {
     }
     }
 
+    let globalContext; // Store context globally
+
     function activate(context) {
     console.log("✓ Code Janitor extension is activating...");
+    globalContext = context; // Store context for global access
 
   // Auto-correction state
     let isAutoFixing = false;
@@ -268,25 +272,13 @@ function getFixerForDocument(document, code, fileName) {
     );
     context.subscriptions.push(validateDisposable);
 
-  // 4. Live Preview Command(Protected, Activation)
-    try {
-    // Correctly require the 'live-preview.js' file
-    const livePreviewer = require("./live-preview");
-
+  // 4. Live Preview Command (Enhanced for React)
     const previewDisposable = vscode.commands.registerCommand(
-    "codeJanitor.livePreview",
-    () => livePreviewer(context)
+      "codeJanitor.livePreview",
+      () => livePreviewer(context)
     );
     context.subscriptions.push(previewDisposable);
-    console.log("✓ Live Preview command registered.");
-    } catch (error) {
-    // If the module import fails (e.g., file name typo or missing dependencies in live-preview.js),
-    // the core extension activation continues, but we warn the user.
-    console.warn(
-    "⚠️ Could not register codeJanitor.livePreview. Check that `./live-preview.js` exists and is accessible. Error:",
-    error.message
-    )
-    }
+    console.log("✓ Enhanced Live Preview command registered.");
 
   // 5. Real-time Auto-correction
   const changeDisposable = vscode.workspace.onDidChangeTextDocument(async (event) => {
@@ -350,24 +342,7 @@ function isSupportedFile(fileName, languageId) {
   return supportedExtensions.test(fileName) || supportedLanguages.includes(languageId);
 }
 
-// Show HTML preview in webview
-async function showHtmlPreview(htmlContent, fileName) {
-  try {
-    const panel = vscode.window.createWebviewPanel(
-      'htmlPreview',
-      `Preview: ${fileName}`,
-      vscode.ViewColumn.Beside,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true
-      }
-    );
-    
-    panel.webview.html = htmlContent;
-  } catch (error) {
-    console.warn('Could not create webview preview:', error.message);
-  }
-}
+
 
 // Helper function to validate frontend files
 async function validateFrontendFile(document) {
@@ -442,7 +417,8 @@ async function fixSingleLine(lineText, languageId, document, lineNum) {
     
     switch (languageId) {
       case 'python':
-        fixed = fixPythonLine(lineText, properIndent);
+        // Use optimized Python line fixing for real-time
+        fixed = fixPythonLineOptimized(lineText, properIndent);
         break;
       case 'javascript':
       case 'javascriptreact':
@@ -496,6 +472,30 @@ function getIndentLevel(document, lineNum) {
     console.warn('Indent level calculation error:', error.message);
     return 0;
   }
+}
+
+// Optimized Python line fixer for real-time auto-correction
+function fixPythonLineOptimized(line, properIndent) {
+  let fixed = line.trim();
+  
+  // Only apply the most essential fixes for real-time performance
+  
+  // Fix missing colons (most common Python syntax error)
+  if (/^(if|elif|else|def|class|for|while|try|except|finally|with)\b/.test(fixed) && !fixed.endsWith(':') && !fixed.includes('#')) {
+    fixed += ':';
+  }
+  
+  // Fix print statements (quick regex)
+  if (/^print\s+[^\(]/.test(fixed)) {
+    fixed = fixed.replace(/^print\s+(.+)$/, 'print($1)');
+  }
+  
+  // Fix most common boolean/null values
+  if (fixed.includes('true')) fixed = fixed.replace(/\btrue\b/g, 'True');
+  if (fixed.includes('false')) fixed = fixed.replace(/\bfalse\b/g, 'False');
+  if (fixed.includes('null')) fixed = fixed.replace(/\bnull\b/g, 'None');
+  
+  return properIndent + fixed;
 }
 
 // Language-specific line fixers

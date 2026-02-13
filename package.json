@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "0.7.1",
+  "version": "0.7.7",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -62,7 +62,7 @@
       },
       {
         "command": "codeJanitor.livePreview",
-        "title": "Live HTML Preview (Unsaved)",
+        "title": "Live HTML/React Preview (Unsaved)",
         "category": "Code Janitor"
       },
       {
@@ -107,7 +107,7 @@
         "command": "codeJanitor.validateFrontend",
         "key": "alt+v",
         "mac": "alt+v",
-        "when": "editorTextFocus && (resourceExtname == '.html' || resourceExtname == '.css' || resourceExtname == '.js')"
+        "when": "editorTextFocus && (resourceExtname == '.html' || resourceExtname == '.css' || resourceExtname == '.js' || resourceExtname == '.jsx' || resourceExtname == '.tsx')"
       }
     ]
   },

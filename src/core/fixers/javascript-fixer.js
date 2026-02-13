@@ -86,18 +86,22 @@ class JavaScriptFixer extends BaseFixer {
 
     // Map of common typo replacements {typo: correct}
     const typoMap = {
-      function: "function",
-      return: "return",
-      console: "console", // Fixes 'console.log'
-      default: "default",
-      while: "while",
-      switch: "switch",
-      import: "import",
-      export: "export",
-      const: "const",
-      let: "let",
-      class: "class",
-      else: "else"
+      "fucntion": "function",
+      "retrun": "return",
+      "consol": "console",
+      "lenght": "length",
+      "widht": "width",
+      "heigth": "height",
+      "defualt": "default",
+      "whiel": "while",
+      "swtich": "switch",
+      "improt": "import",
+      "exprot": "export",
+      "cosnt": "const",
+      "calss": "class",
+      "esle": "else",
+      "ture": "true",
+      "flase": "false"
     };
 
     for (const typo in typoMap) {

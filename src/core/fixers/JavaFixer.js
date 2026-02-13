@@ -51,6 +51,12 @@ class JavaFixer extends BaseFixer {
         continue;
       }
 
+      // Fix misplaced semicolons in braces and method calls
+      line = line.replace(/\{\s*;/g, '{');
+      line = line.replace(/;\s*\)/g, ')');
+      line = line.replace(/\(\s*;/g, '(');
+      line = line.replace(/;\s*;/g, ';'); // Remove duplicate semicolons
+
       const closeCount = (line.match(/}/g) || []).length;
       for (let i = 0; i < closeCount && braceStack.length; i++)
         braceStack.pop();
@@ -145,12 +151,20 @@ class JavaFixer extends BaseFixer {
 
     // Array initializations
     if (trimmed.includes("{") && trimmed.includes("}")) return false;
+    
+    // Lines that already have semicolons in wrong places
+    if (/\{\s*;/.test(trimmed)) return false;
 
     return true;
   }
 
   _fixCommonTypos(code) {
     return code
+      // Fix misplaced semicolons first
+      .replace(/\{\s*;/g, '{')
+      .replace(/;\s*\)/g, ')')
+      .replace(/\(\s*;/g, '(')
+      .replace(/;\s*;/g, ';') // Remove duplicate semicolons
       // Print statement typos
       .replace(/\bpritnln\b/g, "println")
       .replace(/\bpritnf\b/g, "printf")

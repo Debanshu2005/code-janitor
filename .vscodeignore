@@ -47,6 +47,10 @@ tests/**
 **/*test*
 **/*.test.*
 **/*.spec.*
+test-*
+test_*
+**/test-*
+**/test_*
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
@@ -75,6 +79,11 @@ temp_*
 **/*.temp
 **/*.backup.*
 **/.python-fixer-backups/**
+**/*.unc-backup*
+**/*.uncrustify
+**/*.md5~
+Untitled-*
+**/*.zip
 
 # Exclude OS and IDE files
 .DS_Store
