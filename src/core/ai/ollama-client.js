@@ -4,7 +4,7 @@ const vscode = require('vscode');
 class OllamaClient {
   constructor() {
     this.baseUrl = 'http://localhost:11434';
-    this.model = 'claude';
+    this.model = 'qwen2.5-coder:1.5b';
   }
 
   getConfig() {
@@ -19,38 +19,48 @@ class OllamaClient {
 
   async isAvailable() {
     const config = this.getConfig();
+    console.log(`🔍 AI Config: enabled=${config.enabled}, url=${config.baseUrl}, model=${config.model}, timeout=${config.timeout}`);
+    
     if (!config.enabled) {
+      console.log('❌ AI is disabled in settings');
       return false;
     }
 
     try {
+      console.log('🔍 Checking Ollama availability...');
       const response = await fetch(`${config.baseUrl}/api/tags`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000)
       });
-      return response.ok;
+      const available = response.ok;
+      console.log(`✓ Ollama available: ${available}`);
+      return available;
     } catch (error) {
-      console.warn('Ollama not available:', error.message);
+      console.warn('❌ Ollama not available:', error.message);
       return false;
     }
   }
 
-  async analyzeSyntax(code, language) {
+  async validateAndFix(originalCode, ruleBasedFix, language) {
     const config = this.getConfig();
     
     if (!config.enabled) {
-      return null;
+      return { shouldUseAI: false, fixedCode: ruleBasedFix, reason: "AI disabled", securityIssues: [] };
     }
 
-    const prompt = `Fix all syntax errors in this ${language} code. Return JSON with:
-{"issues": [{"line": number, "issue": "description", "severity": "error|warning"}], "fixedCode": "corrected code"}
+    const prompt = `Analyze this ${language} code for syntax errors AND security vulnerabilities (SQL injection, XSS, hardcoded secrets, etc.).
 
 Code:
-\`\`\`${language}
-${code}
-\`\`\``;
+${originalCode}
+
+Provide:
+1. Fixed code with syntax corrections
+2. List of security issues found
+
+Format: JSON with {"fixedCode": "...", "securityIssues": [{"line": 1, "issue": "...", "severity": "high/medium/low"}]}`;
 
     try {
+      console.log(`🤖 Sending AI validation request for ${language}...`);
       const response = await fetch(`${config.baseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -58,9 +68,11 @@ ${code}
           model: config.model,
           prompt: prompt,
           stream: false,
-          options: { temperature: 0.1 }
-        }),
-        signal: AbortSignal.timeout(config.timeout)
+          options: { 
+            temperature: 0.1,
+            num_predict: 1024
+          }
+        })
       });
 
       if (!response.ok) {
@@ -68,30 +80,35 @@ ${code}
       }
 
       const data = await response.json();
-      const result = this.parseFixResponse(data.response, code);
+      const result = this.parseSecurityResponse(data.response, ruleBasedFix);
       
-      console.log(`AI fixed ${result.issues?.length || 0} syntax issues`);
+      console.log(`✓ AI validation complete: ${result.reason}`);
+      if (result.securityIssues && result.securityIssues.length > 0) {
+        console.log(`⚠️ Found ${result.securityIssues.length} security issue(s)`);
+      }
       return result;
     } catch (error) {
-      console.error('Ollama analysis failed:', error.message);
-      return null;
+      console.error('❌ AI validation failed:', error.message);
+      return { shouldUseAI: false, fixedCode: ruleBasedFix, reason: "AI unavailable", securityIssues: [] };
     }
   }
 
-  parseFixResponse(response, originalCode) {
+  parseSecurityResponse(response, fallbackCode) {
     try {
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         return {
-          issues: parsed.issues || [],
-          fixedCode: parsed.fixedCode || originalCode
+          shouldUseAI: parsed.fixedCode && parsed.fixedCode !== fallbackCode,
+          fixedCode: parsed.fixedCode || fallbackCode,
+          reason: parsed.securityIssues?.length > 0 ? "Security issues found" : "Code is secure",
+          securityIssues: parsed.securityIssues || []
         };
       }
-      return { issues: [], fixedCode: originalCode };
+      return { shouldUseAI: false, fixedCode: fallbackCode, reason: "Could not parse AI response", securityIssues: [] };
     } catch (error) {
-      console.warn('Failed to parse AI response');
-      return { issues: [], fixedCode: originalCode };
+      console.warn('Failed to parse AI security response');
+      return { shouldUseAI: false, fixedCode: fallbackCode, reason: "Parse error", securityIssues: [] };
     }
   }
 

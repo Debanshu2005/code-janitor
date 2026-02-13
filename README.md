@@ -71,6 +71,13 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
 - **Minimal processing**: Only fixes actually broken HTML
 - **Auto-preview**: Shows preview for all HTML changes
 
+### 9. AI-Enhanced Syntax Fixing 🤖 OPTIONAL!
+- **Intelligent validation**: AI validates rule-based fixes to prevent syntax breaking
+- **Smart decision-making**: Uses rule-based fixes when correct, AI fixes when needed
+- **Multi-language support**: Enhanced fixing for Python, JavaScript, and more
+- **Seamless integration**: Works transparently with Alt+D keybinding
+- **Optional feature**: Requires Ollama installation (see setup below)
+
 ## Installation (via npm)
 
 ```bash
@@ -135,6 +142,23 @@ pip install autopep8
 
 
 C/C++: Install uncrustify and ensure the path is correctly set in formatter-paths.js.
+
+**Optional - AI Enhancement:**
+
+```bash
+# Install Ollama from https://ollama.ai
+# Then pull a code model:
+ollama pull codellama
+
+# AI is enabled by default. To disable:
+"codeJanitor.ai.enabled": false
+```
+
+**How AI Works:**
+1. Rule-based fixer runs first (fast, reliable)
+2. AI validates the fix and checks for issues
+3. AI only intervenes if rule-based fix breaks syntax or misses errors
+4. Best of both: speed of rules + intelligence of AI
 
 ---
 

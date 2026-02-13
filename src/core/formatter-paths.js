@@ -1,58 +1,71 @@
-const path = require('path');
-const fs = require('fs-extra');
+const path = require("path");
+const fs = require("fs-extra");
 
 class FormatterPaths {
   static getUncrustifyPath() {
-    const basePath = path.join(__dirname, 'uncrustify');
-    const exeName = process.platform === 'win32' ? 'uncrustify.exe' : 'uncrustify';
-    const exePath = path.join(basePath, 'bin', exeName);
+    const basePath = path.join(__dirname, "uncrustify");
+    const exeName =
+      process.platform === "win32" ? "uncrustify.exe" : "uncrustify";
+    const exePath = path.join(basePath, "bin", exeName);
     if (fs.existsSync(exePath)) return exePath;
-    return 'uncrustify'; // fallback to system PATH
+    return "uncrustify"; // fallback to system PATH
   }
 
   static getJavaFormatterPath() {
-    const jarPath = path.join(__dirname, 'fixers', 'google-java-format-1.28.0-all-deps.jar');
+    const jarPath = path.join(
+      __dirname,
+      "fixers",
+      "google-java-format-1.28.0-all-deps.jar"
+    );
     if (fs.existsSync(jarPath)) return jarPath;
-    return 'google-java-format'; // fallback
+    return "google-java-format"; // fallback
   }
 
   static getPythonPath() {
     // Portable Python runtime bundled for Black
-    const basePath = path.join(__dirname, 'black', 'python');
+    const basePath = path.join(__dirname, "black", "python");
     const exePath =
-      process.platform === 'win32'
-        ? path.join(basePath, 'python.exe')
-        : path.join(basePath, 'bin', 'python3');
+      process.platform === "win32"
+        ? path.join(basePath, "python.exe")
+        : path.join(basePath, "bin", "python3");
     if (fs.existsSync(exePath)) return exePath;
-    return 'python3'; // fallback
+    return "python3"; // fallback
   }
 
   static getBlackPath() {
     // Black module inside the portable Python environment
-    return '-m black';
+    return "-m black";
   }
 
   static getAutopep8Path() {
     // Try bundled autopep8 first
-    const venvPath = path.join(__dirname, '..', '..', 'formatters', 'python-formatters', 'venv');
-    const autopep8Path = process.platform === 'win32' 
-      ? path.join(venvPath, 'Scripts', 'autopep8.exe')
-      : path.join(venvPath, 'bin', 'autopep8');
-    
+    const venvPath = path.join(
+      __dirname,
+      "..",
+      "..",
+      "formatters",
+      "python-formatters",
+      "venv"
+    );
+    const autopep8Path =
+      process.platform === "win32"
+        ? path.join(venvPath, "Scripts", "autopep8.exe")
+        : path.join(venvPath, "bin", "autopep8");
+
     if (fs.existsSync(autopep8Path)) {
       return autopep8Path;
     }
-    
+
     // Fallback to system autopep8
-    return 'autopep8';
+    return "autopep8";
   }
 
   static getPrettierPath() {
     // Node bundled Prettier CLI
     try {
-      return require.resolve('prettier/bin-prettier.js');
+      return require.resolve("prettier/bin-prettier.js");
     } catch (err) {
-      return 'prettier'; // fallback
+      return "prettier"; // fallback
     }
   }
 
@@ -60,10 +73,18 @@ class FormatterPaths {
     // Cache the result to avoid repeated require.resolve calls
     if (!this._prettierModulePath) {
       try {
-        this._prettierModulePath = require.resolve('prettier');
+        this._prettierModulePath = require.resolve("prettier");
       } catch (err) {
         try {
-          const formatterPath = path.join(__dirname, '..', '..', 'formatters', 'prettier', 'node_modules', 'prettier');
+          const formatterPath = path.join(
+            __dirname,
+            "..",
+            "..",
+            "formatters",
+            "prettier",
+            "node_modules",
+            "prettier"
+          );
           this._prettierModulePath = require.resolve(formatterPath);
         } catch (err2) {
           this._prettierModulePath = null;

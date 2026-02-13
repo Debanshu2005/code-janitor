@@ -14,12 +14,14 @@ async function fixPythonBuffer(code, filePath = "") {
     await fixer.analyze();
     let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
     
-    // AI enhancement if enabled
+    // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
-      const aiResult = await ollamaClient.analyzeSyntax(fixedCode, "python");
-      if (aiResult && aiResult.fixedCode) {
-        console.log(`AI applied ${aiResult.issues?.length || 0} Python fixes`);
+      const aiResult = await ollamaClient.validateAndFix(code, fixedCode, "python");
+      if (aiResult && aiResult.shouldUseAI) {
+        console.log(`AI improved code: ${aiResult.reason}`);
         fixedCode = aiResult.fixedCode;
+      } else if (aiResult && !aiResult.shouldUseAI) {
+        console.log(`Using rule-based fixes: ${aiResult.reason}`);
       }
     }
     
@@ -36,12 +38,14 @@ async function fixJSBuffer(code, filePath = "") {
     await fixer.analyze();
     let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
     
-    // AI enhancement if enabled
+    // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
-      const aiResult = await ollamaClient.analyzeSyntax(fixedCode, "javascript");
-      if (aiResult && aiResult.fixedCode) {
-        console.log(`AI applied ${aiResult.issues?.length || 0} JavaScript fixes`);
+      const aiResult = await ollamaClient.validateAndFix(code, fixedCode, "javascript");
+      if (aiResult && aiResult.shouldUseAI) {
+        console.log(`AI improved code: ${aiResult.reason}`);
         fixedCode = aiResult.fixedCode;
+      } else if (aiResult && !aiResult.shouldUseAI) {
+        console.log(`Using rule-based fixes: ${aiResult.reason}`);
       }
     }
     

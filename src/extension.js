@@ -7,8 +7,8 @@ const OllamaClient = require("./core/ai/ollama-client");
 // Map file extensions / languageIds → fixer
 function getFixerForDocument(document, code, fileName) {
   console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`);
-  
-  const fixerMap = {
+    
+    const fixerMap = {
     c: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
     cpp: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
     cppm: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
@@ -67,6 +67,36 @@ function getFixerForDocument(document, code, fileName) {
       fixedCode = fixer.applyFixes();
     } else if (fixer.getFixedCode) {
       fixedCode = fixer.getFixedCode();
+    }
+
+    // AI validation and enhancement
+    const ollamaClient = new OllamaClient();
+    if (await ollamaClient.isAvailable()) {
+      const language = document.languageId === 'javascriptreact' ? 'javascript' : document.languageId;
+      if (language === 'python' || language === 'javascript') {
+        const aiResult = await ollamaClient.validateAndFix(code, fixedCode, language);
+        if (aiResult && aiResult.shouldUseAI) {
+          console.log(`🤖 AI improved code: ${aiResult.reason}`);
+          fixedCode = aiResult.fixedCode;
+        } else if (aiResult && !aiResult.shouldUseAI) {
+          console.log(`✓ Using rule-based fixes: ${aiResult.reason}`);
+        }
+        
+        // Show security issues if found
+        if (aiResult && aiResult.securityIssues && aiResult.securityIssues.length > 0) {
+          const securityMsg = aiResult.securityIssues.map(issue => 
+            `Line ${issue.line}: [${issue.severity.toUpperCase()}] ${issue.issue}`
+          ).join('\n');
+          vscode.window.showWarningMessage(
+            `⚠️ Security Issues Found:\n${securityMsg}`,
+            'View Details'
+          ).then(selection => {
+            if (selection === 'View Details') {
+              vscode.window.showInformationMessage(securityMsg, { modal: true });
+            }
+          });
+        }
+      }
     }
 
     if (fixedCode === code) {
