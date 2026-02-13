@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const Linter = require("./core/linter");
 const FrontendValidator = require("./core/frontend-validator");
 const livePreviewer = require("./live-preview");
+const OllamaClient = require("./core/ai/ollama-client");
 
 // Map file extensions / languageIds → fixer
 function getFixerForDocument(document, code, fileName) {

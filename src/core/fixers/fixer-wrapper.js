@@ -4,15 +4,29 @@ const JavaScriptFixer = require("./javascript-fixer");
 const EmbeddedCFixer = require("./EmbeddedCFixer");
 const JavaFixer = require("./JavaFixer");
 const HtmlFixer = require("./html-fixer");
+const OllamaClient = require("../ai/ollama-client");
+
+const ollamaClient = new OllamaClient();
 
 async function fixPythonBuffer(code, filePath = "") {
   try {
     const fixer = new PythonFixer(code, filePath);
     await fixer.analyze();
-    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    
+    // AI enhancement if enabled
+    if (await ollamaClient.isAvailable()) {
+      const aiResult = await ollamaClient.analyzeSyntax(fixedCode, "python");
+      if (aiResult && aiResult.fixedCode) {
+        console.log(`AI applied ${aiResult.issues?.length || 0} Python fixes`);
+        fixedCode = aiResult.fixedCode;
+      }
+    }
+    
+    return fixedCode;
   } catch (error) {
     console.error("Python fixer error:", error);
-    return code; // Return original code on error
+    return code;
   }
 }
 
@@ -20,7 +34,18 @@ async function fixJSBuffer(code, filePath = "") {
   try {
     const fixer = new JavaScriptFixer(code, filePath);
     await fixer.analyze();
-    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    
+    // AI enhancement if enabled
+    if (await ollamaClient.isAvailable()) {
+      const aiResult = await ollamaClient.analyzeSyntax(fixedCode, "javascript");
+      if (aiResult && aiResult.fixedCode) {
+        console.log(`AI applied ${aiResult.issues?.length || 0} JavaScript fixes`);
+        fixedCode = aiResult.fixedCode;
+      }
+    }
+    
+    return fixedCode;
   } catch (error) {
     console.error("JavaScript fixer error:", error);
     return code;

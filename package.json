@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "0.7.7",
+  "version": "0.7.8git ",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -46,6 +46,26 @@
           "type": "array",
           "default": ["python", "javascript", "java", "c", "cpp", "html"],
           "description": "Languages to enable auto-correction for"
+        },
+        "codeJanitor.ai.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable AI-powered syntax fixing with Ollama"
+        },
+        "codeJanitor.ai.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API URL"
+        },
+        "codeJanitor.ai.model": {
+          "type": "string",
+          "default": "claude",
+          "description": "Ollama model to use (e.g., claude, codellama, llama2)"
+        },
+        "codeJanitor.ai.timeout": {
+          "type": "number",
+          "default": 30000,
+          "description": "AI request timeout in milliseconds"
         }
       }
     },
