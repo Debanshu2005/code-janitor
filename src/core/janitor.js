@@ -55,7 +55,7 @@ async function analyzeAndFixDirectory(directoryPath) {
     if (fixes > 0) {
       totalFixes += fixes;
       processedFiles.push(filePath);
-    }
+    }s
   }
   
   return {

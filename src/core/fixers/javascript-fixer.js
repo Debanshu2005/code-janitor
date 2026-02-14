@@ -181,18 +181,11 @@ class JavaScriptFixer extends BaseFixer {
     processed = processed.replace(/\(\s*;/g, "("); // Remove semicolons after opening parentheses
     processed = processed.replace(/;(\s*[\)\}])/g, "$1"); // Remove semicolons before closing brackets
     
-    // Fix trailing commas that break syntax
-    processed = processed.replace(/,\s*\n\s*([a-zA-Z_$][a-zA-Z0-9_$]*)/g, "\n    $1"); // Remove trailing comma before new statement
-    processed = processed.replace(/,\s*\)/g, ")");
-    processed = processed.replace(/,\s*\}/g, "}");
-    processed = processed.replace(/,\s*\]/g, "]");
-    processed = processed.replace(/\{\s*,/g, "{");
-
-    // Remove comma after keywords
-    processed = processed.replace(/(break|continue|return)\s*,/g, "$1");
-
-    // Remove trailing commas before closing brackets/braces
-    processed = processed.replace(/,(\s*[\]}])/g, "$1");
+    // ONLY remove trailing commas that are clearly syntax errors
+    // Don't remove commas between valid array/object elements
+    processed = processed.replace(/,\s*([\)\}\]])(?!\s*[,:])/g, "$1"); // Trailing comma before closing bracket
+    processed = processed.replace(/\{\s*,/g, "{"); // Comma right after opening brace
+    processed = processed.replace(/\[\s*,/g, "["); // Comma right after opening bracket
 
     return processed;
   }
