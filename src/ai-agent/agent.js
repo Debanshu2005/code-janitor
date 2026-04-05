@@ -891,9 +891,14 @@ class AIAgent {
       return null;
     }
 
+    // Only intercept if explicitly about tabs/files, not general codebase scans
+    if (/\b(codebase|workspace|repo|repository|project|entire|whole|all files)\b/i.test(userMessage || "")) {
+      return null;
+    }
+
     const editorState = this._getEditorState(workspaceFolder);
     if (!editorState.available) {
-      return "I do not have access to the current open tabs.";
+      return null;
     }
 
     const wantsVisible =
