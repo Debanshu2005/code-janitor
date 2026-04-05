@@ -6,6 +6,7 @@ const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 14_000;
 const MAX_FILE_SNIPPET = 2_500;
 const MAX_RELEVANT_FILES = 8;
+const MAX_OPEN_TAB_SNIPPETS = 4;
 const SCAN_STALE_MS = 30_000;
 const IGNORED_DIRS = new Set([
   ".git",
@@ -138,12 +139,17 @@ class AIAgent {
 
     const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
     const activeFileContext = this._getActiveFileContext(workspaceFolder);
-    const openTabsContext = this._getOpenTabsContext(workspaceFolder);
+    const editorState = this._getEditorState(workspaceFolder);
+    const editorStateContext = this._buildEditorStateContext(editorState);
+    const openTabSnippetContext = this._getOpenTabSnippetContext(
+      editorState.allOpenTabs
+    );
     const prompt = this._buildPrompt(
       userMessage,
       relevantFiles,
       activeFileContext,
-      openTabsContext
+      editorStateContext,
+      openTabSnippetContext
     );
 
     try {
@@ -230,45 +236,121 @@ class AIAgent {
     return `Active file: ${relativePath}\n\`\`\`\n${activeContent}\n\`\`\``;
   }
 
-  _getOpenTabsContext(workspaceFolder) {
-    const tabPaths = new Set();
+  _toWorkspaceRelativePath(filePath, workspaceFolder) {
+    if (!filePath) {
+      return null;
+    }
 
-    const pushTabPath = (filePath) => {
-      if (!filePath) {
-        return;
-      }
+    const normalizedPath = workspaceFolder
+      ? path.relative(workspaceFolder, filePath)
+      : filePath;
 
-      const normalizedPath = workspaceFolder
-        ? path.relative(workspaceFolder, filePath)
-        : filePath;
+    return normalizedPath.replace(/\\/g, "/");
+  }
 
-      tabPaths.add(normalizedPath.replace(/\\/g, "/"));
-    };
+  _formatFileList(label, filePaths) {
+    if (filePaths.length === 0) {
+      return `${label}: unavailable`;
+    }
+
+    return `${label}:\n${filePaths.map((filePath) => `File: ${filePath}`).join("\n")}`;
+  }
+
+  _getEditorState(workspaceFolder) {
+    const allOpenTabs = new Set();
+    const visibleTabs = new Set();
+    const activeEditor = vscode.window.activeTextEditor;
+    const activeTabPath = this._toWorkspaceRelativePath(
+      activeEditor?.document?.fileName,
+      workspaceFolder
+    );
 
     if (vscode.window.tabGroups?.all) {
       for (const group of vscode.window.tabGroups.all) {
         for (const tab of group.tabs) {
           const input = tab.input;
           const filePath = input?.uri?.fsPath || input?.modified?.fsPath || null;
-          pushTabPath(filePath);
+          const relativePath = this._toWorkspaceRelativePath(
+            filePath,
+            workspaceFolder
+          );
+
+          if (relativePath) {
+            allOpenTabs.add(relativePath);
+          }
         }
       }
     }
 
-    if (tabPaths.size === 0 && Array.isArray(vscode.window.visibleTextEditors)) {
+    if (Array.isArray(vscode.window.visibleTextEditors)) {
       for (const editor of vscode.window.visibleTextEditors) {
-        pushTabPath(editor?.document?.fileName);
+        const relativePath = this._toWorkspaceRelativePath(
+          editor?.document?.fileName,
+          workspaceFolder
+        );
+
+        if (relativePath) {
+          visibleTabs.add(relativePath);
+          allOpenTabs.add(relativePath);
+        }
       }
     }
 
-    if (tabPaths.size === 0) {
-      return "Open tabs: unavailable. If asked about currently open tabs, say you do not have access to them.\n";
+    if (!activeTabPath && allOpenTabs.size === 0 && visibleTabs.size === 0) {
+      return {
+        available: false,
+        activeTabPath: null,
+        visibleTabs: [],
+        allOpenTabs: []
+      };
     }
 
-    return `Open tabs:\n${Array.from(tabPaths)
-      .sort()
-      .map((tabPath) => `File: ${tabPath}`)
-      .join("\n")}\n`;
+    return {
+      available: true,
+      activeTabPath,
+      visibleTabs: Array.from(visibleTabs).sort(),
+      allOpenTabs: Array.from(allOpenTabs).sort()
+    };
+  }
+
+  _buildEditorStateContext(editorState) {
+    if (!editorState.available) {
+      return "Editor state: unavailable. If asked about active, visible, or open tabs, say you do not have access to them.\n";
+    }
+
+    const sections = [
+      editorState.activeTabPath
+        ? `Active tab:\nFile: ${editorState.activeTabPath}`
+        : "Active tab: unavailable",
+      this._formatFileList("Visible tabs", editorState.visibleTabs),
+      this._formatFileList("All open tabs", editorState.allOpenTabs)
+    ];
+
+    return `${sections.join("\n\n")}\n`;
+  }
+
+  _getOpenTabSnippetContext(openTabPaths) {
+    const snippetBlocks = [];
+
+    for (const tabPath of openTabPaths) {
+      const fileData = this.codebaseContext.get(tabPath);
+      if (!fileData) {
+        continue;
+      }
+
+      snippetBlocks.push(
+        `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
+          0,
+          MAX_FILE_SNIPPET
+        )}\n\`\`\`\n\n`
+      );
+
+      if (snippetBlocks.length >= MAX_OPEN_TAB_SNIPPETS) {
+        break;
+      }
+    }
+
+    return snippetBlocks.join("");
   }
 
   _extractKeywords(query) {
@@ -339,7 +421,13 @@ class AIAgent {
       .slice(0, MAX_RELEVANT_FILES);
   }
 
-  _buildPrompt(userMessage, relevantFiles, activeFileContext, openTabsContext) {
+  _buildPrompt(
+    userMessage,
+    relevantFiles,
+    activeFileContext,
+    editorStateContext,
+    openTabSnippetContext
+  ) {
     const history = this.conversationHistory
       .slice(-4)
       .map((entry) =>
@@ -363,9 +451,11 @@ class AIAgent {
     return `You are the Code Janitor AI assistant for a VS Code extension.
 You can read the indexed workspace context and propose direct file edits.
 Prefer editing files in the workspace over suggesting shell commands.
-Only claim to know open tabs when they are listed in the provided context.
-If open-tab data is unavailable, say exactly that you do not have access to the current open tabs.
-Do not infer, guess, or invent open tabs, active files, or workspace state.
+Only claim to know the active tab, visible tabs, or open tabs when they are listed in the provided context.
+If editor-state data is unavailable, say exactly that you do not have access to the current open tabs.
+Do not infer, guess, or invent tabs, active files, or workspace state.
+If the user asks about a file that appears in the open-tab lists or indexed file context, answer the file question directly instead of repeating the tab-access disclaimer.
+Treat open-tab visibility and file-analysis ability as separate: you may analyze a file from indexed or snippet context even if tab visibility is limited.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
@@ -378,7 +468,7 @@ Never suggest package installation, global installs, network downloads, or syste
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
-${openTabsContext ? `${openTabsContext}\n` : ""}${activeFileContext ? `${activeFileContext}\n\n` : ""}${context}
+${editorStateContext ? `${editorStateContext}\n` : ""}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
 ${history ? `${history}\n\n` : ""}User: ${userMessage}
 
 Assistant:`;
@@ -496,9 +586,82 @@ Assistant:`;
     return { allowed: true };
   }
 
+  _summarizeLineChanges(oldContent, newContent) {
+    const oldLines = (oldContent || "").split(/\r?\n/);
+    const newLines = (newContent || "").split(/\r?\n/);
+
+    if ((oldContent || "") === "") {
+      const addedPreview = newLines.slice(0, 12).join("\n");
+      return {
+        changed: true,
+        summary: `Created file with ${newLines.length} line(s).\n+ ${addedPreview}`
+      };
+    }
+
+    let start = 0;
+    while (
+      start < oldLines.length &&
+      start < newLines.length &&
+      oldLines[start] === newLines[start]
+    ) {
+      start += 1;
+    }
+
+    if (start === oldLines.length && start === newLines.length) {
+      return { changed: false, summary: "No line changes." };
+    }
+
+    let oldEnd = oldLines.length - 1;
+    let newEnd = newLines.length - 1;
+    while (
+      oldEnd >= start &&
+      newEnd >= start &&
+      oldLines[oldEnd] === newLines[newEnd]
+    ) {
+      oldEnd -= 1;
+      newEnd -= 1;
+    }
+
+    const removedLines = oldLines.slice(start, oldEnd + 1);
+    const addedLines = newLines.slice(start, newEnd + 1);
+    const removedStartLine = start + 1;
+    const addedStartLine = start + 1;
+    const removedEndLine = removedStartLine + removedLines.length - 1;
+    const addedEndLine = addedStartLine + addedLines.length - 1;
+
+    const formatRange = (startLine, endLine, count) =>
+      count <= 0 ? "none" : startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+
+    const removedBlock = removedLines.length
+      ? removedLines.slice(0, 12).map((line) => `- ${line}`).join("\n")
+      : "- <none>";
+    const addedBlock = addedLines.length
+      ? addedLines.slice(0, 12).map((line) => `+ ${line}`).join("\n")
+      : "+ <none>";
+
+    return {
+      changed: true,
+      summary:
+        `Replaced old line(s) ${formatRange(removedStartLine, removedEndLine, removedLines.length)} ` +
+        `with new line(s) ${formatRange(addedStartLine, addedEndLine, addedLines.length)}.\n` +
+        `${removedBlock}\n${addedBlock}`
+    };
+  }
+
   async applyChanges(filePath, newContent) {
     try {
       const { workspaceRoot, fullPath } = this._resolveWorkspacePath(filePath);
+      let oldContent = "";
+
+      try {
+        oldContent = await fs.readFile(fullPath, "utf8");
+      } catch (readError) {
+        if (readError.code !== "ENOENT") {
+          throw readError;
+        }
+      }
+
+      const changeSummary = this._summarizeLineChanges(oldContent, newContent);
 
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
       await fs.writeFile(fullPath, newContent, "utf8");
@@ -511,7 +674,13 @@ Assistant:`;
         directory: path.dirname(relativePath).toLowerCase()
       });
 
-      return { success: true, path: fullPath };
+      return {
+        success: true,
+        path: fullPath,
+        relativePath,
+        changeSummary: changeSummary.summary,
+        changed: changeSummary.changed
+      };
     } catch (error) {
       return { success: false, error: error.message };
     }

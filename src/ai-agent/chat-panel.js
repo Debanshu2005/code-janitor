@@ -78,7 +78,7 @@ class ChatPanel {
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success
-                  ? `Created or modified ${action.path}`
+                  ? `Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
             } else if (action.type === "mkdir") {
@@ -142,7 +142,9 @@ class ChatPanel {
         );
         this.panel.webview.postMessage({
           type: result.success ? "applied" : "error",
-          text: result.success ? `Applied to ${message.filePath}` : result.error
+          text: result.success
+            ? `Updated ${result.relativePath || message.filePath}\n${result.changeSummary || ""}`
+            : result.error
         });
       } else if (message.type === "clear") {
         this.agent.clearHistory();
