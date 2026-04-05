@@ -88,8 +88,8 @@ async function runFixerAndApply(document, editor = null) {
         document.languageId === "javascriptreact"
           ? "javascript"
           : document.languageId === "cppm"
-          ? "cpp"
-          : document.languageId
+            ? "cpp"
+            : document.languageId
 
       const supportedLanguages = [
         "python",

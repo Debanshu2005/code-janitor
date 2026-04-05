@@ -3,8 +3,10 @@ const fs = require("fs").promises;
 const path = require("path");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
-const MAX_CONTEXT_CHARS = 10_000;
-const MAX_FILE_SNIPPET = 1_800;
+const MAX_CONTEXT_CHARS = 14_000;
+const MAX_FILE_SNIPPET = 2_500;
+const MAX_RELEVANT_FILES = 8;
+const SCAN_STALE_MS = 30_000;
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -40,12 +42,15 @@ const STOP_WORDS = new Set([
   "to",
   "with"
 ]);
+const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i;
 
 class AIAgent {
   constructor() {
     this.codebaseContext = new Map();
     this.conversationHistory = [];
     this.scanVersion = 0;
+    this.lastScanAt = 0;
+    this.workspaceRoot = null;
   }
 
   getConfig() {
@@ -61,6 +66,7 @@ class AIAgent {
   async scanCodebase(workspaceFolder) {
     this.codebaseContext.clear();
     this.scanVersion += 1;
+    this.workspaceRoot = workspaceFolder;
 
     const files = await this._getAllFiles(workspaceFolder);
     for (const file of files) {
@@ -72,10 +78,29 @@ class AIAgent {
 
         const content = await fs.readFile(file, "utf8");
         const relativePath = path.relative(workspaceFolder, file);
-        this.codebaseContext.set(relativePath, { content, fullPath: file });
+        this.codebaseContext.set(relativePath, {
+          content,
+          fullPath: file,
+          fileName: path.basename(relativePath).toLowerCase(),
+          directory: path.dirname(relativePath).toLowerCase()
+        });
       } catch (error) {
         console.warn(`Failed to read ${file}:`, error.message);
       }
+    }
+
+    this.lastScanAt = Date.now();
+    return this.codebaseContext.size;
+  }
+
+  async ensureCodebaseScanned(workspaceFolder, force = false) {
+    const scanIsFresh =
+      this.workspaceRoot === workspaceFolder &&
+      Date.now() - this.lastScanAt < SCAN_STALE_MS &&
+      this.codebaseContext.size > 0;
+
+    if (force || !scanIsFresh) {
+      return this.scanCodebase(workspaceFolder);
     }
 
     return this.codebaseContext.size;
@@ -94,9 +119,7 @@ class AIAgent {
         continue;
       }
 
-      if (
-        /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i.test(entry.name)
-      ) {
+      if (CODE_EXTENSIONS.test(entry.name)) {
         fileList.push(filePath);
       }
     }
@@ -110,9 +133,10 @@ class AIAgent {
       return { error: "AI is disabled in Code Janitor settings." };
     }
 
+    await this.ensureCodebaseScanned(workspaceFolder);
     this.conversationHistory.push({ role: "user", content: userMessage });
 
-    const relevantFiles = this._findRelevantFiles(userMessage);
+    const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
     const activeFileContext = this._getActiveFileContext(workspaceFolder);
     const prompt = this._buildPrompt(userMessage, relevantFiles, activeFileContext);
 
@@ -127,7 +151,7 @@ class AIAgent {
           stream: true,
           options: {
             temperature: 0.1,
-            num_predict: 768,
+            num_predict: 900,
             top_k: 20,
             top_p: 0.8
           }
@@ -141,8 +165,8 @@ class AIAgent {
       let fullResponse = "";
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-
       let streamDone = false;
+
       while (!streamDone) {
         if (abortSignal?.aborted) {
           break;
@@ -194,7 +218,7 @@ class AIAgent {
     }
 
     const activeFile = activeEditor.document.fileName;
-    const activeContent = activeEditor.document.getText().slice(0, 3_000);
+    const activeContent = activeEditor.document.getText().slice(0, 4_000);
     const relativePath = path.relative(workspaceFolder, activeFile);
 
     return `Active file: ${relativePath}\n\`\`\`\n${activeContent}\n\`\`\``;
@@ -203,23 +227,54 @@ class AIAgent {
   _extractKeywords(query) {
     return query
       .toLowerCase()
-      .split(/[^a-z0-9_.-]+/)
+      .split(/[^a-z0-9_./-]+/)
       .filter((word) => word && word.length > 1 && !STOP_WORDS.has(word));
   }
 
-  _findRelevantFiles(query) {
+  _extractPathHints(query) {
+    const matches = query.match(
+      /(?:[A-Za-z]:\\[^\s"'`]+|(?:[\w.-]+[\\/])+[\w.-]+(?:\.[\w]+)?|[\w.-]+\.[A-Za-z0-9]+)/g
+    );
+
+    return (matches || []).map((value) =>
+      value.replace(/^["'`]|["'`]$/g, "").replace(/\\/g, "/").toLowerCase()
+    );
+  }
+
+  _findRelevantFiles(query, workspaceFolder) {
     const keywords = this._extractKeywords(query);
+    const pathHints = this._extractPathHints(query);
     const relevant = [];
 
+    const activeEditor = vscode.window.activeTextEditor;
+    const activeRelativePath = activeEditor
+      ? path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/").toLowerCase()
+      : "";
+
     for (const [relativePath, fileData] of this.codebaseContext.entries()) {
+      const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();
       const fileContent = fileData.content.toLowerCase();
-      const fileName = path.basename(relativePath).toLowerCase();
-      const fileDir = path.dirname(relativePath).toLowerCase();
+      const fileName = fileData.fileName;
+      const directory = fileData.directory;
 
       let score = 0;
+
+      if (activeRelativePath && normalizedPath === activeRelativePath) {
+        score += 40;
+      }
+
+      for (const hint of pathHints) {
+        if (normalizedPath === hint || fileName === path.basename(hint)) {
+          score += 80;
+        } else if (normalizedPath.includes(hint) || hint.includes(fileName)) {
+          score += 30;
+        }
+      }
+
       for (const keyword of keywords) {
-        if (fileName.includes(keyword)) score += 8;
-        if (fileDir.includes(keyword)) score += 4;
+        if (fileName.includes(keyword)) score += 10;
+        if (directory.includes(keyword)) score += 5;
+        if (normalizedPath.includes(keyword)) score += 4;
         if (fileContent.includes(keyword)) score += 1;
       }
 
@@ -232,7 +287,9 @@ class AIAgent {
       }
     }
 
-    return relevant.sort((a, b) => b.score - a.score).slice(0, 6);
+    return relevant
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_RELEVANT_FILES);
   }
 
   _buildPrompt(userMessage, relevantFiles, activeFileContext) {
@@ -257,7 +314,8 @@ class AIAgent {
     }
 
     return `You are the Code Janitor AI assistant for a VS Code extension.
-Answer concisely and propose precise code changes.
+You can read the indexed workspace context and propose direct file edits.
+Prefer editing files in the workspace over suggesting shell commands.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
@@ -265,8 +323,8 @@ full file contents
 \`\`\`
 If you want to create a folder, use:
 MKDIR: relative/path
-If you want to suggest a terminal command, use:
-CMD: command
+Only use CMD when the user explicitly asks to run a terminal command and the command is project-scoped.
+Never suggest package installation, global installs, network downloads, or system-wide setup commands.
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
@@ -303,23 +361,105 @@ Assistant:`;
     return { text: response, actions };
   }
 
+  _resolveWorkspacePath(inputPath) {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      throw new Error("No workspace");
+    }
+
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const resolved = path.resolve(
+      path.isAbsolute(inputPath) ? inputPath : path.join(workspaceRoot, inputPath)
+    );
+
+    const relative = path.relative(workspaceRoot, resolved);
+    const escapesWorkspace =
+      relative.startsWith("..") || path.isAbsolute(relative);
+
+    if (escapesWorkspace) {
+      throw new Error("Path must stay inside the workspace");
+    }
+
+    return { workspaceRoot, fullPath: resolved };
+  }
+
+  validateCommand(command) {
+    const normalized = command.trim().toLowerCase();
+
+    if (!normalized) {
+      return { allowed: false, reason: "Empty command" };
+    }
+
+    const blockedPatterns = [
+      /\bnpm\s+install\s+-g\b/,
+      /\bnpm\s+i\s+-g\b/,
+      /\bpip(?:3)?\s+install\b/,
+      /\bcargo\s+install\b/,
+      /\bgo\s+install\b/,
+      /\byarn\s+global\b/,
+      /\bpnpm\s+add\s+-g\b/,
+      /\bchoco\s+install\b/,
+      /\bwinget\s+install\b/,
+      /\bapt(?:-get)?\s+install\b/,
+      /\bcurl\b/,
+      /\bwget\b/,
+      /\binvoke-webrequest\b/,
+      /\birm\b/,
+      /\bgit\s+clone\b/,
+      /\bdel\b/,
+      /\brm\b/,
+      /\brmdir\b/,
+      /\bformat\b/
+    ];
+
+    if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
+      return {
+        allowed: false,
+        reason: "Blocked unsafe, global, or network command"
+      };
+    }
+
+    const allowedPrefixes = [
+      "npm run ",
+      "npm test",
+      "npx ",
+      "node ",
+      "git status",
+      "git diff",
+      "git log",
+      "git rev-parse",
+      "python ",
+      "python3 ",
+      "pytest",
+      "eslint ",
+      ".\\node_modules\\.bin\\",
+      "./node_modules/.bin/"
+    ];
+
+    if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+      return {
+        allowed: false,
+        reason: "Only project-scoped commands are allowed"
+      };
+    }
+
+    return { allowed: true };
+  }
+
   async applyChanges(filePath, newContent) {
     try {
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) {
-        return { success: false, error: "No workspace" };
-      }
-
-      const workspaceRoot = workspaceFolders[0].uri.fsPath;
-      const fullPath = path.isAbsolute(filePath)
-        ? filePath
-        : path.join(workspaceRoot, filePath);
+      const { workspaceRoot, fullPath } = this._resolveWorkspacePath(filePath);
 
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
       await fs.writeFile(fullPath, newContent, "utf8");
 
       const relativePath = path.relative(workspaceRoot, fullPath);
-      this.codebaseContext.set(relativePath, { content: newContent, fullPath });
+      this.codebaseContext.set(relativePath, {
+        content: newContent,
+        fullPath,
+        fileName: path.basename(relativePath).toLowerCase(),
+        directory: path.dirname(relativePath).toLowerCase()
+      });
 
       return { success: true, path: fullPath };
     } catch (error) {
@@ -329,16 +469,7 @@ Assistant:`;
 
   async createFolder(folderPath) {
     try {
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) {
-        return { success: false, error: "No workspace" };
-      }
-
-      const workspaceRoot = workspaceFolders[0].uri.fsPath;
-      const fullPath = path.isAbsolute(folderPath)
-        ? folderPath
-        : path.join(workspaceRoot, folderPath);
-
+      const { fullPath } = this._resolveWorkspacePath(folderPath);
       await fs.mkdir(fullPath, { recursive: true });
       return { success: true, path: fullPath };
     } catch (error) {
@@ -347,6 +478,11 @@ Assistant:`;
   }
 
   async executeCommand(command, workspaceFolder) {
+    const validation = this.validateCommand(command);
+    if (!validation.allowed) {
+      return { success: false, error: validation.reason };
+    }
+
     return new Promise((resolve) => {
       const { exec } = require("child_process");
       exec(command, { cwd: workspaceFolder }, (error, stdout, stderr) => {

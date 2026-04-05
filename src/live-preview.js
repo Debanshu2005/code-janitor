@@ -1,93 +1,93 @@
-const fs = require("fs");
-const path = require("path");
-const vscode = require("vscode");
+const fs = require("fs")
+const path = require("path")
+const vscode = require("vscode")
 
-let prettier;
+let prettier
 try {
-  prettier = require(path.join(__dirname, "..", "node_modules", "prettier"));
+  prettier = require(path.join(__dirname, "..", "node_modules", "prettier"))
 } catch {
   try {
-    prettier = require("prettier");
+    prettier = require("prettier")
   } catch {
-    prettier = null;
-    console.warn("Prettier not available for live preview");
+    prettier = null
+    console.warn("Prettier not available for live preview")
   }
 }
 
-let currentPanel;
+let currentPanel
 
 function escapeHTML(str) {
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
 }
 
 function stripNodeWrappers(code) {
   return code
     .replace(/^(const|var|let)\s+[^=]+\s*=\s*require\s*\([^)]+\);\s*$/gm, "")
     .replace(/^module\.exports\s*=\s*[\s\S]*;?$/gm, "")
-    .replace(/^\s*(['"])use strict\1;?\s*$/gm, "");
+    .replace(/^\s*(['"])use strict\1;?\s*$/gm, "")
 }
 
 function resolveLocalPath(src, documentPath) {
   if (!src || /^(https?:|data:|vscode-webview-resource:)/i.test(src)) {
-    return null;
+    return null
   }
 
-  const documentDir = path.dirname(documentPath);
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const documentDir = path.dirname(documentPath)
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   const candidates = path.isAbsolute(src)
     ? [src]
     : [
         path.resolve(documentDir, src),
         workspaceRoot ? path.resolve(workspaceRoot, src) : null
-      ].filter(Boolean);
+      ].filter(Boolean)
 
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null
 }
 
 function convertLocalPathsToWebviewUris(html, webview, documentPath) {
   return html.replace(
     /(<img[^>]+src=["'])([^"']+)(["'][^>]*>)/gi,
     (match, prefix, src, suffix) => {
-      const fullPath = resolveLocalPath(src, documentPath);
+      const fullPath = resolveLocalPath(src, documentPath)
       if (!fullPath) {
-        return match;
+        return match
       }
 
       return (
         prefix +
         webview.asWebviewUri(vscode.Uri.file(fullPath)).toString() +
         suffix
-      );
+      )
     }
-  );
+  )
 }
 
 async function formatCode(code, languageId, filePath) {
   if (!prettier) {
-    return { fixedCode: code, hasError: false };
+    return { fixedCode: code, hasError: false }
   }
 
-  let parser;
+  let parser
   switch (languageId) {
     case "html":
-      parser = "html";
-      break;
+      parser = "html"
+      break
     case "javascript":
     case "typescript":
     case "javascriptreact":
     case "typescriptreact":
-      parser = "babel";
-      break;
+      parser = "babel"
+      break
     default:
-      return { fixedCode: code, hasError: false };
+      return { fixedCode: code, hasError: false }
   }
 
   try {
-    const config = (await prettier.resolveConfig(filePath)) || {};
+    const config = (await prettier.resolveConfig(filePath)) || {}
     const fixedCode = await prettier.format(code, {
       ...config,
       filepath: filePath,
@@ -95,12 +95,12 @@ async function formatCode(code, languageId, filePath) {
       semi: true,
       trailingComma: "none",
       printWidth: 120
-    });
+    })
 
-    return { fixedCode, hasError: false };
+    return { fixedCode, hasError: false }
   } catch (error) {
-    console.warn("Live preview formatting failed:", error.message);
-    return { fixedCode: code, hasError: true };
+    console.warn("Live preview formatting failed:", error.message)
+    return { fixedCode: code, hasError: true }
   }
 }
 
@@ -168,7 +168,7 @@ function getCommonStyles() {
         background: white;
       }
     </style>
-  `;
+  `
 }
 
 function getConsoleScript(executionScript) {
@@ -229,17 +229,17 @@ function getConsoleScript(executionScript) {
         }
       })();
     </script>
-  `;
+  `
 }
 
 function getExecutionView(languageId, fixedCode, hasError) {
-  const isPython = languageId === "python";
-  const executableCode = isPython ? fixedCode : stripNodeWrappers(fixedCode);
+  const isPython = languageId === "python"
+  const executableCode = isPython ? fixedCode : stripNodeWrappers(fixedCode)
   const executionScript = isPython
     ? `console.warn("[SETUP] Python execution is simulated."); console.log(${JSON.stringify(
         fixedCode
       )});`
-    : executableCode;
+    : executableCode
 
   return `
     <!DOCTYPE html>
@@ -250,12 +250,12 @@ function getExecutionView(languageId, fixedCode, hasError) {
       </head>
       <body>
         <h3 class="console-title">Live ${isPython ? "Python" : "JS/TS"} Output</h3>
-        ${hasError ? "<div class=\"error-bar\">Formatting failed. Running the original code.</div>" : ""}
+        ${hasError ? '<div class="error-bar">Formatting failed. Running the original code.</div>' : ""}
         <div id="output-container">Console output will appear here.</div>
         ${getConsoleScript(executionScript)}
       </body>
     </html>
-  `;
+  `
 }
 
 function getReactView(fixedCode, hasError) {
@@ -271,7 +271,7 @@ function getReactView(fixedCode, hasError) {
       </head>
       <body>
         <h3 class="console-title">Live React/JSX Preview</h3>
-        ${hasError ? "<div class=\"error-bar\">Formatting failed. Running the original code.</div>" : ""}
+        ${hasError ? '<div class="error-bar">Formatting failed. Running the original code.</div>' : ""}
         <div id="react-container"></div>
         <h3 class="console-title">Console Output</h3>
         <div id="output-container">Console output will appear here.</div>
@@ -308,18 +308,18 @@ function getReactView(fixedCode, hasError) {
         </script>
       </body>
     </html>
-  `;
+  `
 }
 
 function getCompiledLanguageView(languageId, fixedCode) {
-  const isJava = languageId === "java";
-  const classNameMatch = fixedCode.match(/public\s+class\s+(\w+)/);
-  const className = classNameMatch ? classNameMatch[1] : "Main";
-  const fileName = isJava ? `${className}.java` : "main.c";
+  const isJava = languageId === "java"
+  const classNameMatch = fixedCode.match(/public\s+class\s+(\w+)/)
+  const className = classNameMatch ? classNameMatch[1] : "Main"
+  const fileName = isJava ? `${className}.java` : "main.c"
   const compileCommand = isJava
     ? `javac ${fileName}`
-    : `gcc ${fileName} -o myprogram`;
-  const runCommand = isJava ? `java ${className}` : "./myprogram";
+    : `gcc ${fileName} -o myprogram`
+  const runCommand = isJava ? `java ${className}` : "./myprogram"
 
   return `
     <!DOCTYPE html>
@@ -335,16 +335,16 @@ function getCompiledLanguageView(languageId, fixedCode) {
         <pre class="code-display">${escapeHTML(fixedCode)}</pre>
       </body>
     </html>
-  `;
+  `
 }
 
 function getWebviewContent(languageId, fixedCode, hasError) {
   if (languageId === "html") {
-    return fixedCode;
+    return fixedCode
   }
 
   if (languageId === "javascriptreact" || languageId === "typescriptreact") {
-    return getReactView(fixedCode, hasError);
+    return getReactView(fixedCode, hasError)
   }
 
   if (
@@ -352,37 +352,37 @@ function getWebviewContent(languageId, fixedCode, hasError) {
     languageId === "typescript" ||
     languageId === "python"
   ) {
-    return getExecutionView(languageId, fixedCode, hasError);
+    return getExecutionView(languageId, fixedCode, hasError)
   }
 
   if (languageId === "c" || languageId === "java") {
-    return getCompiledLanguageView(languageId, fixedCode);
+    return getCompiledLanguageView(languageId, fixedCode)
   }
 
-  return `<pre class="code-display">${escapeHTML(fixedCode)}</pre>`;
+  return `<pre class="code-display">${escapeHTML(fixedCode)}</pre>`
 }
 
 function getLocalResourceRoots(documentPath) {
-  const roots = [vscode.Uri.file(path.dirname(documentPath))];
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const roots = [vscode.Uri.file(path.dirname(documentPath))]
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 
   if (workspaceRoot) {
-    roots.push(vscode.Uri.file(workspaceRoot));
+    roots.push(vscode.Uri.file(workspaceRoot))
   }
 
-  return roots;
+  return roots
 }
 
 function livePreviewer(context) {
-  const editor = vscode.window.activeTextEditor;
+  const editor = vscode.window.activeTextEditor
   if (!editor) {
     return vscode.window.showInformationMessage(
       "Open a supported file to start the live preview."
-    );
+    )
   }
 
-  const document = editor.document;
-  const languageId = document.languageId;
+  const document = editor.document
+  const languageId = document.languageId
   const supportedLanguages = [
     "html",
     "javascript",
@@ -392,16 +392,16 @@ function livePreviewer(context) {
     "python",
     "c",
     "java"
-  ];
+  ]
 
   if (!supportedLanguages.includes(languageId)) {
     return vscode.window.showWarningMessage(
       `Live Preview supports HTML, JS/TS, React/JSX, Python, C, and Java. Detected: ${languageId}`
-    );
+    )
   }
 
   if (currentPanel) {
-    currentPanel.reveal(vscode.ViewColumn.Beside);
+    currentPanel.reveal(vscode.ViewColumn.Beside)
   } else {
     currentPanel = vscode.window.createWebviewPanel(
       "livePreview",
@@ -412,26 +412,26 @@ function livePreviewer(context) {
         retainContextWhenHidden: true,
         localResourceRoots: getLocalResourceRoots(document.fileName)
       }
-    );
+    )
 
     currentPanel.onDidDispose(
       () => {
-        currentPanel = undefined;
+        currentPanel = undefined
       },
       null,
       context.subscriptions
-    );
+    )
   }
 
-  const panel = currentPanel;
+  const panel = currentPanel
 
   const updateWebview = async () => {
-    const rawCode = document.getText();
+    const rawCode = document.getText()
     const { fixedCode, hasError } = await formatCode(
       rawCode,
       languageId,
       document.fileName
-    );
+    )
 
     const processedCode =
       languageId === "html"
@@ -440,26 +440,26 @@ function livePreviewer(context) {
             panel.webview,
             document.fileName
           )
-        : fixedCode;
+        : fixedCode
 
-    panel.webview.html = getWebviewContent(languageId, processedCode, hasError);
-  };
+    panel.webview.html = getWebviewContent(languageId, processedCode, hasError)
+  }
 
-  updateWebview();
+  updateWebview()
 
   const changeListener = vscode.workspace.onDidChangeTextDocument((event) => {
     if (event.document === document) {
-      updateWebview();
+      updateWebview()
     }
-  });
+  })
 
   panel.onDidDispose(
     () => {
-      changeListener.dispose();
+      changeListener.dispose()
     },
     null,
     context.subscriptions
-  );
+  )
 }
 
-module.exports = livePreviewer;
+module.exports = livePreviewer

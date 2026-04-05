@@ -34,7 +34,10 @@ class ChatPanel {
         type: "status",
         text: "Scanning codebase..."
       });
-      const fileCount = await this.agent.scanCodebase(workspaceFolder);
+      const fileCount = await this.agent.ensureCodebaseScanned(
+        workspaceFolder,
+        true
+      );
       this.panel.webview.postMessage({
         type: "status",
         text: `Scanned ${fileCount} files. Ready.`
@@ -87,8 +90,17 @@ class ChatPanel {
                   : result.error
               });
             } else if (action.type === "cmd") {
+              const validation = this.agent.validateCommand(action.command);
+              if (!validation.allowed) {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Blocked command: ${validation.reason}`
+                });
+                continue;
+              }
+
               const confirmed = await vscode.window.showWarningMessage(
-                `AI wants to run: ${action.command}`,
+                `AI wants to run this project command: ${action.command}`,
                 "Allow",
                 "Deny"
               );
@@ -244,7 +256,7 @@ class ChatPanel {
   </div>
   <div id="chat"></div>
   <div id="input-area">
-    <input id="input" type="text" placeholder="Ask me to create files, modify code, or run commands..." />
+    <input id="input" type="text" placeholder="Ask me to inspect files, fix code, or edit your workspace..." />
     <button id="send">Send</button>
     <button id="stop">Stop</button>
     <button id="clear">Clear</button>
