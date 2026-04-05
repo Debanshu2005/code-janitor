@@ -64,6 +64,7 @@ class ChatPanel {
         const fastLocalResponse = this.agent._getFastLocalResponse(trimmedText);
 
         if (fastLocalResponse) {
+          this.panel.webview.postMessage({ type: "status", text: "Answering locally." });
           this.panel.webview.postMessage({ type: "thinking" });
           this.panel.webview.postMessage({ type: "stream", text: fastLocalResponse });
           this.panel.webview.postMessage({ type: "done" });
@@ -79,6 +80,7 @@ class ChatPanel {
           );
 
         if (deterministicResponse) {
+          this.panel.webview.postMessage({ type: "status", text: "Using editor state." });
           this.panel.webview.postMessage({ type: "thinking" });
           this.panel.webview.postMessage({ type: "stream", text: deterministicResponse });
           this.panel.webview.postMessage({ type: "done" });
@@ -95,7 +97,12 @@ class ChatPanel {
             this.panel.webview.postMessage({ type: "stream", text: chunk });
           },
           this.abortController.signal,
-          { mode: this.chatMode }
+          {
+            mode: this.chatMode,
+            onStatus: (text) => {
+              this.panel.webview.postMessage({ type: "status", text });
+            }
+          }
         );
 
         if (response.error) {

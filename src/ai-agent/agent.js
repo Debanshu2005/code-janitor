@@ -62,6 +62,12 @@ class AIAgent {
     });
   }
 
+  setActiveEditor(editor) {
+    if (editor) {
+      this._lastActiveEditor = editor;
+    }
+  }
+
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai");
     return {
@@ -143,18 +149,32 @@ class AIAgent {
     }
 
     const mode = options.mode === "heavy" ? "heavy" : "fast";
+    const reportStatus =
+      typeof options.onStatus === "function" ? options.onStatus : null;
 
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
 
     let prompt;
     if (mode === "fast") {
+      reportStatus?.("Preparing fast reply...");
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
+      let fastContext = "";
+      if (
+        workspaceFolder &&
+        this._shouldUseRepoContextInFastMode(userMessage)
+      ) {
+        reportStatus?.("Scanning relevant files for fast mode...");
+        await this.ensureCodebaseScanned(workspaceFolder);
+        const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
+        fastContext = this._buildRelevantFileContext(relevantFiles);
+      }
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant. Answer briefly.${activeFileContext ? `\n\n${activeFileContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
+      prompt = `You are a concise coding assistant. Answer briefly and directly.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
     } else {
+      reportStatus?.("Scanning workspace...");
       await this.ensureCodebaseScanned(workspaceFolder);
       const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
@@ -171,6 +191,7 @@ class AIAgent {
     }
 
     try {
+      reportStatus?.("Contacting Ollama...");
       const response = await fetch(`${config.ollamaUrl}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -432,6 +453,29 @@ class AIAgent {
     return mode === "heavy"
       ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
+  }
+
+  _shouldUseRepoContextInFastMode(message) {
+    return /\b(scan|codebase|repo|repository|project|workspace|relevant files|entire codebase|why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
+      message || ""
+    );
+  }
+
+  _buildRelevantFileContext(relevantFiles) {
+    if (!Array.isArray(relevantFiles) || relevantFiles.length === 0) {
+      return "";
+    }
+
+    let context = "Relevant workspace files:\n";
+    for (const file of relevantFiles) {
+      const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
+      if ((context + block).length > MAX_CONTEXT_CHARS) {
+        break;
+      }
+      context += block;
+    }
+
+    return context.trim();
   }
 
   _isRepeatingResponse(text) {
