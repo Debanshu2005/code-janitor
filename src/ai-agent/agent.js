@@ -709,9 +709,15 @@ class AIAgent {
       return null;
     }
 
+    // Only intercept if the message is ONLY about tabs, not mixed with other intent
+    const isOnlyTabQuestion = /^(what|which|show|list|can you see|do you see|tell me)?.*(tab|tabs|active tab|open tab|visible tab|active file|current file).*$/.test(message);
+    if (!isOnlyTabQuestion) {
+      return null;
+    }
+
     const editorState = this._getEditorState(workspaceFolder);
     if (!editorState.available) {
-      return "I do not have access to the current open tabs.";
+      return null; // Fall through to AI instead of returning no-access message
     }
 
     const wantsVisibleTabs = /\bvisible\s+tabs?\b/.test(message);

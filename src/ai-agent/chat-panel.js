@@ -61,6 +61,14 @@ class ChatPanel {
           return;
         }
 
+        if (/^\/scan$/i.test(trimmedText)) {
+          this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
+          const fileCount = await this.agent.scanCodebase(workspaceFolder);
+          this.panel.webview.postMessage({ type: "status", text: `✓ Scanned ${fileCount} files.` });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
         const fastLocalResponse = this.agent._getFastLocalResponse(trimmedText);
 
         if (fastLocalResponse) {
@@ -385,7 +393,7 @@ class ChatPanel {
   </div>
   <div id="chat"></div>
   <div id="input-area">
-    <input id="input" type="text" placeholder="Ask me to inspect files, fix code, or edit your workspace..." />
+    <input id="input" type="text" placeholder="Ask anything. Use /scan, /fast, /heavy" />
     <button id="send">Send</button>
     <button id="stop">Stop</button>
     <button id="clear">Clear</button>
