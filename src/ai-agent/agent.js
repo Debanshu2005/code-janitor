@@ -3,10 +3,10 @@ const fs = require("fs").promises;
 const path = require("path");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
-const MAX_CONTEXT_CHARS = 14_000;
-const MAX_FILE_SNIPPET = 2_500;
-const MAX_RELEVANT_FILES = 8;
-const MAX_OPEN_TAB_SNIPPETS = 4;
+const MAX_CONTEXT_CHARS = 8_000;
+const MAX_FILE_SNIPPET = 1_200;
+const MAX_RELEVANT_FILES = 4;
+const MAX_OPEN_TAB_SNIPPETS = 2;
 const MAX_HISTORY_ENTRIES = 4;
 const REPETITION_WINDOW = 180;
 const SCAN_STALE_MS = 30_000;
@@ -182,7 +182,7 @@ class AIAgent {
           stream: true,
           options: {
             temperature: 0.1,
-            num_predict: 900,
+            num_predict: 400,
             top_k: 20,
             top_p: 0.8
           }
