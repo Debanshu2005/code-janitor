@@ -967,9 +967,11 @@ class AIAgent {
     }
 
     if (!context) {
-      context = mode === "heavy"
-        ? "No directly relevant files found in the indexed workspace.\n"
-        : "No indexed workspace context attached in Fast mode.\n";
+      // Give the AI the full file list so it knows what's in the workspace
+      const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
+      context = allFiles.length > 0
+        ? `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`
+        : "No indexed files found.\n";
     }
 
     const editableTargetsContext = this._buildEditableTargetsContext(
@@ -980,23 +982,12 @@ class AIAgent {
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant for a VS Code extension.
+    return `You are the Code Janitor AI assistant embedded in a VS Code extension.
+You have access to the indexed workspace files listed below. Use them to answer questions about the codebase.
 Mode: ${mode}.
-${mode === "fast"
-  ? "In Fast mode, use the simple pipeline: prefer concise conversational replies, avoid repo-wide reasoning, and rely only on the directly attached context."
-  : "In Heavy mode, use the repo-aware context to help with code, files, and workspace edits."}
-You can read the indexed workspace context and propose direct file edits.
-Prefer editing files in the workspace over suggesting shell commands.
-Only claim to know the active tab, visible tabs, or open tabs when they are listed in the provided context.
+When asked to scan or review the codebase, summarize the indexed files and their purpose based on the context provided.
 Only use the open-tab access disclaimer for explicit tab-visibility questions when editor-state data is unavailable.
-Do not infer, guess, or invent tabs, active files, or workspace state.
-For questions asking which tabs are open, visible, or active, do not provide sample code, API guidance, or general VS Code advice.
-If editor-state context is present, answer tab questions by repeating only the exact tab entries from that context.
-If and only if the user explicitly asks which tabs are open, visible, or active and editor-state context is unavailable, answer only with: I do not have access to the current open tabs.
-If the user asks about a file that appears in the open-tab lists or indexed file context, answer the file question directly instead of repeating the tab-access disclaimer.
-For code review, bug finding, codebase summaries, architecture questions, or file analysis requests, do not use the tab-access disclaimer when indexed workspace or file content is available.
-Treat open-tab visibility and file-analysis ability as separate: you may analyze a file from indexed or snippet context even if tab visibility is limited.
-${implicitActiveFileGuidance}Respect the editable targets context. If a restricted target list is provided, only create or modify those files.
+Do not say you cannot access the workspace - the indexed file context below IS the workspace.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
