@@ -138,7 +138,13 @@ class AIAgent {
 
     const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
     const activeFileContext = this._getActiveFileContext(workspaceFolder);
-    const prompt = this._buildPrompt(userMessage, relevantFiles, activeFileContext);
+    const openTabsContext = this._getOpenTabsContext(workspaceFolder);
+    const prompt = this._buildPrompt(
+      userMessage,
+      relevantFiles,
+      activeFileContext,
+      openTabsContext
+    );
 
     try {
       const response = await fetch(`${config.ollamaUrl}/api/generate`, {
@@ -213,7 +219,7 @@ class AIAgent {
 
   _getActiveFileContext(workspaceFolder) {
     const activeEditor = vscode.window.activeTextEditor;
-    if (!activeEditor) {
+    if (!activeEditor || !workspaceFolder) {
       return "";
     }
 
@@ -222,6 +228,47 @@ class AIAgent {
     const relativePath = path.relative(workspaceFolder, activeFile);
 
     return `Active file: ${relativePath}\n\`\`\`\n${activeContent}\n\`\`\``;
+  }
+
+  _getOpenTabsContext(workspaceFolder) {
+    const tabPaths = new Set();
+
+    const pushTabPath = (filePath) => {
+      if (!filePath) {
+        return;
+      }
+
+      const normalizedPath = workspaceFolder
+        ? path.relative(workspaceFolder, filePath)
+        : filePath;
+
+      tabPaths.add(normalizedPath.replace(/\\/g, "/"));
+    };
+
+    if (vscode.window.tabGroups?.all) {
+      for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+          const input = tab.input;
+          const filePath = input?.uri?.fsPath || input?.modified?.fsPath || null;
+          pushTabPath(filePath);
+        }
+      }
+    }
+
+    if (tabPaths.size === 0 && Array.isArray(vscode.window.visibleTextEditors)) {
+      for (const editor of vscode.window.visibleTextEditors) {
+        pushTabPath(editor?.document?.fileName);
+      }
+    }
+
+    if (tabPaths.size === 0) {
+      return "Open tabs: unavailable. If asked about currently open tabs, say you do not have access to them.\n";
+    }
+
+    return `Open tabs:\n${Array.from(tabPaths)
+      .sort()
+      .map((tabPath) => `File: ${tabPath}`)
+      .join("\n")}\n`;
   }
 
   _extractKeywords(query) {
@@ -292,7 +339,7 @@ class AIAgent {
       .slice(0, MAX_RELEVANT_FILES);
   }
 
-  _buildPrompt(userMessage, relevantFiles, activeFileContext) {
+  _buildPrompt(userMessage, relevantFiles, activeFileContext, openTabsContext) {
     const history = this.conversationHistory
       .slice(-4)
       .map((entry) =>
@@ -316,6 +363,9 @@ class AIAgent {
     return `You are the Code Janitor AI assistant for a VS Code extension.
 You can read the indexed workspace context and propose direct file edits.
 Prefer editing files in the workspace over suggesting shell commands.
+Only claim to know open tabs when they are listed in the provided context.
+If open-tab data is unavailable, say exactly that you do not have access to the current open tabs.
+Do not infer, guess, or invent open tabs, active files, or workspace state.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
@@ -328,7 +378,7 @@ Never suggest package installation, global installs, network downloads, or syste
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
-${activeFileContext ? `${activeFileContext}\n\n` : ""}${context}
+${openTabsContext ? `${openTabsContext}\n` : ""}${activeFileContext ? `${activeFileContext}\n\n` : ""}${context}
 ${history ? `${history}\n\n` : ""}User: ${userMessage}
 
 Assistant:`;
