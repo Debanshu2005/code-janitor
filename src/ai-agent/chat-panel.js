@@ -76,32 +76,7 @@ class ChatPanel {
           return;
         }
 
-        const fastLocalResponse = this.agent._getFastLocalResponse(trimmedText);
-
-        if (fastLocalResponse) {
-          this.panel.webview.postMessage({ type: "status", text: "Answering locally." });
-          this.panel.webview.postMessage({ type: "thinking" });
-          this.panel.webview.postMessage({ type: "stream", text: fastLocalResponse });
-          this.panel.webview.postMessage({ type: "done" });
-          return;
-        }
-
-        // Pass last known active editor to agent
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-        const deterministicResponse =
-          this.agent.getDeterministicEditorStateResponse(
-            trimmedText,
-            workspaceFolder
-          );
-
-        if (deterministicResponse) {
-          this.panel.webview.postMessage({ type: "status", text: "Using editor state." });
-          this.panel.webview.postMessage({ type: "thinking" });
-          this.panel.webview.postMessage({ type: "stream", text: deterministicResponse });
-          this.panel.webview.postMessage({ type: "done" });
-          return;
-        }
-
         this.panel.webview.postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 
