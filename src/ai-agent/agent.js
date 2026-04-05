@@ -884,78 +884,7 @@ class AIAgent {
   }
 
   getDeterministicActiveFileScanResponse(userMessage, workspaceFolder) {
-    if (
-      !this._isActiveFileScanRequest(userMessage) ||
-      this._isEditRequest(userMessage)
-    ) {
-      return null;
-    }
-
-    // Only intercept if explicitly about tabs/files, not general codebase scans
-    if (/\b(codebase|workspace|repo|repository|project|entire|whole|all files)\b/i.test(userMessage || "")) {
-      return null;
-    }
-
-    const editorState = this._getEditorState(workspaceFolder);
-    if (!editorState.available) {
-      return null;
-    }
-
-    const wantsVisible =
-      /\bvisible\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
-    const wantsOpen =
-      /\b(all\s+)?open\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
-    const wantsActive =
-      /\b(active|current)\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
-    const targetPaths = wantsVisible
-      ? editorState.visibleTabs
-      : wantsOpen
-        ? editorState.allOpenTabs
-        : wantsActive && editorState.activeTabPath
-          ? [editorState.activeTabPath]
-          : editorState.visibleTabs.length > 0
-          ? editorState.visibleTabs
-          : editorState.activeTabPath
-            ? [editorState.activeTabPath]
-            : editorState.allOpenTabs;
-
-    if (!targetPaths || targetPaths.length === 0) {
-      return "I do not have access to the current open tabs.";
-    }
-
-    const openDocuments = new Map(
-      vscode.workspace.textDocuments.map((document) => [document.fileName, document])
-    );
-    const sections = [];
-
-    if (editorState.activeTabPath) {
-      sections.push(`Active file: ${editorState.activeTabPath}`);
-    }
-
-    for (const tabPath of targetPaths.slice(0, MAX_OPEN_TAB_SNIPPETS)) {
-      const fullPath = workspaceFolder ? path.join(workspaceFolder, tabPath) : tabPath;
-      const openDocument = openDocuments.get(fullPath);
-      const fileData = this.codebaseContext.get(tabPath);
-      const content = openDocument
-        ? openDocument.getText()
-        : fileData
-          ? fileData.content
-          : "";
-
-      sections.push(
-        `File: ${tabPath}\n\`\`\`\n${content.slice(0, MAX_FILE_SNIPPET)}\n\`\`\``
-      );
-    }
-
-    if (targetPaths.length > MAX_OPEN_TAB_SNIPPETS) {
-      sections.push(
-        `Additional open files not expanded: ${targetPaths
-          .slice(MAX_OPEN_TAB_SNIPPETS)
-          .join(", ")}`
-      );
-    }
-
-    return sections.join("\n\n");
+    return null;
   }
 
   _findRelevantFiles(query, workspaceFolder) {
