@@ -55,6 +55,11 @@ class AIAgent {
     this.lastScanAt = 0;
     this.workspaceRoot = null;
     this.currentEditableTargets = null;
+    this._lastActiveEditor = null;
+
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) this._lastActiveEditor = editor;
+    });
   }
 
   getConfig() {
@@ -261,7 +266,7 @@ class AIAgent {
   }
 
   _getActiveFileContext(workspaceFolder) {
-    const activeEditor = vscode.window.activeTextEditor;
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
     if (!activeEditor || !workspaceFolder) {
       return "";
     }
@@ -296,7 +301,7 @@ class AIAgent {
   _getEditorState(workspaceFolder) {
     const allOpenTabs = new Set();
     const visibleTabs = new Set();
-    const activeEditor = vscode.window.activeTextEditor;
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
     const activeTabPath = this._toWorkspaceRelativePath(
       activeEditor?.document?.fileName,
       workspaceFolder
@@ -554,7 +559,7 @@ class AIAgent {
     const pathHints = this._extractPathHints(query);
     const relevant = [];
 
-    const activeEditor = vscode.window.activeTextEditor;
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
     const activeRelativePath = activeEditor
       ? path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/").toLowerCase()
       : "";

@@ -7,6 +7,12 @@ class ChatPanel {
     this.panel = null;
     this.agent = new AIAgent();
     this.abortController = null;
+    this.lastActiveEditor = null;
+
+    // Track last active editor before focus moves to chat panel
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) this.lastActiveEditor = editor;
+    }, null, context.subscriptions);
   }
 
   async show() {
@@ -49,6 +55,8 @@ class ChatPanel {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "chat") {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        // Pass last known active editor to agent
+        this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         const deterministicResponse =
           this.agent.getDeterministicEditorStateResponse(
             message.text,
