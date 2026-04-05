@@ -953,7 +953,7 @@ class AIAgent {
       : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES, -1);
     const history = historyEntries
       .map((entry) =>
-        `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content}`
+        `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
       )
       .join("\n\n");
 
@@ -967,11 +967,24 @@ class AIAgent {
     }
 
     if (!context) {
-      // Give the AI the full file list so it knows what's in the workspace
       const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
-      context = allFiles.length > 0
-        ? `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`
-        : "No indexed files found.\n";
+      if (allFiles.length > 0) {
+        // If it's a general codebase scan request, include actual file snippets
+        const isCodbaseScan = /\b(scan|review|analyze|what does|what is|overview|summarize|describe|syntax|error|errors|bug|bugs|issue|issues|logical|logic|problem|problems|check|inspect|audit)\b/i.test(userMessage);
+        if (isCodbaseScan) {
+          let snippetContext = "";
+          for (const [relativePath, fileData] of this.codebaseContext.entries()) {
+            const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`;
+            if ((snippetContext + block).length > MAX_CONTEXT_CHARS) break;
+            snippetContext += block;
+          }
+          context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
+        } else {
+          context = `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
+        }
+      } else {
+        context = "No indexed files found.\n";
+      }
     }
 
     const editableTargetsContext = this._buildEditableTargetsContext(
