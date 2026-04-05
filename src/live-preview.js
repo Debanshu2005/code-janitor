@@ -1,599 +1,388 @@
-const vscode = require("vscode");
+const fs = require("fs");
 const path = require("path");
+const vscode = require("vscode");
 
 let prettier;
 try {
-  prettier = require(path.join(__dirname, '..', '..', 'node_modules', 'prettier'));
-} catch (error) {
+  prettier = require(path.join(__dirname, "..", "node_modules", "prettier"));
+} catch {
   try {
-    prettier = require('prettier');
-  } catch (e) {
+    prettier = require("prettier");
+  } catch {
     prettier = null;
-    console.warn('Prettier not available for live preview');
+    console.warn("Prettier not available for live preview");
   }
 }
 
-let currentPanel = undefined;
+let currentPanel;
 
-function convertLocalPathsToWebviewUris(html, webview, documentPath) {
-  const documentDir = path.dirname(documentPath);
-  const fs = require('fs');
-  
-  html = html.replace(/(<img[^>]+src=["'])([^"']+)(["'][^>]*>)/gi, (match, prefix, src, suffix) => {
-    if (src.startsWith('http') || src.startsWith('data:') || src.startsWith('vscode-webview-resource:')) {
-      return match;
-    }
-    
-    try {
-      let fullPath;
-      
-      // Handle different path formats
-      if (path.isAbsolute(src)) {
-        fullPath = src;
-      } else {
-        // Try relative to document first
-        fullPath = path.resolve(documentDir, src);
-        
-        // If not found, try relative to workspace
-        if (!fs.existsSync(fullPath)) {
-          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          if (workspaceRoot) {
-            fullPath = path.resolve(workspaceRoot, src);
-          }
-        }
-      }
-      
-      console.log(`Checking image: ${src}`);
-      console.log(`Full path: ${fullPath}`);
-      console.log(`Exists: ${fs.existsSync(fullPath)}`);
-      
-      if (fs.existsSync(fullPath)) {
-        const webviewUri = webview.asWebviewUri(vscode.Uri.file(fullPath));
-        console.log(`Converting: ${src} -> ${webviewUri.toString()}`);
-        return prefix + webviewUri.toString() + suffix;
-      } else {
-        console.warn(`Image not found: ${fullPath}`);
-      }
-    } catch (error) {
-      console.warn('Failed to convert image path:', src, error.message);
-    }
-    return match;
-  });
-  
-  return html;
+function escapeHTML(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-const escapeHTML = (str) => {
-  return str.replace(/"/g, "&quot;");
-};
+function stripNodeWrappers(code) {
+  return code
+    .replace(/^(const|var|let)\s+[^=]+\s*=\s*require\s*\([^)]+\);\s*$/gm, "")
+    .replace(/^module\.exports\s*=\s*[\s\S]*;?$/gm, "")
+    .replace(/^\s*(['"])use strict\1;?\s*$/gm, "");
+}
 
-async function fixCode(code, languageId) {
-  let fixedCode = code;
-  let hasError = false;
-  let parserName;
+function resolveLocalPath(src, documentPath) {
+  if (!src || /^(https?:|data:|vscode-webview-resource:)/i.test(src)) {
+    return null;
+  }
 
+  const documentDir = path.dirname(documentPath);
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const candidates = path.isAbsolute(src)
+    ? [src]
+    : [
+        path.resolve(documentDir, src),
+        workspaceRoot ? path.resolve(workspaceRoot, src) : null
+      ].filter(Boolean);
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function convertLocalPathsToWebviewUris(html, webview, documentPath) {
+  return html.replace(
+    /(<img[^>]+src=["'])([^"']+)(["'][^>]*>)/gi,
+    (match, prefix, src, suffix) => {
+      const fullPath = resolveLocalPath(src, documentPath);
+      if (!fullPath) {
+        return match;
+      }
+
+      return (
+        prefix +
+        webview.asWebviewUri(vscode.Uri.file(fullPath)).toString() +
+        suffix
+      );
+    }
+  );
+}
+
+async function formatCode(code, languageId, filePath) {
+  if (!prettier) {
+    return { fixedCode: code, hasError: false };
+  }
+
+  let parser;
   switch (languageId) {
     case "html":
-      parserName = "html";
+      parser = "html";
       break;
     case "javascript":
     case "typescript":
     case "javascriptreact":
     case "typescriptreact":
-      parserName = "babel";
+      parser = "babel";
       break;
-    case "python":
-      parserName = "python";
-      break;
-    case "c":
-    case "java":
-      return { fixedCode: code, hasError: false, parser: null };
     default:
-      return { fixedCode: code, hasError: false, parser: null };
+      return { fixedCode: code, hasError: false };
   }
 
   try {
-    if (prettier) {
-      fixedCode = await prettier.format(code, {
-        parser: parserName,
-        tabWidth: 2,
-        printWidth: 120,
-        semi: true,
-        singleQuote: false,
-        trailingComma: "none"
-      });
-    }
-  } catch (error) {
-    hasError = true;
-    fixedCode = code;
-  }
-  return { fixedCode, hasError, parser: parserName };
-}
-
-function stripNodeWrappers(code) {
-  let strippedCode = code.replace(
-    /^(const|var|let)\s+[^=]+\s*=\s*require\s*\([^)]+\);\s*$/gm,
-    ""
-  );
-
-  strippedCode = strippedCode.replace(
-    /^module\.exports\s*=\s*[\s\S]*;?$/gm,
-    ""
-  );
-
-  strippedCode = strippedCode.replace(/^\s*(['"])use strict\1;?\s*$/gm, "");
-
-  return strippedCode;
-}
-
-const CONSOLE_REDIRECT_SCRIPT = `
-  <script>
-    const originalConsole = window.console;
-    
-    function logToParent(type, args) {
-      try {
-        const serializableArgs = args.map(arg => {
-          if (typeof arg === 'object' && arg !== null) {
-            return JSON.stringify(arg, (key, value) => {
-              if (value instanceof HTMLElement) return '<HTMLElement>';
-              if (typeof value === 'function') return '<Function>';
-              return value;
-            }, 2);
-          }
-          return String(arg);
-        });
-        window.parent.postMessage({
-          command: 'consoleLog',
-          type: type,
-          message: serializableArgs.join(' ')
-        }, '*');
-      } catch (e) {
-        window.parent.postMessage({
-          command: 'consoleLog',
-          type: 'error',
-          message: 'Error serializing console, argument: ' + (e.stack || e.message)
-        }, '*');
-      }
-    }
-
-    window.console = {
-      ...originalConsole,
-      log: (...args) => { originalConsole.log(...args); logToParent('log', args); },
-      error: (...args) => { originalConsole.error(...args); logToParent('error', args); },
-      warn: (...args) => { originalConsole.warn(...args); logToParent('warn', args); }
-    };
-
-    window.onerror = (message, source, lineno, colno, error) => {
-      const errorText = error ? (error.stack || error.message) : message;
-      logToParent('error', ['UNCAUGHT ERROR:', errorText, \`(Line: \${lineno}, Col: \${colno})\`]);
-      return true;
-    };
-
-    window.addEventListener('unhandledrejection', (event) => {
-      const reason = event.reason ? (event.reason.stack || event.reason.message || String(event.reason)) : 'Unknown reason';
-      logToParent('error', ['UNHANDLED PROMISE REJECTION:', reason]);
+    const config = (await prettier.resolveConfig(filePath)) || {};
+    const fixedCode = await prettier.format(code, {
+      ...config,
+      filepath: filePath,
+      parser: config.parser || parser,
+      semi: true,
+      trailingComma: "none",
+      printWidth: 120
     });
-  </script>
-`;
 
-function getWebviewContent(languageId, fixedCode, hasError) {
-  const commonStyles = `
+    return { fixedCode, hasError: false };
+  } catch (error) {
+    console.warn("Live preview formatting failed:", error.message);
+    return { fixedCode: code, hasError: true };
+  }
+}
+
+function getCommonStyles() {
+  return `
     <style>
-      body { 
-          font-family: 'Inter', sans-serif; 
-          padding: 10px; 
-          height: 100vh;
-          display: flex;
-          flex-direction: column;
-          margin: 0;
-          background-color: #f4f4f4;
+      body {
+        font-family: "Segoe UI", sans-serif;
+        padding: 10px;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        background: #f4f4f4;
+      }
+      .console-title {
+        margin: 0 0 8px;
+        color: #333;
+        font-size: 1.05rem;
+      }
+      .error-bar {
+        background: #fcebeb;
+        color: #b42318;
+        padding: 10px;
+        border-left: 4px solid #b42318;
+        margin-bottom: 10px;
+        border-radius: 4px;
       }
       #output-container {
-          flex-shrink: 0;
-          min-height: 120px;
-          max-height: 250px;
-          overflow-y: auto;
-          background-color: #1e1e1e;
-          color: #d4d4d4;
-          padding: 15px;
-          border-radius: 6px;
-          white-space: pre-wrap;
-          font-family: monospace;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) inset;
-          margin-top: 10px;
+        flex: 1;
+        min-height: 120px;
+        overflow-y: auto;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        padding: 15px;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        font-family: monospace;
       }
       .log { color: #a7f3d0; }
       .warn { color: #ffd700; }
-      .error { color: #ff4500; font-weight: bold; }
-      .info { color: #818cf8; }
-      .console-title { margin-top: 0; margin-bottom: 5px; color: #333; font-weight: bold; font-size: 1.1em;}
-      .error-bar { background-color: #fcebeb; color: #cc0000; padding: 10px; border-bottom: 2px solid #cc0000; font-family: sans-serif; font-size: 14px; position: sticky; top: 0; z-index: 10; border-radius: 4px; margin-bottom: 10px;}
-      .code-display { background-color: #272822; color: #f8f8f2; padding: 15px; border-radius: 6px; white-space: pre; overflow-x: auto; margin-bottom: 15px; }
-      .command-block { background-color: #3b82f6; color: white; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 1.1em; cursor: copy; margin: 5px 0; }
-      #react-container { flex-grow: 1; padding: 20px; border: 1px solid #ddd; border-radius: 6px; background: white; }
+      .error { color: #ff7b72; font-weight: 600; }
+      .code-display {
+        background: #272822;
+        color: #f8f8f2;
+        padding: 15px;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+      .command-block {
+        background: #2563eb;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-family: monospace;
+        cursor: copy;
+        margin: 6px 0;
+      }
+      #react-container {
+        flex: 1;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: white;
+      }
     </style>
   `;
+}
 
+function getConsoleScript(executionScript) {
+  return `
+    <script>
+      (function () {
+        const outputContainer = document.getElementById("output-container");
+        outputContainer.innerHTML = "";
+
+        function appendOutput(type, message) {
+          const messageElement = document.createElement("div");
+          messageElement.className = type;
+          messageElement.textContent = message;
+          outputContainer.appendChild(messageElement);
+          outputContainer.scrollTop = outputContainer.scrollHeight;
+        }
+
+        function safeStringify(item) {
+          try {
+            return JSON.stringify(item, (key, value) => {
+              if (value instanceof HTMLElement) return "<HTMLElement>";
+              if (typeof value === "function") return "<Function>";
+              return value;
+            }, 2);
+          } catch {
+            return String(item);
+          }
+        }
+
+        const originalConsole = {
+          log: console.log,
+          error: console.error,
+          warn: console.warn
+        };
+
+        console.log = function (...args) {
+          originalConsole.log(...args);
+          appendOutput("log", "[LOG] " + args.map((arg) =>
+            typeof arg === "object" && arg !== null ? safeStringify(arg) : String(arg)
+          ).join(" "));
+        };
+
+        console.error = function (...args) {
+          originalConsole.error(...args);
+          appendOutput("error", "[ERROR] " + args.map(String).join(" "));
+        };
+
+        console.warn = function (...args) {
+          originalConsole.warn(...args);
+          appendOutput("warn", "[WARN] " + args.map(String).join(" "));
+        };
+
+        try {
+          ${executionScript}
+        } catch (error) {
+          appendOutput("error", "--- RUNTIME ERROR ---");
+          appendOutput("error", error.stack || error.message || String(error));
+        }
+      })();
+    </script>
+  `;
+}
+
+function getExecutionView(languageId, fixedCode, hasError) {
+  const isPython = languageId === "python";
+  const executableCode = isPython ? fixedCode : stripNodeWrappers(fixedCode);
+  const executionScript = isPython
+    ? `console.warn("[SETUP] Python execution is simulated."); console.log(${JSON.stringify(
+        fixedCode
+      )});`
+    : executableCode;
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>${isPython ? "Python" : "JS/TS"} Preview</title>
+        ${getCommonStyles()}
+      </head>
+      <body>
+        <h3 class="console-title">Live ${isPython ? "Python" : "JS/TS"} Output</h3>
+        ${hasError ? "<div class=\"error-bar\">Formatting failed. Running the original code.</div>" : ""}
+        <div id="output-container">Console output will appear here.</div>
+        ${getConsoleScript(executionScript)}
+      </body>
+    </html>
+  `;
+}
+
+function getReactView(fixedCode, hasError) {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>React/JSX Live Preview</title>
+        ${getCommonStyles()}
+        <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+        <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+      </head>
+      <body>
+        <h3 class="console-title">Live React/JSX Preview</h3>
+        ${hasError ? "<div class=\"error-bar\">Formatting failed. Running the original code.</div>" : ""}
+        <div id="react-container"></div>
+        <h3 class="console-title">Console Output</h3>
+        <div id="output-container">Console output will appear here.</div>
+        <script type="text/babel">
+          function appendOutput(type, message) {
+            const outputContainer = document.getElementById("output-container");
+            const messageElement = document.createElement("div");
+            messageElement.className = type;
+            messageElement.textContent = message;
+            outputContainer.appendChild(messageElement);
+            outputContainer.scrollTop = outputContainer.scrollHeight;
+          }
+
+          const originalConsole = { log: console.log, error: console.error, warn: console.warn };
+          console.log = (...args) => { originalConsole.log(...args); appendOutput("log", args.map(String).join(" ")); };
+          console.error = (...args) => { originalConsole.error(...args); appendOutput("error", args.map(String).join(" ")); };
+          console.warn = (...args) => { originalConsole.warn(...args); appendOutput("warn", args.map(String).join(" ")); };
+
+          try {
+            ${fixedCode}
+            const container = document.getElementById("react-container");
+            const root = ReactDOM.createRoot(container);
+
+            if (typeof App !== "undefined") {
+              root.render(<App />);
+            } else if (typeof Component !== "undefined") {
+              root.render(<Component />);
+            } else {
+              appendOutput("warn", "Define a component named App or Component.");
+            }
+          } catch (error) {
+            appendOutput("error", error.stack || error.message || String(error));
+          }
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+function getCompiledLanguageView(languageId, fixedCode) {
+  const isJava = languageId === "java";
+  const classNameMatch = fixedCode.match(/public\s+class\s+(\w+)/);
+  const className = classNameMatch ? classNameMatch[1] : "Main";
+  const fileName = isJava ? `${className}.java` : "main.c";
+  const compileCommand = isJava
+    ? `javac ${fileName}`
+    : `gcc ${fileName} -o myprogram`;
+  const runCommand = isJava ? `java ${className}` : "./myprogram";
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>${isJava ? "Java" : "C"} Execution Instructions</title>
+        ${getCommonStyles()}
+      </head>
+      <body>
+        <h3 class="console-title">Local Execution Steps for ${isJava ? "Java" : "C"}</h3>
+        <div class="command-block">${compileCommand}</div>
+        <div class="command-block">${runCommand}</div>
+        <pre class="code-display">${escapeHTML(fixedCode)}</pre>
+      </body>
+    </html>
+  `;
+}
+
+function getWebviewContent(languageId, fixedCode, hasError) {
   if (languageId === "html") {
-    // Direct HTML rendering
     return fixedCode;
-  } else if (
-    languageId === "javascript" ||
-    languageId === "typescript" ||
-    languageId === "javascriptreact" ||
-    languageId === "typescriptreact" ||
-    languageId === "python"
-  ) {
-    const isPython = languageId === "python";
-    const isReact = languageId === "javascriptreact" || languageId === "typescriptreact";
-    
-    let executableCode = fixedCode;
-    if (!isPython && !isReact) {
-      executableCode = stripNodeWrappers(fixedCode);
-    }
-
-    if (isReact) {
-      // React/JSX rendering
-      return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>React/JSX Live Preview</title>
-            ${commonStyles}
-            <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-            <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-            <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-        </head>
-        <body>
-            <h3 class="console-title">Live React/JSX Preview</h3>
-            ${hasError ? `<div class="error-bar">⚠️ **Code Formatting Failed:** Running raw code which may cause unexpected behavior.</div>` : ""}
-            <div id="react-container"></div>
-            <div id="console-host">
-              <h3 class="console-title">Console Output</h3>
-              <div id="output-container">--- Console Output Will Appear Here ---</div>
-            </div>
-            
-            <script type="text/babel">
-                const { useState, useEffect } = React;
-                
-                function appendOutput(type, message) {
-                    const outputContainer = document.getElementById('output-container');
-                    const messageElement = document.createElement('div');
-                    messageElement.className = type;
-                    messageElement.textContent = message;
-                    outputContainer.appendChild(messageElement);
-                    outputContainer.scrollTop = outputContainer.scrollHeight;
-                }
-
-                // Override console for React components
-                const originalConsole = {
-                    log: console.log,
-                    error: console.error,
-                    warn: console.warn
-                };
-
-                console.log = function(...args) {
-                    originalConsole.log(...args);
-                    appendOutput('log', '[LOG] ' + args.map(a => typeof a === 'object' && a !== null ? JSON.stringify(a, null, 2) : String(a)).join(' '));
-                };
-                console.error = function(...args) {
-                    originalConsole.error(...args);
-                    appendOutput('error', '[ERROR] ' + args.map(a => String(a)).join(' '));
-                };
-                console.warn = function(...args) {
-                    originalConsole.warn(...args);
-                    appendOutput('warn', '[WARN] ' + args.map(a => String(a)).join(' '));
-                };
-
-                try {
-                    // User's JSX code
-                    ${executableCode}
-                    
-                    // Try to render the main component
-                    const container = document.getElementById('react-container');
-                    const root = ReactDOM.createRoot(container);
-                    
-                    // Look for common component names
-                    if (typeof App !== 'undefined') {
-                        root.render(<App />);
-                    } else if (typeof Component !== 'undefined') {
-                        root.render(<Component />);
-                    } else {
-                        appendOutput('warn', 'No App or Component found. Define a component named App or Component.');
-                    }
-                } catch (e) {
-                    appendOutput('error', '--- REACT ERROR ---');
-                    appendOutput('error', e.stack || e.message || String(e));
-                }
-            </script>
-        </body>
-        </html>
-      `;
-    }
-
-    const executionScript = isPython
-      ? `
-            appendOutput('warn', '[SETUP] Python execution is simulated. Output below is conceptual.');
-            
-            try {
-                appendOutput('log', "[PYTHON CODE START]");
-                appendOutput('log', "Simulated: " + "${escapeHTML(fixedCode).replace(/\n/g, "\\n").replace(/"/g, '\\"')}");
-                appendOutput('log', '[INFO] Simulation complete. No actual Python output shown.');
-            } catch (e) {
-                appendOutput('error', '--- SIMULATION ERROR ---');
-                appendOutput('error', e.stack || e.message || String(e));
-            }
-        `
-      : `
-            try {
-                ${executableCode}
-            } catch (e) {
-                appendOutput('error', '--- RUNTIME ERROR ---');
-                appendOutput('error', 'Error in execution:');
-                appendOutput('error', e.stack || e.message || String(e));
-            }
-        `;
-
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <title>${isPython ? "Python" : "JS/TS"} Output Console</title>
-          ${commonStyles}
-          <style>
-             #output-container { flex-grow: 1; max-height: none; }
-          </style>
-      </head>
-      <body>
-          <h3 class="console-title">Live ${isPython ? "Python" : "JS/TS"} Execution Output</h3>
-          ${hasError ? `<div class="error-bar">⚠️ **Code Formatting Failed:** Running raw code which may cause unexpected behavior.</div>` : ""}
-          <div id="output-container">--- Console Output Will Appear Here ---</div>
-
-          <script>
-              (function() {
-                  const outputContainer = document.getElementById('output-container');
-                  outputContainer.innerHTML = '';
-
-                  function appendOutput(type, message) {
-                      const messageElement = document.createElement('div');
-                      messageElement.className = type;
-                      messageElement.textContent = message;
-                      outputContainer.appendChild(messageElement);
-                      outputContainer.scrollTop = outputContainer.scrollHeight;
-                  }
-
-                  function safeStringify(item) {
-                      try {
-                          return JSON.stringify(item, (key, value) => {
-                              if (value instanceof HTMLElement) return '<HTMLElement>';
-                              if (typeof value === 'function') return '<Function>';
-                              return value;
-                          }, 2);
-                      } catch (e) {
-                          return String(item);
-                      }
-                  }
-
-                  const originalConsole = {
-                      log: console.log,
-                      error: console.error,
-                      warn: console.warn
-                  };
-
-                  console.log = function(...args) {
-                      originalConsole.log(...args);
-                      appendOutput('log', '[LOG] ' + args.map(a => typeof a === 'object' && a !== null ? safeStringify(a) : String(a)).join(' '));
-                  };
-                  console.error = function(...args) {
-                      originalConsole.error(...args);
-                      appendOutput('error', '[ERROR] ' + args.map(a => String(a)).join(' '));
-                  };
-                  console.warn = function(...args) {
-                      originalConsole.warn(...args);
-                      appendOutput('warn', '[WARN] ' + args.map(a => String(a)).join(' '));
-                  };
-                  
-                  ${executionScript}
-              })();
-          </script>
-      </body>
-      </html>
-    `;
-  } else if (
-    languageId === "javascript" ||
-    languageId === "typescript" ||
-    languageId === "javascriptreact" ||
-    languageId === "typescriptreact" ||
-    languageId === "python"
-  ) {
-    const isPython = languageId === "python";
-    let executableCode = fixedCode;
-    if (!isPython) {
-      executableCode = stripNodeWrappers(fixedCode);
-    }
-
-    const executionScript = isPython
-      ? `
-            appendOutput('warn', '[SETUP] Python execution is simulated. Output below is conceptual.');
-            
-            try {
-                appendOutput('log', "[PYTHON CODE START]");
-                appendOutput('log', "Simulated: " + "${escapeHTML(fixedCode).replace(/\n/g, "\\n").replace(/"/g, '\\"')}");
-                appendOutput('log', '[INFO] Simulation complete. No actual Python output shown.');
-            } catch (e) {
-                appendOutput('error', '--- SIMULATION ERROR ---');
-                appendOutput('error', e.stack || e.message || String(e));
-            }
-        `
-      : `
-            try {
-                ${executableCode}
-            } catch (e) {
-                appendOutput('error', '--- RUNTIME ERROR ---');
-                appendOutput('error', 'Error in execution:');
-                appendOutput('error', e.stack || e.message || String(e));
-            }
-        `;
-
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <title>${isPython ? "Python" : "JS/TS"} Output Console</title>
-          ${commonStyles}
-          <style>
-             #output-container { flex-grow: 1; max-height: none; }
-          </style>
-      </head>
-      <body>
-          <h3 class="console-title">Live ${isPython ? "Python" : "JS/TS"} Execution Output</h3>
-          ${hasError ? `<div class="error-bar">⚠️ **Code Formatting Failed:** Running raw code which may cause unexpected behavior.</div>` : ""}
-          <div id="output-container">--- Console Output Will Appear Here ---</div>
-
-          <script>
-              (function() {
-                  const outputContainer = document.getElementById('output-container');
-                  outputContainer.innerHTML = '';
-
-                  function appendOutput(type, message) {
-                      const messageElement = document.createElement('div');
-                      messageElement.className = type;
-                      messageElement.textContent = message;
-                      outputContainer.appendChild(messageElement);
-                      outputContainer.scrollTop = outputContainer.scrollHeight;
-                  }
-
-                  function safeStringify(item) {
-                      try {
-                          return JSON.stringify(item, (key, value) => {
-                              if (value instanceof HTMLElement) return '<HTMLElement>';
-                              if (typeof value === 'function') return '<Function>';
-                              return value;
-                          }, 2);
-                      } catch (e) {
-                          return String(item);
-                      }
-                  }
-
-                  const originalConsole = {
-                      log: console.log,
-                      error: console.error,
-                      warn: console.warn
-                  };
-
-                  console.log = function(...args) {
-                      originalConsole.log(...args);
-                      appendOutput('log', '[LOG] ' + args.map(a => typeof a === 'object' && a !== null ? safeStringify(a) : String(a)).join(' '));
-                  };
-                  console.error = function(...args) {
-                      originalConsole.error(...args);
-                      appendOutput('error', '[ERROR] ' + args.map(a => String(a)).join(' '));
-                  };
-                  console.warn = function(...args) {
-                      originalConsole.warn(...args);
-                      appendOutput('warn', '[WARN] ' + args.map(a => String(a)).join(' '));
-                  };
-                  
-                  ${executionScript}
-              })();
-          </script>
-      </body>
-      </html>
-    `;
-  } else if (languageId === "c" || languageId === "java") {
-    const isJava = languageId === "java";
-    let filename = isJava ? "Main.java" : "main.c";
-    let instructions = [];
-
-    if (isJava) {
-      const classNameMatch = fixedCode.match(/public\s+class\s+(\w+)/);
-      const className = classNameMatch ? classNameMatch[1] : "Main";
-      filename = `${className}.java`;
-
-      instructions = [
-        `1. Save your code locally as: **${filename}**`,
-        `2. Open your terminal/command prompt.`,
-        `3. Compile the code (using JDK):`,
-        `<div class="command-block" onclick="copyCommand(this)">javac ${filename}</div>`,
-        `4. Run the compiled class file:`,
-        `<div class="command-block" onclick="copyCommand(this)">java ${className}</div>`,
-        `***Note:*** The code is displayed below. Ensure it contains a main method and that your JDK is installed.`
-      ];
-    } else {
-      instructions = [
-        `1. Save your code locally as: **${filename}**`,
-        `2. Open your terminal/command prompt.`,
-        `3. Compile the code (using GCC):`,
-        `<div class="command-block" onclick="copyCommand(this)">gcc ${filename} -o myprogram</div>`,
-        `4. Run the executable:`,
-        `<div class="command-block" onclick="copyCommand(this)">./myprogram</div>`,
-        `***Note:*** The code is displayed below. Ensure your GCC compiler is installed.`
-      ];
-    }
-
-    return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>${isJava ? "Java" : "C"} Execution Instructions</title>
-            ${commonStyles}
-            <style>
-                .instructions-card {
-                    background-color: #fff;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-                    flex-grow: 1;
-                    overflow-y: auto;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="instructions-card">
-                <h3 class="console-title text-2xl text-indigo-600">Local Execution Steps for ${isJava ? "Java" : "C"}</h3>
-                <p class="text-gray-600 mb-4">This code requires compilation. Please follow the steps below to run it on your local system:</p>
-
-                <ol class="list-decimal ml-4 text-gray-700 space-y-3">
-                    ${instructions.map((item) => `<li>${item}</li>`).join("")}
-                </ol>
-
-                <h4 class="text-lg font-semibold mt-6 mb-2 text-gray-800">Your Current Code:</h4>
-                <pre class="code-display">${escapeHTML(fixedCode)}</pre>
-            </div>
-
-            <script>
-                function copyCommand(element) {
-                    const command = element.textContent;
-                    try {
-                        const textArea = document.createElement("textarea");
-                        textArea.value = command;
-                        document.body.appendChild(textArea);
-                        textArea.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(textArea);
-                        alert("Command copied to clipboard: " + command);
-                    } catch (err) {
-                        alert("Failed to copy command. Please select and copy manually.");
-                    }
-                }
-            </script>
-        </body>
-        </html>
-    `;
   }
+
+  if (languageId === "javascriptreact" || languageId === "typescriptreact") {
+    return getReactView(fixedCode, hasError);
+  }
+
+  if (
+    languageId === "javascript" ||
+    languageId === "typescript" ||
+    languageId === "python"
+  ) {
+    return getExecutionView(languageId, fixedCode, hasError);
+  }
+
+  if (languageId === "c" || languageId === "java") {
+    return getCompiledLanguageView(languageId, fixedCode);
+  }
+
+  return `<pre class="code-display">${escapeHTML(fixedCode)}</pre>`;
+}
+
+function getLocalResourceRoots(documentPath) {
+  const roots = [vscode.Uri.file(path.dirname(documentPath))];
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  if (workspaceRoot) {
+    roots.push(vscode.Uri.file(workspaceRoot));
+  }
+
+  return roots;
 }
 
 function livePreviewer(context) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     return vscode.window.showInformationMessage(
-      "Open a file to start the live preview."
+      "Open a supported file to start the live preview."
     );
   }
 
   const document = editor.document;
   const languageId = document.languageId;
-
   const supportedLanguages = [
     "html",
     "javascript",
@@ -607,7 +396,7 @@ function livePreviewer(context) {
 
   if (!supportedLanguages.includes(languageId)) {
     return vscode.window.showWarningMessage(
-      `Live Preview currently supports HTML (rendering/debugging), JS/TS (execution), Python (simulated execution), and C/Java (local instructions). (Detected: ${languageId})`
+      `Live Preview supports HTML, JS/TS, React/JSX, Python, C, and Java. Detected: ${languageId}`
     );
   }
 
@@ -616,19 +405,12 @@ function livePreviewer(context) {
   } else {
     currentPanel = vscode.window.createWebviewPanel(
       "livePreview",
-      "Live Preview: " + document.fileName.split(/[\\/]/).pop(),
+      `Live Preview: ${path.basename(document.fileName)}`,
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [
-          vscode.Uri.file(path.dirname(document.fileName)),
-          vscode.Uri.file(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''),
-          vscode.Uri.file('C:\\'),
-          vscode.Uri.file('D:\\'),
-          vscode.Uri.file('E:\\'),
-          vscode.Uri.file('F:\\')
-        ]
+        localResourceRoots: getLocalResourceRoots(document.fileName)
       }
     );
 
@@ -640,29 +422,33 @@ function livePreviewer(context) {
       context.subscriptions
     );
   }
+
   const panel = currentPanel;
 
   const updateWebview = async () => {
     const rawCode = document.getText();
+    const { fixedCode, hasError } = await formatCode(
+      rawCode,
+      languageId,
+      document.fileName
+    );
 
-    const { fixedCode, hasError } = await fixCode(rawCode, languageId);
-    
-    let processedCode = fixedCode;
-    if (languageId === 'html') {
-      console.log('Processing HTML for image paths...');
-      console.log('Document path:', document.fileName);
-      processedCode = convertLocalPathsToWebviewUris(fixedCode, panel.webview, document.fileName);
-    }
+    const processedCode =
+      languageId === "html"
+        ? convertLocalPathsToWebviewUris(
+            fixedCode,
+            panel.webview,
+            document.fileName
+          )
+        : fixedCode;
 
-    const webviewContent = getWebviewContent(languageId, processedCode, hasError);
-
-    panel.webview.html = webviewContent;
+    panel.webview.html = getWebviewContent(languageId, processedCode, hasError);
   };
 
   updateWebview();
 
-  const changeListener = vscode.workspace.onDidChangeTextDocument((e) => {
-    if (e.document === document) {
+  const changeListener = vscode.workspace.onDidChangeTextDocument((event) => {
+    if (event.document === document) {
       updateWebview();
     }
   });

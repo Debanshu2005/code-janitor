@@ -1,10 +1,28 @@
-// src/core/ai/ollama-client.js
 const vscode = require("vscode");
+
+let babelParser;
+try {
+  babelParser = require("@babel/parser");
+} catch {
+  babelParser = null;
+}
+
+const AVAILABILITY_CACHE_MS = 15_000;
+const MAX_CODE_LENGTH = 12_000;
+const SUPPORTED_LANGUAGES = new Set([
+  "javascript",
+  "python",
+  "java",
+  "c",
+  "cpp",
+  "html"
+]);
 
 class OllamaClient {
   constructor() {
     this.baseUrl = "http://localhost:11434";
-    this.model = "codellama:latest";
+    this.model = "qwen2.5-coder:1.5b";
+    this._availabilityCache = null;
   }
 
   getConfig() {
@@ -13,146 +31,315 @@ class OllamaClient {
       enabled: config.get("enabled", true),
       baseUrl: config.get("ollamaUrl", this.baseUrl),
       model: config.get("model", this.model),
-      timeout: config.get("timeout", 30000)
+      timeout: config.get("timeout", 20_000)
     };
   }
 
-  async isAvailable() {
+  async isAvailable(forceRefresh = false) {
     const config = this.getConfig();
-    console.log(
-      `🔍 AI Config: enabled=${config.enabled}, url=${config.baseUrl}, model=${config.model}, timeout=${config.timeout}`
-    );
 
     if (!config.enabled) {
-      console.log("❌ AI is disabled in settings");
       return false;
+    }
+
+    const now = Date.now();
+    if (
+      !forceRefresh &&
+      this._availabilityCache &&
+      this._availabilityCache.baseUrl === config.baseUrl &&
+      now - this._availabilityCache.checkedAt < AVAILABILITY_CACHE_MS
+    ) {
+      return this._availabilityCache.available;
     }
 
     try {
-      console.log("🔍 Checking Ollama availability...");
       const response = await fetch(`${config.baseUrl}/api/tags`, {
         method: "GET",
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(Math.min(config.timeout, 5_000))
       });
+
       const available = response.ok;
-      console.log(`✓ Ollama available: ${available}`);
+      this._availabilityCache = {
+        available,
+        baseUrl: config.baseUrl,
+        checkedAt: now
+      };
+
       return available;
     } catch (error) {
-      console.warn("❌ Ollama not available:", error.message);
+      console.warn("Ollama not available:", error.message);
+      this._availabilityCache = {
+        available: false,
+        baseUrl: config.baseUrl,
+        checkedAt: now
+      };
       return false;
     }
+  }
+
+  shouldAttemptAI(originalCode, ruleBasedFix, language) {
+    if (!SUPPORTED_LANGUAGES.has(language)) {
+      return false;
+    }
+
+    const source = (originalCode || "").trim();
+    const candidate = (ruleBasedFix || "").trim();
+    if (!source) {
+      return false;
+    }
+
+    if (source.length > MAX_CODE_LENGTH || candidate.length > MAX_CODE_LENGTH) {
+      return false;
+    }
+
+    if (candidate !== source) {
+      if (
+        language === "javascript" &&
+        this._passesLanguageValidation(source, language) &&
+        this._passesLanguageValidation(candidate, language)
+      ) {
+        return false;
+      }
+
+      return true;
+    }
+
+    return this.looksSyntaxBroken(source, language);
+  }
+
+  looksSyntaxBroken(code, language) {
+    const trimmed = code.trim();
+
+    switch (language) {
+      case "python":
+        return /^(if|elif|else|def|class|for|while|try|except|finally|with)\b(?!.*:)/m.test(
+          trimmed
+        );
+      case "javascript":
+      case "java":
+      case "c":
+      case "cpp":
+        return (
+          /,\s*;/.test(trimmed) ||
+          /\(\s*;/.test(trimmed) ||
+          /(^|\n)\s*(let|const|var|return)\b[^\n;{}]*$/m.test(trimmed)
+        );
+      case "html":
+        return /<[^/!][^>]*$(?![\s\S]*>)/m.test(trimmed);
+      default:
+        return false;
+    }
+  }
+
+  buildPrompt(originalCode, ruleBasedFix, language) {
+    const instructions = {
+      javascript: [
+        "Return only fixed JavaScript code.",
+        "Preserve behavior and existing style.",
+        "Prefer the candidate code if it is already correct.",
+        "Do not add explanations or markdown fences."
+      ],
+      python: [
+        "Return only fixed Python code.",
+        "Fix syntax and indentation errors.",
+        "Prefer the candidate code if it is already correct.",
+        "Do not add explanations or markdown fences."
+      ],
+      java: [
+        "Return only fixed Java code.",
+        "Fix syntax errors with the smallest possible diff.",
+        "Do not add explanations or markdown fences."
+      ],
+      c: [
+        "Return only fixed C code.",
+        "Fix syntax errors with the smallest possible diff.",
+        "Do not add explanations or markdown fences."
+      ],
+      cpp: [
+        "Return only fixed C++ code.",
+        "Fix syntax errors with the smallest possible diff.",
+        "Do not add explanations or markdown fences."
+      ],
+      html: [
+        "Return only fixed HTML.",
+        "Close broken tags and keep the original document structure.",
+        "Do not add explanations or markdown fences."
+      ]
+    };
+
+    const header = (instructions[language] || [
+      `Return only fixed ${language} code.`,
+      "Do not add explanations or markdown fences."
+    ]).join("\n");
+
+    return `${header}
+
+Original code:
+${originalCode}
+
+Candidate code to improve:
+${ruleBasedFix}
+
+Final fixed code:`;
+  }
+
+  extractCode(responseText, fallbackCode) {
+    const text = (responseText || "").trim();
+    if (!text) {
+      return fallbackCode;
+    }
+
+    const fencedMatch = text.match(/```[a-z0-9_-]*\s*([\s\S]*?)```/i);
+    let fixedCode = fencedMatch ? fencedMatch[1].trim() : text;
+
+    if (/^final fixed code\s*:/i.test(fixedCode)) {
+      fixedCode = fixedCode.replace(/^final fixed code\s*:/i, "").trim();
+    }
+
+    if (
+      (fixedCode.startsWith("\"") && fixedCode.endsWith("\"")) ||
+      (fixedCode.startsWith("'") && fixedCode.endsWith("'")) ||
+      (fixedCode.startsWith("`") && fixedCode.endsWith("`"))
+    ) {
+      fixedCode = fixedCode.slice(1, -1);
+    }
+
+    return fixedCode
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, "\"")
+      .replace(/\\'/g, "'");
+  }
+
+  isReasonableFix(originalCode, ruleBasedFix, fixedCode) {
+    if (!fixedCode || fixedCode.trim().length < 3) {
+      return false;
+    }
+
+    if (fixedCode.length > Math.max(originalCode.length, ruleBasedFix.length) * 2) {
+      return false;
+    }
+
+    const fenceCount = (fixedCode.match(/```/g) || []).length;
+    if (fenceCount > 0) {
+      return false;
+    }
+
+    const originalLines = originalCode.split("\n").length;
+    const fixedLines = fixedCode.split("\n").length;
+    if (Math.abs(originalLines - fixedLines) > 25) {
+      return false;
+    }
+
+    if (
+      !this._passesLanguageValidation(fixedCode, this._lastValidationLanguage)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  _passesLanguageValidation(code, language) {
+    if (!language || !code) {
+      return true;
+    }
+
+    if (
+      (language === "javascript" || language === "java" || language === "c" || language === "cpp") &&
+      babelParser &&
+      language === "javascript"
+    ) {
+      try {
+        babelParser.parse(code, {
+          sourceType: "unambiguous",
+          allowReturnOutsideFunction: true,
+          errorRecovery: false,
+          plugins: [
+            "jsx",
+            "typescript",
+            "classProperties",
+            "dynamicImport",
+            "optionalChaining",
+            "nullishCoalescingOperator",
+            "objectRestSpread"
+          ]
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    if (language === "python") {
+      const trimmed = code.trim();
+      if (!trimmed) {
+        return true;
+      }
+
+      const hasJsArtifacts =
+        /\b(var|let|const|function)\b/.test(trimmed) ||
+        /[{};]/.test(trimmed) ||
+        /=>/.test(trimmed);
+
+      const hasBrokenBlocks =
+        /^(if|elif|else|def|class|for|while|try|except|finally|with)\b(?!.*:)/m.test(
+          trimmed
+        ) || /^\s+(return|pass|break|continue)\b/m.test(trimmed) && !/:\s*$/m.test(trimmed);
+
+      return !hasJsArtifacts && !hasBrokenBlocks;
+    }
+
+    return true;
   }
 
   async validateAndFix(originalCode, ruleBasedFix, language) {
     const config = this.getConfig();
+    const safeOriginal = originalCode || "";
+    const safeRuleBased = ruleBasedFix || safeOriginal;
 
     if (!config.enabled) {
       return {
         shouldUseAI: false,
-        fixedCode: ruleBasedFix,
+        fixedCode: safeRuleBased,
         reason: "AI disabled",
         securityIssues: []
       };
     }
 
-    const prompts = {
-      javascript: `Fix syntax errors in this JavaScript code. Add semicolons ONLY where genuinely required.
+    if (!this.shouldAttemptAI(safeOriginal, safeRuleBased, language)) {
+      return {
+        shouldUseAI: false,
+        fixedCode: safeRuleBased,
+        reason: "Rule-based fix is sufficient",
+        securityIssues: []
+      };
+    }
 
-Rules:
-- Add semicolons ONLY where missing them causes syntax errors
-- Do NOT add after: function/class declarations, if/for/while, blocks
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`,
-
-      python: `Fix all possible syntax errors in this Python code.
-
-Rules:
-- Add missing colons after: def, class, if, else, elif, for, while, try, except, finally, with
-- Fix indentation issues
-- Convert JavaScript syntax to Python (true→True, false→False, null→None)
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`,
-
-      java: `Fix all possible syntax errors in this Java code.
-
-Rules:
-- Add missing semicolons at end of statements
-- Fix missing braces
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`,
-
-      c: `Fix all possible syntax errors in this C code.
-
-Rules:
-- Add missing semicolons
-- Fix missing braces
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`,
-
-      cpp: `Fix all possible syntax errors in this C++code.
-
-Rules:
-- Add missing semicolons
-- Fix missing braces
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`,
-
-      html: `Fix all possible syntax errors in this HTML code.
-
-Rules:
-- Close unclosed tags
-- Fix malformed attributes
-- Keep existing style
-
-Code:
-${originalCode}
-
-Fixed code:`
-    };
-
-    const prompt =
-      prompts[language] ||
-      `Fix syntax errors in this ${language} code. Keep existing style.
-
-Code:
-${originalCode}
-
-Fixed code:`;
+    if (!(await this.isAvailable())) {
+      return {
+        shouldUseAI: false,
+        fixedCode: safeRuleBased,
+        reason: "Ollama unavailable",
+        securityIssues: []
+      };
+    }
 
     try {
-      console.log(`🤖 Sending AI validation request for ${language}...`);
+      this._lastValidationLanguage = language;
       const response = await fetch(`${config.baseUrl}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(config.timeout),
         body: JSON.stringify({
           model: config.model,
-          prompt: prompt,
+          prompt: this.buildPrompt(safeOriginal, safeRuleBased, language),
           stream: false,
           options: {
-            temperature: 0.2,
-            num_predict: 1024,
-            top_k: 40,
-            top_p: 0.9
+            temperature: 0,
+            num_predict: Math.min(768, Math.max(256, safeRuleBased.length / 4)),
+            top_k: 20,
+            top_p: 0.8
           }
         })
       });
@@ -162,76 +349,33 @@ Fixed code:`;
       }
 
       const data = await response.json();
-      let fixedCode = data.response.trim();
-
-      // Remove code block wrappers if present
-      fixedCode = fixedCode
-        .replace(/^```[a-z]*\n?/i, "")
-        .replace(/\n?```$/, "");
-
-      // Remove quotes if AI wrapped entire code in quotes
-      if (
-        (fixedCode.startsWith("'") && fixedCode.endsWith("'")) ||
-        (fixedCode.startsWith('"') && fixedCode.endsWith('"')) ||
-        (fixedCode.startsWith("`") && fixedCode.endsWith("`"))
-      ) {
-        fixedCode = fixedCode.slice(1, -1);
-      }
-
-      // Unescape if needed
-      fixedCode = fixedCode
-        .replace(/\\n/g, "\n")
-        .replace(/\\t/g, "\t")
-        .replace(/\\'/g, "'")
-        .replace(/\\"/g, '"');
-
-      // Validate output - reject if AI added too many semicolons
-      const originalSemicolons = (originalCode.match(/;/g) || []).length;
-      const fixedSemicolons = (fixedCode.match(/;/g) || []).length;
-      const semicolonDiff = fixedSemicolons - originalSemicolons;
-
-      const originalLines = originalCode.split("\n").length;
-      const fixedLines = fixedCode.split("\n").length;
-      const lineDiff = Math.abs(originalLines - fixedLines);
-
-      // Reject if AI added more than 2 semicolons
-      if (semicolonDiff > 2) {
-        console.warn(`⚠️ AI added ${semicolonDiff} semicolons, rejecting`);
-        return {
-          shouldUseAI: false,
-          fixedCode: originalCode, // Use original, not rule-based
-          reason: "AI made too many changes",
-          securityIssues: []
-        };
-      }
+      const fixedCode = this.extractCode(data.response, safeRuleBased);
 
       if (
-        fixedCode &&
-        fixedCode.length > 10 &&
-        fixedCode !== originalCode &&
-        lineDiff < 5
+        fixedCode !== safeOriginal &&
+        fixedCode !== safeRuleBased &&
+        this.isReasonableFix(safeOriginal, safeRuleBased, fixedCode)
       ) {
-        console.log(`✓ AI fixed code successfully`);
         return {
           shouldUseAI: true,
-          fixedCode: fixedCode,
-          reason: "AI fixed syntax",
+          fixedCode,
+          reason: "AI improved the candidate fix",
           securityIssues: []
         };
       }
 
       return {
         shouldUseAI: false,
-        fixedCode: ruleBasedFix,
-        reason: "No changes needed",
+        fixedCode: safeRuleBased,
+        reason: "AI response was not better than the candidate fix",
         securityIssues: []
       };
     } catch (error) {
-      console.error("❌ AI validation failed:", error.message);
+      console.warn("AI validation failed:", error.message);
       return {
         shouldUseAI: false,
-        fixedCode: ruleBasedFix,
-        reason: "AI unavailable",
+        fixedCode: safeRuleBased,
+        reason: "AI request failed",
         securityIssues: []
       };
     }
@@ -239,32 +383,34 @@ Fixed code:`;
 
   parseSecurityResponse(response, fallbackCode) {
     try {
-      // Try multiple extraction strategies
       let parsed = null;
 
-      // Strategy 1: Extract JSON between ```json and ```
       const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (codeBlockMatch) {
         try {
           parsed = JSON.parse(codeBlockMatch[1].trim());
-        } catch (e) {}
+        } catch (parseError) {
+          // Ignore invalid JSON blocks and fall through to the next strategy.
+        }
       }
 
-      // Strategy 2: Find first complete JSON object
       if (!parsed) {
         const jsonMatch = response.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
         if (jsonMatch) {
           try {
             parsed = JSON.parse(jsonMatch[0]);
-          } catch (e) {}
+          } catch (parseError) {
+            // Ignore partial JSON fragments.
+          }
         }
       }
 
-      // Strategy 3: Try parsing entire response
       if (!parsed) {
         try {
           parsed = JSON.parse(response.trim());
-        } catch (e) {}
+        } catch (parseError) {
+          // Ignore non-JSON responses.
+        }
       }
 
       if (parsed && parsed.fixedCode) {
@@ -279,7 +425,6 @@ Fixed code:`;
         };
       }
 
-      console.warn("AI response format invalid:", response.substring(0, 200));
       return {
         shouldUseAI: false,
         fixedCode: fallbackCode,
@@ -287,11 +432,10 @@ Fixed code:`;
         securityIssues: []
       };
     } catch (error) {
-      console.warn("Failed to parse AI security response:", error.message);
       return {
         shouldUseAI: false,
         fixedCode: fallbackCode,
-        reason: "Parse error",
+        reason: `Parse error: ${error.message}`,
         securityIssues: []
       };
     }
@@ -304,32 +448,9 @@ Fixed code:`;
         return JSON.parse(jsonMatch[0]);
       }
       return [];
-    } catch (error) {
-      console.warn("Failed to parse AI response");
+    } catch {
       return [];
     }
-  }
-
-  async enhanceFixer(code, language, existingIssues = []) {
-    const aiIssues = await this.analyzeSyntax(code, language);
-
-    if (!aiIssues || aiIssues.length === 0) {
-      return existingIssues;
-    }
-
-    const combined = [...existingIssues];
-
-    for (const aiIssue of aiIssues) {
-      const isDuplicate = existingIssues.some(
-        (existing) => existing.line === aiIssue.line
-      );
-
-      if (!isDuplicate) {
-        combined.push(aiIssue);
-      }
-    }
-
-    return combined;
   }
 }
 

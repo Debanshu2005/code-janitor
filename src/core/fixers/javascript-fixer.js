@@ -1,39 +1,21 @@
-const fs = require("fs").promises;
-const path = require("path");
-// Babel dependencies with fallback
-let parser, traverse, generate, t;
+const FormatterPaths = require("../formatter-paths");
+const BaseFixer = require("./base-fixer");
+
+let parser;
 try {
   parser = require("@babel/parser");
-  traverse = require("@babel/traverse").default;
-  generate = require("@babel/generator").default;
-  t = require("@babel/types");
 } catch (error) {
   console.warn(
-    "Babel dependencies not found, AST transformations will be disabled:",
+    "Babel parser not found, JavaScript syntax validation will be limited:",
     error.message
   );
-  parser = traverse = generate = t = null;
+  parser = null;
 }
 
-// ESLint with fallback
-let ESLint;
-try {
-  ESLint = require("eslint").ESLint;
-} catch (error) {
-  console.warn("ESLint not available, skipping ESLint fixes:", error.message);
-  ESLint = null;
-}
-const FormatterPaths = require("../formatter-paths");
-
-// Use FormatterPaths to get prettier module
 let prettier;
 try {
   const prettierPath = FormatterPaths.getPrettierModule();
-  if (prettierPath) {
-    prettier = require(prettierPath);
-  } else {
-    prettier = null;
-  }
+  prettier = prettierPath ? require(prettierPath) : null;
 } catch (error) {
   console.warn(
     "Prettier not found, JavaScript formatting will be limited:",
@@ -41,260 +23,183 @@ try {
   );
   prettier = null;
 }
-const BaseFixer = require("./base-fixer");
 
-/**;
- * JavaScriptFixer attempts to format and fix common JavaScript syntax errors;
- * using a multi-strategy approach: Preprocessing, Babel AST transformation, and Prettier.
- */
 class JavaScriptFixer extends BaseFixer {
-  /**
-   * Analyzes the code using a robust pipeline: Typos -> Preprocessing ->
-   * AST (Structure) -> ESLint -> Prettier (Style).
-   */
   async analyze() {
     console.log("Analyzing JavaScript file:", this.filePath);
 
+    const originalCode = this.code;
+    if (!originalCode || !originalCode.trim()) {
+      return {
+        success: true,
+        fixedCode: originalCode,
+        appliedFixes: 0,
+        message: "Empty file."
+      };
+    }
+
     try {
-      let finalCode = this.code;
+      const originalIsValid = this._isParsable(originalCode);
+      let candidateCode = originalCode;
 
-      // Step 1: Fix common typos
-      finalCode = this._fixCommonTypos(finalCode);
-
-      // Step 2: Basic syntax repairs
-      finalCode = this._repairParserBreakingSyntax(finalCode);
-
-      // Step 3: Use Prettier for formatting but preserve semicolon style
-      try {
-        const prettierResult = await this._runPrettier(finalCode);
-        finalCode = prettierResult;
-      } catch (error) {
-        console.warn(`Prettier failed: ${error.message}. Skipping formatting.`);
+      if (originalIsValid) {
+        candidateCode = await this._formatIfPossible(originalCode);
+      } else {
+        candidateCode = await this._repairInvalidCode(originalCode);
       }
 
-      if (finalCode.trim() !== this.code.trim()) {
-        this.addFix(0, this.code.length, finalCode);
+      if (
+        candidateCode &&
+        candidateCode !== originalCode &&
+        (originalIsValid || this._isParsable(candidateCode))
+      ) {
+        this.addFix(0, originalCode.length, candidateCode);
+      } else {
+        candidateCode = originalCode;
       }
+
+      return {
+        success: true,
+        fixedCode: candidateCode,
+        appliedFixes: candidateCode === originalCode ? 0 : 1,
+        message:
+          candidateCode === originalCode
+            ? "No safe JavaScript fixes found."
+            : "Applied safe JavaScript fixes."
+      };
     } catch (error) {
       console.error(`Error during JavaScript analysis: ${error.message}`);
+      return {
+        success: false,
+        fixedCode: originalCode,
+        appliedFixes: 0,
+        message: error.message
+      };
     }
   }
 
-  /**
-   * Fixes common JavaScript keyword typos using simple regex replacements.
-   */
-  _fixCommonTypos(code) {
-    if (!code || code.trim() === "") {
-      return code;
+  _getParserPlugins() {
+    return [
+      "jsx",
+      "typescript",
+      "classProperties",
+      "classPrivateProperties",
+      "classPrivateMethods",
+      "dynamicImport",
+      "optionalChaining",
+      "nullishCoalescingOperator",
+      "objectRestSpread",
+      "topLevelAwait",
+      "decorators-legacy"
+    ];
+  }
+
+  _getParserOptions() {
+    return {
+      sourceType: "unambiguous",
+      allowReturnOutsideFunction: true,
+      errorRecovery: false,
+      plugins: this._getParserPlugins()
+    };
+  }
+
+  _isParsable(code) {
+    if (!parser) {
+      return true;
     }
 
-    let processed = code;
+    try {
+      parser.parse(code, this._getParserOptions());
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
-    // Map of common typo replacements {typo: correct}
-    const typoMap = {
-      function: "function",
-      return: "return",
-      console: "console",
-      length: "length",
-      width: "width",
-      height: "height",
-      default: "default",
-      while: "while",
-      switch: "switch",
-      import: "import",
-      export: "export",
-      const: "const",
-      class: "class",
-      else: "else",
-      true: "true",
-      false: "false"
+  async _repairInvalidCode(code) {
+    const attempts = [];
+    const addAttempt = (value) => {
+      if (value && !attempts.includes(value)) {
+        attempts.push(value);
+      }
     };
 
-    for (const typo in typoMap) {
-      // Use word boundaries (\b) to ensure we only replace the whole word typo
-      const regex = new RegExp(`\\b${typo}\\b`, "g");
-      processed = processed.replace(regex, typoMap[typo]);
-    }
+    addAttempt(this._applySafeSyntaxRepairs(code));
+    addAttempt(this._normalizeBrokenPunctuation(code));
+    addAttempt(
+      this._normalizeBrokenPunctuation(this._applySafeSyntaxRepairs(code))
+    );
 
-    return processed;
-  }
-
-  /**
-   * Runs ESLint's auto-fix feature on the code.
-   */
-  async _runESLintFix(code) {
-    if (!ESLint) {
-      console.warn("ESLint not available, skipping ESLint fixes");
-      return code;
-    }
-
-    try {
-      // Initialize ESLint with a baseConfig
-      const eslint = new ESLint({
-        fix: true,
-        useEslintrc: true,
-        cwd: path.dirname(this.filePath),
-        baseConfig: {
-          env: {
-            browser: true,
-            node: true,
-            es6: true
-          },
-          parserOptions: {
-            ecmaVersion: 2021,
-            sourceType: "module"
-          },
-          rules: {
-            semi: ["error", "always"],
-            indent: ["error", 2, { SwitchCase: 1 }],
-            "no-unused-vars": "warn",
-            "no-undef": "error"
-          }
-        }
-      });
-
-      const results = await eslint.lintText(code, { filePath: this.filePath });
-
-      if (results.length > 0 && results[0].output) {
-        return results[0].output;
+    for (const attempt of attempts) {
+      if (!attempt || attempt === code) {
+        continue;
       }
 
-      return code;
-    } catch (error) {
-      console.warn(
-        `ESLint fix failed, returning original code: ${error.message}`
-      );
-      return code;
+      if (!this._isParsable(attempt)) {
+        continue;
+      }
+
+      return this._formatIfPossible(attempt);
     }
+
+    return code;
   }
 
-  /**
-   * Applies minimal, low-risk syntax fixes and removes unwanted semicolons.
-   */
-  _repairParserBreakingSyntax(code) {
-    if (!code || code.trim() === "") {
-      return code;
-    }
-
+  _applySafeSyntaxRepairs(code) {
     let processed = code;
 
-    // Fix arrow functions with space between = and >
     processed = processed.replace(/=\s*>/g, "=>");
-    processed = processed.replace(/\+\s*\+\s*/g, "++");
+    processed = processed.replace(/\+\s+\+/g, "++");
+    processed = processed.replace(/-\s+-/g, "--");
 
-    // Remove only problematic semicolons that break syntax
-    processed = processed.replace(/,\s*;/g, ","); // Remove semicolons after commas
-    processed = processed.replace(/\(\s*;/g, "("); // Remove semicolons after opening parentheses
-    processed = processed.replace(/;(\s*[\)\}])/g, "$1"); // Remove semicolons before closing brackets
+    processed = processed.replace(/,\s*;/g, ",");
+    processed = processed.replace(/\(\s*;/g, "(");
+    processed = processed.replace(/;(\s*[)}\]])/g, "$1");
 
-    // ONLY remove trailing commas that are clearly syntax errors
-    // Don't remove commas between valid array/object elements
-    processed = processed.replace(/,\s*([\)\}\]])(?!\s*[:])/g, "$1"); // Trailing comma before closing bracket
-    processed = processed.replace(/\{\s*,/g, "{"); // Comma right after opening brace
-    processed = processed.replace(/\[\s*,/g, "["); // Comma right after opening bracket
+    processed = processed.replace(/,\s*([)}\]])/g, "$1");
+    processed = processed.replace(/\{\s*,/g, "{");
+    processed = processed.replace(/\[\s*,/g, "[");
 
     return processed;
   }
 
-  /**
-   * Uses the Babel AST to perform structural code transformations.
-   */
-  async _robustParseWithAST(code) {
-    if (!parser || !traverse || !generate || !t) {
-      console.warn(
-        "Babel dependencies not available, skipping AST transformations"
-      );
-      return null;
-    }
+  _normalizeBrokenPunctuation(code) {
+    const lines = code.split("\n");
+    const fixedLines = [];
 
-    try {
-      const ast = parser.parse(code, {
-        sourceType: "unambiguous",
-        plugins: ["jsx", "typescript"],
-        errorRecovery: true
-      });
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const trimmed = line.trim();
 
-      // Transform the AST to fix structural issues
-      traverse(ast, {
-        // Convert var to const or let based on usage
-        VariableDeclaration(path) {
-          if (path.node.kind === "var") {
-            let allCanBeConst = true;
-            for (const decl of path.node.declarations) {
-              const binding = path.scope.getBinding(decl.id.name);
+      if (!trimmed) {
+        fixedLines.push(line);
+        continue;
+      }
 
-              // 1. Must have an initializer to be const
-              if (!decl.init) {
-                allCanBeConst = false;
-                break;
-              }
-
-              // 2. If the binding exists and has constant violations (reassignments), it must be 'let'
-              if (binding && binding.constantViolations.length > 0) {
-                allCanBeConst = false;
-                break;
-              }
-            }
-            // Use const if no violations found, otherwise use let
-            path.node.kind = allCanBeConst ? "const" : "let";
-          }
-        },
-
-        // Add block statements for control structures missing braces
-        "IfStatement|ForStatement|WhileStatement|DoWhileStatement|ForInStatement|ForOfStatement"(
-          path
+      if (
+        /^(const|let|var|return|throw|yield)\b/.test(trimmed) &&
+        !/[;,{([]\s*$/.test(trimmed) &&
+        index < lines.length - 1
+      ) {
+        const nextTrimmed = lines[index + 1].trim();
+        if (
+          nextTrimmed &&
+          /^[\]),}]/.test(nextTrimmed) &&
+          !trimmed.endsWith(",")
         ) {
-          const node = path.node;
-
-          const wrapStatementInBlock = (statement, isAlternate = false) => {
-            if (
-              t.isBlockStatement(statement) ||
-              t.isEmptyStatement(statement)
-            ) {
-              return statement;
-            }
-            if (t.isIfStatement(statement) && isAlternate) {
-              // Allows for 'else if (...)' structure
-              return statement;
-            }
-            return t.blockStatement([statement]);
-          };
-
-          if (t.isIfStatement(node)) {
-            node.consequent = wrapStatementInBlock(node.consequent, false);
-            if (node.alternate) {
-              node.alternate = wrapStatementInBlock(node.alternate, true);
-            }
-          } else {
-            if (node.body) {
-              node.body = wrapStatementInBlock(node.body, false);
-            }
-          }
+          fixedLines.push(`${line},`);
+          continue;
         }
-      });
+      }
 
-      // Generate code from the fixed AST
-      const output = generate(ast, {
-        retainLines: true,
-        concise: false,
-        comments: true,
-        compact: false,
-        semicolons: true
-      });
-
-      return output.code;
-    } catch (error) {
-      console.warn("AST parsing failed:", error.message);
-      return null;
+      fixedLines.push(line);
     }
+
+    return fixedLines.join("\n");
   }
 
-  /**
-   * Uses the direct Prettier Node.js API to format the code in-memory.
-   */
-  async _runPrettier(code) {
+  async _formatIfPossible(code) {
     if (!prettier) {
-      console.warn("Prettier not available, skipping formatting");
       return code;
     }
 
@@ -303,20 +208,25 @@ class JavaScriptFixer extends BaseFixer {
         ? "typescript"
         : "babel";
 
-    const config = (await prettier.resolveConfig(this.filePath)) || {};
-
     try {
-      const formattedCode = prettier.format(code, {
+      const config =
+        this.filePath && prettier.resolveConfig
+          ? (await prettier.resolveConfig(this.filePath)) || {}
+          : {};
+
+      return await prettier.format(code, {
         ...config,
-        filepath: this.filePath,
+        filepath: this.filePath || undefined,
         parser: config.parser || parserName,
-        semi: false, // Disable automatic semicolon addition
-        trailingComma: "none",
-        printWidth: 80
+        semi: typeof config.semi === "boolean" ? config.semi : false,
+        trailingComma: config.trailingComma || "none",
+        printWidth: config.printWidth || 80
       });
-      return formattedCode;
     } catch (error) {
-      throw new Error(error.message);
+      console.warn(
+        `Prettier failed for ${this.filePath || "buffer"}: ${error.message}`
+      );
+      return code;
     }
   }
 

@@ -66,7 +66,9 @@ async function runFixerAndApply(document, editor = null) {
     }
 
     let fixedCode = code
-    if (result && result.formatted) {
+    if (result && typeof result.fixedCode === "string") {
+      fixedCode = result.fixedCode
+    } else if (result && result.formatted) {
       fixedCode = result.formatted
     } else if (fixer.applyFixes) {
       fixedCode = fixer.applyFixes()
@@ -78,7 +80,10 @@ async function runFixerAndApply(document, editor = null) {
     const isFixerFile =
       fileName.includes("\\fixers\\") || fileName.includes("/fixers/")
     const ollamaClient = new OllamaClient()
-    if (!isFixerFile && (await ollamaClient.isAvailable())) {
+    const shouldSkipAI = result && result.skipAI === true
+    const shouldTryAI = !shouldSkipAI || (result && result.shouldTryAI === true)
+
+    if (!isFixerFile && shouldTryAI && (await ollamaClient.isAvailable())) {
       const language =
         document.languageId === "javascriptreact"
           ? "javascript"
@@ -96,7 +101,11 @@ async function runFixerAndApply(document, editor = null) {
       ]
       if (supportedLanguages.includes(language)) {
         console.log(`🤖 Using AI-only fixing for ${language}...`)
-        const aiResult = await ollamaClient.validateAndFix(code, code, language)
+        const aiResult = await ollamaClient.validateAndFix(
+          code,
+          fixedCode,
+          language
+        )
         if (aiResult && aiResult.shouldUseAI) {
           console.log(`🤖 AI fixed code: ${aiResult.reason}`)
           fixedCode = aiResult.fixedCode

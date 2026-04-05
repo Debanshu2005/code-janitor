@@ -1,52 +1,42 @@
-// src/core/fixers/python-fixer.js
-
-const BaseFixer = require("./base-fixer");
-const FormatterPaths = require('../formatter-paths');
-const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { spawn } = require("child_process");
 
-function _spawnCommand(command, args, options) {
+const BaseFixer = require("./base-fixer");
+const FormatterPaths = require("../formatter-paths");
+
+function spawnCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { input, timeout = 20000, verbose, logError } = options;
-
-    if (verbose) {
-      console.log(`[Spawn] Running: ${command} ${args.join(" ")}`);
-    }
-
-    const child = spawn(command, args, { timeout: timeout });
+    const { input = "", timeout = 20_000, verbose = false } = options;
+    const child = spawn(command, args, { timeout });
 
     let stdout = "";
     let stderr = "";
 
+    if (verbose) {
+      console.log(`[Spawn] ${command} ${args.join(" ")}`);
+    }
+
     child.stdout.on("data", (data) => {
       stdout += data.toString();
     });
+
     child.stderr.on("data", (data) => {
       stderr += data.toString();
     });
 
-    child.stdin.write(input, (err) => {
-      if (err && logError) {
-        console.error(`[Spawn] Error writing to stdin: ${err.message}`);
-      }
-      child.stdin.end();
+    child.on("error", (error) => {
+      reject(error);
     });
 
     child.on("close", (code) => {
-      if (verbose) {
-        console.log(`[Spawn] Process closed with code ${code}.`);
-      }
       resolve({ exitCode: code, stdout, stderr });
     });
 
-    child.on("error", (err) => {
-      if (logError) {
-        console.error(`[Spawn] Process error: ${err.message}`);
-      }
-      reject(new Error(`Failed to execute command: ${command}. Error: ${err.message}`));
-    });
+    if (child.stdin) {
+      child.stdin.end(input);
+    }
   });
 }
 
@@ -55,22 +45,24 @@ class PythonFixer extends BaseFixer {
     super(code, filePath);
     this.options = options;
     this.pythonExecutable = this._getBundledPythonPath();
-
-    if (this.options.verbose) {
-      console.log(`PythonFixer initialized. Using executable: ${this.pythonExecutable}`);
-    }
   }
 
   _getBundledPythonPath() {
     const platform = os.platform();
-    const venvPath = path.join(__dirname, "..", "..", "..", "formatters", "python-formatters", "venv");
+    const venvPath = path.join(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "formatters",
+      "python-formatters",
+      "venv"
+    );
 
-    let bundledPython;
-    if (platform === "win32") {
-      bundledPython = path.join(venvPath, "Scripts", "python.exe");
-    } else {
-      bundledPython = path.join(venvPath, "bin", "python");
-    }
+    const bundledPython =
+      platform === "win32"
+        ? path.join(venvPath, "Scripts", "python.exe")
+        : path.join(venvPath, "bin", "python");
 
     if (fs.existsSync(bundledPython)) {
       return bundledPython;
@@ -79,361 +71,253 @@ class PythonFixer extends BaseFixer {
     return platform === "win32" ? "python" : "python3";
   }
 
-    async analyze(options = {}) {
+  async analyze(options = {}) {
     const originalCode = this.code || "";
     const isRealTime = options.realTime || false;
 
-    try {
-      // For real-time auto-correction, use only fast inline fixes
-      if (isRealTime) {
-        return this._tryInlineFixes(originalCode);
-      }
-      
-      // For manual fixes, use full processing
-      const inlineResult = this._tryInlineFixes(originalCode);
-      
-      if (inlineResult.success && this._isPurePython(inlineResult.fixedCode)) {
-        const autopep8Result = await this._tryAutopep8(inlineResult.fixedCode);
-        if (autopep8Result.success) {
-          return autopep8Result;
-        }
-      }
-      
-      if (inlineResult.success) {
-        return inlineResult;
-      }
-
-      const scriptPath = path.join(__dirname, "python-syntax-fixer.py");
-      
-      if (!fs.existsSync(scriptPath)) {
-        this._createPythonScript(scriptPath);
-      }
-
-      const result = await _spawnCommand(this.pythonExecutable, [scriptPath], {
-        timeout: 30000,
-        input: originalCode,
-        verbose: this.options.verbose,
-        logError: true
+    if (!originalCode.trim()) {
+      return this._buildResult(originalCode, originalCode, {
+        message: "Empty file.",
+        skipAI: true
       });
+    }
 
-      if (result.exitCode !== 0) {
-        return inlineResult;
+    try {
+      const originalIsValid = await this._isValidPython(originalCode);
+
+      if (isRealTime) {
+        if (originalIsValid) {
+          return this._buildResult(originalCode, originalCode, {
+            message: "Valid Python, skipping real-time fix.",
+            skipAI: true
+          });
+        }
+
+        const quickCandidate = this._applySafeInlineFixes(originalCode);
+        const quickIsValid = await this._isValidPython(quickCandidate);
+        return this._buildResult(originalCode, quickIsValid ? quickCandidate : originalCode, {
+          message: quickIsValid
+            ? "Applied safe inline Python fixes."
+            : "Could not safely repair Python in real time.",
+          skipAI: !quickIsValid,
+          shouldTryAI: !quickIsValid
+        });
       }
 
-      const fixedCode = result.stdout.trim();
-      const appliedFixes = originalCode !== fixedCode ? 1 : 0;
+      if (originalIsValid) {
+        const formatted = await this._formatValidPython(originalCode);
+        return this._buildResult(originalCode, formatted, {
+          message:
+            formatted === originalCode
+              ? "Valid Python, no changes needed."
+              : "Formatted valid Python safely.",
+          skipAI: true
+        });
+      }
 
-      return {
-        success: true,
-        fixedCode: fixedCode,
-        appliedFixes: appliedFixes,
-        message: appliedFixes > 0 ? "Code successfully fixed and formatted." : "No syntax errors found or changes applied."
-      };
+      const ruleBasedCandidate = await this._repairInvalidPython(originalCode);
+      const candidateIsValid = await this._isValidPython(ruleBasedCandidate);
+
+      if (candidateIsValid) {
+        const formattedCandidate = await this._formatValidPython(ruleBasedCandidate);
+        return this._buildResult(originalCode, formattedCandidate, {
+          message: "Repaired invalid Python with rule-based fixes.",
+          skipAI: true
+        });
+      }
+
+      return this._buildResult(originalCode, originalCode, {
+        message: "Rule-based Python fix could not produce valid syntax.",
+        skipAI: false,
+        shouldTryAI: true
+      });
     } catch (error) {
-      console.error(`❌ Python Fixer Error: ${error.message}`);
-      return this._tryInlineFixes(originalCode);
+      console.error(`Python Fixer Error: ${error.message}`);
+      return this._buildResult(originalCode, originalCode, {
+        message: `Python fixer failed: ${error.message}`,
+        skipAI: false,
+        shouldTryAI: true
+      });
     }
   }
 
-  async _tryAutopep8(code) {
+  _buildResult(originalCode, fixedCode, extra = {}) {
+    if (fixedCode !== originalCode) {
+      this.clearFixes();
+      this.addFix(0, originalCode.length, fixedCode);
+    } else {
+      this.clearFixes();
+    }
+
+    return {
+      success: true,
+      fixedCode,
+      appliedFixes: fixedCode === originalCode ? 0 : 1,
+      skipAI: extra.skipAI ?? fixedCode === originalCode,
+      shouldTryAI: extra.shouldTryAI ?? false,
+      message: extra.message || "Python analysis complete."
+    };
+  }
+
+  async _isValidPython(code) {
     try {
-      const autopep8Path = FormatterPaths.getAutopep8Path();
-      
-      const result = await _spawnCommand(autopep8Path, ['-'], {
-        timeout: 15000,
+      const result = await spawnCommand(
+        this.pythonExecutable,
+        ["-c", "import ast,sys; ast.parse(sys.stdin.read())"],
+        {
+          input: code,
+          timeout: 10_000,
+          verbose: this.options.verbose
+        }
+      );
+
+      return result.exitCode === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async _formatValidPython(code) {
+    const autopep8Path = FormatterPaths.getAutopep8Path();
+
+    try {
+      const result = await spawnCommand(autopep8Path, ["-"], {
         input: code,
-        verbose: this.options.verbose,
-        logError: false
+        timeout: 15_000,
+        verbose: this.options.verbose
       });
 
       if (result.exitCode === 0 && result.stdout.trim()) {
-        const formattedCode = result.stdout.trim();
-        const appliedFixes = code !== formattedCode ? 1 : 0;
-        
-        return {
-          success: true,
-          fixedCode: formattedCode,
-          appliedFixes: appliedFixes,
-          message: "Code fixed and formatted with autopep8."
-        };
+        return result.stdout.replace(/\r\n/g, "\n").trimEnd();
       }
     } catch (error) {
       if (this.options.verbose) {
         console.warn(`autopep8 formatting failed: ${error.message}`);
       }
     }
-    
-    return { success: false };
+
+    return code;
   }
 
-  _tryInlineFixes(code) {
-    let fixedCode = code;
-    let fixesApplied = 0;
-    const originalCode = code;
-
-    try {
-      const colonFixed = this._fixMissingColons(fixedCode);
-      if (colonFixed !== fixedCode) {
-        fixedCode = colonFixed;
-        fixesApplied++;
+  async _repairInvalidPython(code) {
+    const attempts = [];
+    const pushAttempt = (value) => {
+      if (value && !attempts.includes(value)) {
+        attempts.push(value);
       }
+    };
 
-      const printFixed = this._fixPrintStatements(fixedCode);
-      if (printFixed !== fixedCode) {
-        fixedCode = printFixed;
-        fixesApplied++;
-      }
+    pushAttempt(this._applySafeInlineFixes(code));
+    pushAttempt(this._convertLikelyJavaScriptArtifacts(code));
+    pushAttempt(
+      this._applySafeInlineFixes(this._convertLikelyJavaScriptArtifacts(code))
+    );
 
-      const syntaxFixed = this._fixCommonSyntaxErrors(fixedCode);
-      if (syntaxFixed !== fixedCode) {
-        fixedCode = syntaxFixed;
-        fixesApplied++;
-      }
-
-      const indentFixed = this._fixIndentation(fixedCode);
-      if (indentFixed !== fixedCode) {
-        fixedCode = indentFixed;
-        fixesApplied++;
-      }
-
-      if (originalCode !== fixedCode) {
-        fixesApplied = Math.max(1, fixesApplied);
-      }
-
-      return {
-        success: true,
-        fixedCode: fixedCode,
-        appliedFixes: fixesApplied,
-        message: fixesApplied > 0 ? "Applied inline syntax fixes." : "No issues found."
-      };
-    } catch (error) {
-      return {
-        success: false,
-        fixedCode: code,
-        appliedFixes: 0,
-        message: `Inline fixing failed: ${error.message}`
-      };
-    }
-  }
-
-  _fixIndentation(code) {
-    const lines = code.split('\n');
-    const fixedLines = [];
-    let indentLevel = 0;
-    const indentSize = 4;
-    let inClass = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      
-      if (!trimmed || trimmed.startsWith('#')) {
-        fixedLines.push(line);
+    for (const attempt of attempts) {
+      if (attempt === code) {
         continue;
       }
 
-      if (/^class\s+/.test(trimmed)) {
-        indentLevel = 0;
-        inClass = true;
-      }
-      else if (inClass && /^def\s+/.test(trimmed)) {
-        indentLevel = 1;
-      }
-      else if (/^(elif|else|except|finally)\b/.test(trimmed)) {
-        indentLevel = Math.max(0, indentLevel - 1);
-      }
-      else if (!inClass && /^def\s+/.test(trimmed)) {
-        indentLevel = 0;
-        inClass = false;
-      }
-
-      const properIndent = ' '.repeat(indentLevel * indentSize);
-      fixedLines.push(properIndent + trimmed);
-
-      if (trimmed.endsWith(':')) {
-        indentLevel++;
-      }
-      
-      if (!trimmed.startsWith(' ') && !trimmed.endsWith(':') && !/^(class|def)\s+/.test(trimmed)) {
-        if (indentLevel === 0) {
-          inClass = false;
-        }
+      if (await this._isValidPython(attempt)) {
+        return attempt;
       }
     }
 
-    return fixedLines.join('\n');
+    return code;
   }
 
-  _fixMissingColons(code) {
-    const lines = code.split('\n');
-    const fixedLines = lines.map(line => {
-      const trimmed = line.trim();
-      
-      if (!trimmed || trimmed.startsWith('#')) {
-        return line;
-      }
-      
-      if (/^(if|elif|else|def|class|for|while|try|except|finally|with)\b/.test(trimmed)) {
-        if (!trimmed.endsWith(':') && !trimmed.includes('#')) {
-          if (/^def\s+.*\(.*\)\s*$/.test(trimmed)) {
-            return line.replace(trimmed, trimmed + ':');
-          }
-          else if (!/^def\s+.*\($/.test(trimmed)) {
-            return line.replace(trimmed, trimmed + ':');
-          }
-        }
-      }
-      
-      return line;
-    });
-    
-    return fixedLines.join('\n');
-  }
-
-  _fixPrintStatements(code) {
-    return code.replace(/^(\s*)print\s+([^\(\n]+)$/gm, '$1print($2)');
-  }
-
-  _fixCommonSyntaxErrors(code) {
+  _applySafeInlineFixes(code) {
     let fixed = code;
-    
-    // Remove JavaScript keywords
-    fixed = fixed.replace(/^(\s*)(var|let|const|function)\s+/gm, '$1');
-    
-    // Fix arrow functions before processing lines
-    fixed = fixed.replace(/(\w+)\s*=>\s*([^\n{]+)$/gm, '$1 = $2');
-    fixed = fixed.replace(/(\([^)]*\))\s*=>\s*([^\n{]+)$/gm, '$1 = $2');
-    
-    // Process line by line to handle braces properly
-    const lines = fixed.split('\n');
-    const fixedLines = [];
-    
-    for (const line of lines) {
-      let processedLine = line;
-      const trimmed = line.trim();
-      
-      // Skip lines that are just closing braces or catch/finally patterns
-      if (trimmed === '}' || trimmed.startsWith('} catch') || trimmed.startsWith('} finally') || trimmed.startsWith('} else')) {
-        if (trimmed.startsWith('} catch')) {
-          const indent = line.match(/^\s*/)[0];
-          const catchPart = trimmed.replace(/^}\s*catch\s*\(([^)]*)\)\s*\{?/, 'except $1:');
-          processedLine = indent + catchPart;
-        }
-        else if (trimmed.startsWith('} finally')) {
-          const indent = line.match(/^\s*/)[0];
-          processedLine = indent + 'finally:';
-        }
-        else if (trimmed.startsWith('} else')) {
-          const indent = line.match(/^\s*/)[0];
-          processedLine = indent + 'else:';
-        }
-        else {
-          continue; // Skip standalone closing braces
-        }
-      }
-      // Handle opening braces - replace { or {: with :
-      else if (trimmed.endsWith(' {') || trimmed.endsWith('{') || trimmed.endsWith(' {:') || trimmed.endsWith('{:')) {
-        processedLine = line.replace(/\s*\{:?\s*$/, ':');
-      }
-      // Handle remaining arrow functions with braces
-      else if (trimmed.includes('=>') && trimmed.endsWith('{')) {
-        processedLine = processedLine.replace(/\s*=>\s*\{\s*$/, ':');
-      }
-      
-      fixedLines.push(processedLine);
-    }
-    
-    fixed = fixedLines.join('\n');
-    
-    // Fix assignment operators
-    fixed = fixed.replace(/===/g, '==');
-    fixed = fixed.replace(/!==/g, '!=');
-    
-    // Fix boolean values
-    fixed = fixed.replace(/\btrue\b/g, 'True');
-    fixed = fixed.replace(/\bfalse\b/g, 'False');
-    fixed = fixed.replace(/\bnull\b/g, 'None');
-    fixed = fixed.replace(/\bundefined\b/g, 'None');
-    
-    // Fix 'new' keyword
-    fixed = fixed.replace(/\bnew\s+/g, '');
-    
+    fixed = this._fixMissingColons(fixed);
+    fixed = this._fixLegacyPrintStatements(fixed);
+    fixed = this._fixLiteralValues(fixed);
+    fixed = this._normalizeElseLikeBlocks(fixed);
     return fixed;
   }
 
-  _isPurePython(code) {
-    const jsArtifacts = [
-      /\bvar\s+/,
-      /\blet\s+/,
-      /\bconst\s+/,
-      /\bfunction\s+/,
-      /{\s*$/m,
-      /^\s*}\s*$/m,
-      /\bnew\s+/,
-      /===/,
-      /!==/
-    ];
-    
-    return !jsArtifacts.some(pattern => pattern.test(code));
+  _fixMissingColons(code) {
+    return code
+      .split("\n")
+      .map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) {
+          return line;
+        }
+
+        if (
+          /^(if|elif|else|def|class|for|while|try|except|finally|with)\b/.test(
+            trimmed
+          ) &&
+          !trimmed.endsWith(":") &&
+          !trimmed.includes("#")
+        ) {
+          return `${line}:`;
+        }
+
+        return line;
+      })
+      .join("\n");
   }
 
-  _createPythonScript(scriptPath) {
-    const pythonScript = `#!/usr/bin/env python3
-import sys
-import ast
-import re
+  _fixLegacyPrintStatements(code) {
+    return code.replace(/^(\s*)print\s+([^(\n].*)$/gm, "$1print($2)");
+  }
 
-def fix_python_syntax(code):
-    """Fix common Python syntax and indentation errors"""
-    lines = code.splitlines()
-    fixed_lines = []
-    indent_level = 0
-    
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        
-        if not stripped or stripped.startswith('#'):
-            fixed_lines.append(line)
-            continue
-            
-        if re.match(r'^(elif|else|except|finally)\\b', stripped):
-            indent_level = max(0, indent_level - 1)
-            
-        proper_indent = '    ' * indent_level
-        fixed_line = proper_indent + stripped
-        
-        if re.match(r'^(if|elif|else|def|class|for|while|try|except|finally|with)\\b', stripped):
-            if not stripped.endswith(':') and '#' not in stripped:
-                fixed_line += ':'
-                
-        fixed_line = re.sub(r'^(\\s*)print\\s+([^\\(].+)$', r'\\1print(\\2)', fixed_line)
-        
-        fixed_line = re.sub(r'\\btrue\\b', 'True', fixed_line)
-        fixed_line = re.sub(r'\\bfalse\\b', 'False', fixed_line)
-        fixed_line = re.sub(r'\\bnull\\b', 'None', fixed_line)
-        fixed_line = re.sub(r'\\bundefined\\b', 'None', fixed_line)
-        
-        fixed_lines.append(fixed_line)
-        
-        if stripped.endswith(':'):
-            indent_level += 1
-            
-    return '\\n'.join(fixed_lines)
+  _fixLiteralValues(code) {
+    return code
+      .replace(/\btrue\b/g, "True")
+      .replace(/\bfalse\b/g, "False")
+      .replace(/\bnull\b/g, "None")
+      .replace(/\bundefined\b/g, "None");
+  }
 
-if __name__ == '__main__':
-    input_code = sys.stdin.read()
-    try:
-        fixed_code = fix_python_syntax(input_code)
-        try:
-            ast.parse(fixed_code)
-        except SyntaxError:
-            fixed_code = input_code
-        sys.stdout.write(fixed_code)
-    except Exception:
-        sys.stdout.write(input_code)
-`;
-    
-    fs.writeFileSync(scriptPath, pythonScript, 'utf8');
+  _normalizeElseLikeBlocks(code) {
+    return code
+      .replace(/^(\s*)else\s*\{\s*$/gm, "$1else:")
+      .replace(/^(\s*)finally\s*\{\s*$/gm, "$1finally:")
+      .replace(/^(\s*)catch\s*\(([^)]*)\)\s*\{\s*$/gm, "$1except $2:")
+      .replace(/^(\s*)}\s*$/gm, "");
+  }
+
+  _convertLikelyJavaScriptArtifacts(code) {
+    const lines = code.split("\n");
+    const converted = [];
+
+    for (const line of lines) {
+      let current = line;
+      const trimmed = current.trim();
+
+      if (!trimmed) {
+        converted.push(current);
+        continue;
+      }
+
+      current = current.replace(/^(\s*)(var|let|const)\s+/g, "$1");
+      current = current.replace(/^(\s*)function\s+([A-Za-z_]\w*)\s*\(/g, "$1def $2(");
+      current = current.replace(/===/g, "==").replace(/!==/g, "!=");
+      current = current.replace(/\bnew\s+/g, "");
+
+      if (/=>/.test(current) && !/lambda/.test(current)) {
+        converted.push(line);
+        continue;
+      }
+
+      if (trimmed.endsWith("{")) {
+        current = current.replace(/\s*\{\s*$/, ":");
+      }
+
+      if (trimmed === "}" || trimmed === "};") {
+        continue;
+      }
+
+      converted.push(current);
+    }
+
+    return converted.join("\n");
+  }
+
+  getFixedCode() {
+    return this.applyFixes();
   }
 }
 

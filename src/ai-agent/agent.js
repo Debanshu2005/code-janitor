@@ -1,205 +1,326 @@
-// src/ai-agent/agent.js
-const vscode = require('vscode');
-const fs = require('fs').promises;
-const path = require('path');
+const vscode = require("vscode");
+const fs = require("fs").promises;
+const path = require("path");
+
+const MAX_SCAN_FILE_SIZE = 200 * 1024;
+const MAX_CONTEXT_CHARS = 10_000;
+const MAX_FILE_SNIPPET = 1_800;
+const IGNORED_DIRS = new Set([
+  ".git",
+  ".vscode",
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "venv",
+  "formatters",
+  "data"
+]);
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "please",
+  "the",
+  "to",
+  "with"
+]);
 
 class AIAgent {
   constructor() {
-    this.ollamaUrl = 'http://localhost:11434';
-    this.model = 'codellama:latest';
     this.codebaseContext = new Map();
     this.conversationHistory = [];
+    this.scanVersion = 0;
+  }
+
+  getConfig() {
+    const config = vscode.workspace.getConfiguration("codeJanitor.ai");
+    return {
+      enabled: config.get("enabled", true),
+      ollamaUrl: config.get("ollamaUrl", "http://localhost:11434"),
+      model: config.get("model", "qwen2.5-coder:1.5b"),
+      timeout: config.get("timeout", 20_000)
+    };
   }
 
   async scanCodebase(workspaceFolder) {
+    this.codebaseContext.clear();
+    this.scanVersion += 1;
+
     const files = await this._getAllFiles(workspaceFolder);
     for (const file of files) {
       try {
-        const content = await fs.readFile(file, 'utf8');
+        const stat = await fs.stat(file);
+        if (stat.size > MAX_SCAN_FILE_SIZE) {
+          continue;
+        }
+
+        const content = await fs.readFile(file, "utf8");
         const relativePath = path.relative(workspaceFolder, file);
         this.codebaseContext.set(relativePath, { content, fullPath: file });
       } catch (error) {
         console.warn(`Failed to read ${file}:`, error.message);
       }
     }
-    return files.length;
+
+    return this.codebaseContext.size;
   }
 
   async _getAllFiles(dir, fileList = []) {
-    const files = await fs.readdir(dir);
-    for (const file of files) {
-      const filePath = path.join(dir, file);
-      const stat = await fs.stat(filePath);
-      
-      if (stat.isDirectory()) {
-        if (!['node_modules', '.git', 'dist', 'build', 'venv', 'out'].includes(file)) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const filePath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRS.has(entry.name)) {
           await this._getAllFiles(filePath, fileList);
         }
-      } else if (/\.(js|py|java|c|cpp|h|html|css|json|md|txt)$/i.test(file)) {
+        continue;
+      }
+
+      if (
+        /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i.test(entry.name)
+      ) {
         fileList.push(filePath);
       }
     }
+
     return fileList;
   }
 
   async chat(userMessage, workspaceFolder, streamCallback, abortSignal) {
-    const relevantFiles = this._findRelevantFiles(userMessage);
-    this.conversationHistory.push({ role: 'user', content: userMessage });
-    
-    // Get active editor file if available
-    const activeEditor = vscode.window.activeTextEditor;
-    let activeFileContext = '';
-    if (activeEditor) {
-      const activeFile = activeEditor.document.fileName;
-      const activeContent = activeEditor.document.getText();
-      const relativePath = path.relative(workspaceFolder, activeFile);
-      activeFileContext = `\n\nActive File: ${relativePath}\n\`\`\`\n${activeContent.slice(0, 5000)}\n\`\`\``;
+    const config = this.getConfig();
+    if (!config.enabled) {
+      return { error: "AI is disabled in Code Janitor settings." };
     }
-    
-    const context = this._buildContext(relevantFiles);
-    const history = this._buildHistory();
-    
-    const prompt = `You are an AI coding assistant for Code Janitor VSCode extension.
 
-Project: ${path.basename(workspaceFolder)}
-Files scanned: ${this.codebaseContext.size}
-${activeFileContext ? '\n**CURRENTLY OPEN FILE:**' + activeFileContext : ''}
+    this.conversationHistory.push({ role: "user", content: userMessage });
 
-${context}
-
-${history}
-
-User: ${userMessage}
-
-Assistant:`;
+    const relevantFiles = this._findRelevantFiles(userMessage);
+    const activeFileContext = this._getActiveFileContext(workspaceFolder);
+    const prompt = this._buildPrompt(userMessage, relevantFiles, activeFileContext);
 
     try {
-      const response = await fetch(`${this.ollamaUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${config.ollamaUrl}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: abortSignal || AbortSignal.timeout(config.timeout),
         body: JSON.stringify({
-          model: this.model,
-          prompt: prompt,
+          model: config.model,
+          prompt,
           stream: true,
-          options: { temperature: 0.3, num_predict: 2048 }
-        }),
-        signal: abortSignal
+          options: {
+            temperature: 0.1,
+            num_predict: 768,
+            top_k: 20,
+            top_p: 0.8
+          }
+        })
       });
 
-      if (!response.ok) throw new Error('Ollama request failed');
-      
-      let fullResponse = '';
+      if (!response.ok) {
+        throw new Error(`Ollama request failed with status ${response.status}`);
+      }
+
+      let fullResponse = "";
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      
-      while (true) {
-        if (abortSignal?.aborted) break;
-        
+
+      let streamDone = false;
+      while (!streamDone) {
+        if (abortSignal?.aborted) {
+          break;
+        }
+
         const { done, value } = await reader.read();
-        if (done) break;
-        
+        if (done) {
+          streamDone = true;
+          continue;
+        }
+
         const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(l => l.trim());
-        
+        const lines = chunk.split("\n").filter((line) => line.trim());
+
         for (const line of lines) {
           try {
             const data = JSON.parse(line);
             if (data.response) {
               fullResponse += data.response;
-              if (streamCallback) streamCallback(data.response);
+              if (streamCallback) {
+                streamCallback(data.response);
+              }
             }
-          } catch (e) {}
+          } catch (parseError) {
+            // Ignore partial streaming chunks that are not valid JSON yet.
+          }
         }
       }
-      
-      this.conversationHistory.push({ role: 'assistant', content: fullResponse });
+
+      this.conversationHistory.push({
+        role: "assistant",
+        content: fullResponse
+      });
+
       return this._parseResponse(fullResponse);
     } catch (error) {
-      if (error.name === 'AbortError') {
-        return { text: 'Generation stopped', changes: [] };
+      if (error.name === "AbortError") {
+        return { text: "Generation stopped", actions: [] };
       }
-      return { error: `AI Error: ${error.message}` };
+
+      return { error: `AI error: ${error.message}` };
     }
   }
 
+  _getActiveFileContext(workspaceFolder) {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (!activeEditor) {
+      return "";
+    }
+
+    const activeFile = activeEditor.document.fileName;
+    const activeContent = activeEditor.document.getText().slice(0, 3_000);
+    const relativePath = path.relative(workspaceFolder, activeFile);
+
+    return `Active file: ${relativePath}\n\`\`\`\n${activeContent}\n\`\`\``;
+  }
+
+  _extractKeywords(query) {
+    return query
+      .toLowerCase()
+      .split(/[^a-z0-9_.-]+/)
+      .filter((word) => word && word.length > 1 && !STOP_WORDS.has(word));
+  }
+
   _findRelevantFiles(query) {
-    const keywords = query.toLowerCase().split(/\s+/);
+    const keywords = this._extractKeywords(query);
     const relevant = [];
-    
+
     for (const [relativePath, fileData] of this.codebaseContext.entries()) {
       const fileContent = fileData.content.toLowerCase();
       const fileName = path.basename(relativePath).toLowerCase();
       const fileDir = path.dirname(relativePath).toLowerCase();
-      
+
       let score = 0;
-      for (const kw of keywords) {
-        if (fileName.includes(kw)) score += 10;
-        if (fileDir.includes(kw)) score += 5;
-        if (fileContent.includes(kw)) score += 1;
+      for (const keyword of keywords) {
+        if (fileName.includes(keyword)) score += 8;
+        if (fileDir.includes(keyword)) score += 4;
+        if (fileContent.includes(keyword)) score += 1;
       }
-      
+
       if (score > 0) {
-        relevant.push({ 
-          path: relativePath, 
-          content: fileData.content.slice(0, 3000), 
-          score 
+        relevant.push({
+          path: relativePath,
+          score,
+          content: fileData.content.slice(0, MAX_FILE_SNIPPET)
         });
       }
     }
-    
-    return relevant.sort((a, b) => b.score - a.score).slice(0, 5);
+
+    return relevant.sort((a, b) => b.score - a.score).slice(0, 6);
   }
 
-  _buildContext(files) {
-    if (files.length === 0) return 'No specific files found. Using general knowledge.';
-    return files.map(f => `File: ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join('\n\n');
-  }
+  _buildPrompt(userMessage, relevantFiles, activeFileContext) {
+    const history = this.conversationHistory
+      .slice(-4)
+      .map((entry) =>
+        `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content}`
+      )
+      .join("\n\n");
 
-  _buildHistory() {
-    const recent = this.conversationHistory.slice(-4);
-    return recent.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}`).join('\n\n');
+    let context = "";
+    for (const file of relevantFiles) {
+      const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
+      if ((context + block).length > MAX_CONTEXT_CHARS) {
+        break;
+      }
+      context += block;
+    }
+
+    if (!context) {
+      context = "No directly relevant files found in the indexed workspace.\n";
+    }
+
+    return `You are the Code Janitor AI assistant for a VS Code extension.
+Answer concisely and propose precise code changes.
+If you want to create or modify files, use this exact format:
+FILE: relative/path.ext
+\`\`\`language
+full file contents
+\`\`\`
+If you want to create a folder, use:
+MKDIR: relative/path
+If you want to suggest a terminal command, use:
+CMD: command
+Do not wrap the whole response in markdown.
+
+Indexed files: ${this.codebaseContext.size}
+${activeFileContext ? `${activeFileContext}\n\n` : ""}${context}
+${history ? `${history}\n\n` : ""}User: ${userMessage}
+
+Assistant:`;
   }
 
   _parseResponse(response) {
     const actions = [];
-    
-    // Parse FILE: actions
+
     const fileRegex = /FILE:\s*([^\n]+)\n```(\w+)?\n([\s\S]*?)```/g;
     let match;
     while ((match = fileRegex.exec(response)) !== null) {
-      actions.push({ type: 'file', path: match[1].trim(), language: match[2] || 'text', content: match[3] });
+      actions.push({
+        type: "file",
+        path: match[1].trim(),
+        language: match[2] || "text",
+        content: match[3]
+      });
     }
-    
-    // Parse CMD: actions
+
     const cmdRegex = /CMD:\s*(.+)/g;
     while ((match = cmdRegex.exec(response)) !== null) {
-      actions.push({ type: 'cmd', command: match[1].trim() });
+      actions.push({ type: "cmd", command: match[1].trim() });
     }
-    
-    // Parse MKDIR: actions
+
     const mkdirRegex = /MKDIR:\s*(.+)/g;
     while ((match = mkdirRegex.exec(response)) !== null) {
-      actions.push({ type: 'mkdir', path: match[1].trim() });
+      actions.push({ type: "mkdir", path: match[1].trim() });
     }
-    
-    // Don't encode entities - let the UI handle it
+
     return { text: response, actions };
   }
 
   async applyChanges(filePath, newContent) {
     try {
       const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) return { success: false, error: 'No workspace' };
-      
-      const fullPath = path.isAbsolute(filePath) 
-        ? filePath 
-        : path.join(workspaceFolders[0].uri.fsPath, filePath);
-      
-      await fs.writeFile(fullPath, newContent, 'utf8');
-      
-      const relativePath = path.relative(workspaceFolders[0].uri.fsPath, fullPath);
+      if (!workspaceFolders) {
+        return { success: false, error: "No workspace" };
+      }
+
+      const workspaceRoot = workspaceFolders[0].uri.fsPath;
+      const fullPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.join(workspaceRoot, filePath);
+
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, newContent, "utf8");
+
+      const relativePath = path.relative(workspaceRoot, fullPath);
       this.codebaseContext.set(relativePath, { content: newContent, fullPath });
-      
+
       return { success: true, path: fullPath };
     } catch (error) {
       return { success: false, error: error.message };
@@ -209,12 +330,15 @@ Assistant:`;
   async createFolder(folderPath) {
     try {
       const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) return { success: false, error: 'No workspace' };
-      
-      const fullPath = path.isAbsolute(folderPath) 
-        ? folderPath 
-        : path.join(workspaceFolders[0].uri.fsPath, folderPath);
-      
+      if (!workspaceFolders) {
+        return { success: false, error: "No workspace" };
+      }
+
+      const workspaceRoot = workspaceFolders[0].uri.fsPath;
+      const fullPath = path.isAbsolute(folderPath)
+        ? folderPath
+        : path.join(workspaceRoot, folderPath);
+
       await fs.mkdir(fullPath, { recursive: true });
       return { success: true, path: fullPath };
     } catch (error) {
@@ -224,13 +348,14 @@ Assistant:`;
 
   async executeCommand(command, workspaceFolder) {
     return new Promise((resolve) => {
-      const { exec } = require('child_process');
+      const { exec } = require("child_process");
       exec(command, { cwd: workspaceFolder }, (error, stdout, stderr) => {
         if (error) {
           resolve({ success: false, error: error.message, output: stderr });
-        } else {
-          resolve({ success: true, output: stdout || stderr });
+          return;
         }
+
+        resolve({ success: true, output: stdout || stderr });
       });
     });
   }
