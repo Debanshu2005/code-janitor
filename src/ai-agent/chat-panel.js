@@ -9,6 +9,7 @@ class ChatPanel {
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
+    this._confirmResolve = null;
 
     this.agent.setActiveEditor(this.lastActiveEditor);
 
@@ -139,36 +140,31 @@ class ChatPanel {
                 continue;
               }
 
-              const confirmed = await vscode.window.showWarningMessage(
-                `AI wants to run this project command: ${action.command}`,
-                "Allow",
-                "Deny"
-              );
+              // Ask permission inside the chat UI
+              this.panel.webview.postMessage({ type: "confirm", command: action.command });
 
-              if (confirmed !== "Allow") {
-                this.panel.webview.postMessage({
-                  type: "status",
-                  text: "Command denied by user."
-                });
+              const allowed = await new Promise((resolve) => {
+                this._confirmResolve = resolve;
+              });
+
+              if (!allowed) {
+                this.panel.webview.postMessage({ type: "status", text: `Command denied: ${action.command}` });
                 continue;
               }
 
-              this.panel.webview.postMessage({
-                type: "status",
-                text: `Running: ${action.command}`
-              });
-
-              const result = await this.agent.executeCommand(
-                action.command,
-                workspaceFolder
-              );
-
+              this.panel.webview.postMessage({ type: "status", text: `Running: ${action.command}` });
+              const result = await this.agent.executeCommand(action.command, workspaceFolder);
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
-                text: result.success ? result.output : result.error
+                text: result.success ? (result.output || "Done.") : result.error
               });
             }
           }
+        }
+      } else if (message.type === "confirmResponse") {
+        if (this._confirmResolve) {
+          this._confirmResolve(message.allowed);
+          this._confirmResolve = null;
         }
       } else if (message.type === "stop") {
         if (this.abortController) {
@@ -470,6 +466,29 @@ class ChatPanel {
         } else {
           currentMessage.textContent += msg.text;
         }
+        chat.scrollTop = chat.scrollHeight;
+      } else if (msg.type === "confirm") {
+        const confirmDiv = document.createElement("div");
+        confirmDiv.className = "message ai";
+        const pre = document.createElement("code");
+        pre.style.cssText = "background:#0f172a;padding:4px 8px;border-radius:4px;display:block;margin:8px 0;";
+        pre.textContent = msg.command;
+        const label = document.createElement("span");
+        label.style.color = "#fbbf24";
+        label.textContent = "\u26a1 Run command?";
+        const allowBtn = document.createElement("button");
+        allowBtn.textContent = "Allow";
+        allowBtn.style.cssText = "padding:6px 16px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;margin-right:8px;margin-top:8px;";
+        allowBtn.onclick = () => { confirmDiv.remove(); vscode.postMessage({ type: "confirmResponse", allowed: true }); };
+        const denyBtn = document.createElement("button");
+        denyBtn.textContent = "Deny";
+        denyBtn.style.cssText = "padding:6px 16px;background:#ef4444;color:white;border:none;border-radius:6px;cursor:pointer;margin-top:8px;";
+        denyBtn.onclick = () => { confirmDiv.remove(); vscode.postMessage({ type: "confirmResponse", allowed: false }); };
+        confirmDiv.appendChild(label);
+        confirmDiv.appendChild(pre);
+        confirmDiv.appendChild(allowBtn);
+        confirmDiv.appendChild(denyBtn);
+        chat.appendChild(confirmDiv);
         chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "done") {
         currentMessage = null;
