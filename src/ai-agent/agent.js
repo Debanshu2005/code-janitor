@@ -180,7 +180,10 @@ class AIAgent {
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
       const editorState = this._getEditorState(workspaceFolder);
       const editorStateContext = this._buildEditorStateContext(editorState);
-      const openTabSnippetContext = this._getOpenTabSnippetContext(editorState.allOpenTabs);
+      const openTabSnippetContext = this._getOpenTabSnippetContext(
+        editorState.allOpenTabs,
+        workspaceFolder
+      );
       const editableTargets = this._resolveEditableTargets(userMessage, workspaceFolder, editorState);
       this.currentEditableTargets = editableTargets.paths.length ? new Set(editableTargets.paths) : null;
       prompt = this._buildPrompt(
@@ -287,15 +290,16 @@ class AIAgent {
 
   _getActiveFileContext(workspaceFolder) {
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
-    if (!activeEditor || !workspaceFolder) {
+    if (!activeEditor) {
       return "";
     }
 
-    const activeFile = activeEditor.document.fileName;
-    const activeContent = activeEditor.document.getText().slice(0, 4_000);
-    const relativePath = path.relative(workspaceFolder, activeFile);
-
-    return `Active file: ${relativePath}\n\`\`\`\n${activeContent}\n\`\`\``;
+    return this._buildDocumentContext(
+      "Active file",
+      activeEditor.document,
+      workspaceFolder,
+      4_000
+    );
   }
 
   _toWorkspaceRelativePath(filePath, workspaceFolder) {
@@ -308,6 +312,36 @@ class AIAgent {
       : filePath;
 
     return normalizedPath.replace(/\\/g, "/");
+  }
+
+  _formatContextPath(filePath, workspaceFolder) {
+    if (!filePath) {
+      return "untitled";
+    }
+
+    if (!workspaceFolder) {
+      return filePath.replace(/\\/g, "/");
+    }
+
+    const relativePath = path.relative(workspaceFolder, filePath);
+    const escapesWorkspace =
+      relativePath.startsWith("..") || path.isAbsolute(relativePath);
+
+    return escapesWorkspace
+      ? filePath.replace(/\\/g, "/")
+      : relativePath.replace(/\\/g, "/");
+  }
+
+  _buildDocumentContext(label, document, workspaceFolder, maxChars = 1_200) {
+    if (!document) {
+      return "";
+    }
+
+    const filePath = document.isUntitled ? null : document.fileName;
+    const displayPath = this._formatContextPath(filePath, workspaceFolder);
+    const content = document.getText().slice(0, maxChars);
+
+    return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``;
   }
 
   _formatFileList(label, filePaths) {
@@ -391,21 +425,43 @@ class AIAgent {
     return `${sections.join("\n\n")}\n`;
   }
 
-  _getOpenTabSnippetContext(openTabPaths) {
+  _getOpenTabSnippetContext(openTabPaths, workspaceFolder) {
     const snippetBlocks = [];
+    const openDocuments = new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.fileName,
+        document
+      ])
+    );
 
     for (const tabPath of openTabPaths) {
-      const fileData = this.codebaseContext.get(tabPath);
-      if (!fileData) {
-        continue;
+      let snippet = "";
+      const fullPath = workspaceFolder
+        ? path.join(workspaceFolder, tabPath)
+        : tabPath;
+      const openDocument = openDocuments.get(fullPath);
+
+      if (openDocument) {
+        snippet = this._buildDocumentContext(
+          "Open tab content",
+          openDocument,
+          workspaceFolder,
+          MAX_FILE_SNIPPET
+        );
+      } else {
+        const fileData = this.codebaseContext.get(tabPath);
+        if (!fileData) {
+          continue;
+        }
+
+        snippet =
+          `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
+            0,
+            MAX_FILE_SNIPPET
+          )}\n\`\`\``;
       }
 
-      snippetBlocks.push(
-        `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
-          0,
-          MAX_FILE_SNIPPET
-        )}\n\`\`\`\n\n`
-      );
+      snippetBlocks.push(`${snippet}\n\n`);
 
       if (snippetBlocks.length >= MAX_OPEN_TAB_SNIPPETS) {
         break;
