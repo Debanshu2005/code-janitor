@@ -1,158 +1,164 @@
 // src/core/fixers/fixer-wrapper.js
-const PythonFixer = require("./python-fixer");
-const JavaScriptFixer = require("./javascript-fixer");
-const EmbeddedCFixer = require("./EmbeddedCFixer");
-const JavaFixer = require("./JavaFixer");
-const HtmlFixer = require("./html-fixer");
-const OllamaClient = require("../ai/ollama-client");
+const PythonFixer = require("./python-fixer")
+const JavaScriptFixer = require("./javascript-fixer")
+const EmbeddedCFixer = require("./EmbeddedCFixer")
+const JavaFixer = require("./JavaFixer")
+const HtmlFixer = require("./html-fixer")
+const OllamaClient = require("../ai/ollama-client")
 
-const ollamaClient = new OllamaClient();
+const ollamaClient = new OllamaClient()
+
+function getRawFixerOutput(fixer, result, originalCode) {
+  if (result && typeof result.fixedCode === "string") {
+    return result.fixedCode
+  }
+
+  if (result && typeof result.formatted === "string") {
+    return result.formatted
+  }
+
+  if (fixer && typeof fixer.fixedCode === "string") {
+    return fixer.fixedCode
+  }
+
+  if (fixer && typeof fixer.applyFixes === "function") {
+    return fixer.applyFixes()
+  }
+
+  return originalCode
+}
 
 async function fixPythonBuffer(code, filePath = "") {
   try {
-    const fixer = new PythonFixer(code, filePath);
-    await fixer.analyze();
-    let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
-    
+    const fixer = new PythonFixer(code, filePath)
+    const result = await fixer.analyze()
+    let fixedCode = getRawFixerOutput(fixer, result, code)
+
     // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
-      const aiResult = await ollamaClient.validateAndFix(code, fixedCode, "python");
+      const aiResult = await ollamaClient.validateAndFix(
+        code,
+        fixedCode,
+        "python"
+      )
       if (aiResult && aiResult.shouldUseAI) {
-        console.log(`AI improved code: ${aiResult.reason}`);
-        fixedCode = aiResult.fixedCode;
+        console.log(`AI improved code: ${aiResult.reason}`)
+        fixedCode = aiResult.fixedCode
       } else if (aiResult && !aiResult.shouldUseAI) {
-        console.log(`Using rule-based fixes: ${aiResult.reason}`);
+        console.log(`Using rule-based fixes: ${aiResult.reason}`)
       }
     }
-    
-    return fixedCode;
+
+    return fixedCode
   } catch (error) {
-    console.error("Python fixer error:", error);
-    return code;
+    console.error("Python fixer error:", error)
+    return code
   }
 }
 
 async function fixJSBuffer(code, filePath = "") {
   try {
-    const fixer = new JavaScriptFixer(code, filePath);
-    await fixer.analyze();
-    let fixedCode = fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
-    
+    const fixer = new JavaScriptFixer(code, filePath)
+    const result = await fixer.analyze()
+    let fixedCode = getRawFixerOutput(fixer, result, code)
+
     // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
-      const aiResult = await ollamaClient.validateAndFix(code, fixedCode, "javascript");
+      const aiResult = await ollamaClient.validateAndFix(
+        code,
+        fixedCode,
+        "javascript"
+      )
       if (aiResult && aiResult.shouldUseAI) {
-        console.log(`AI improved code: ${aiResult.reason}`);
-        fixedCode = aiResult.fixedCode;
+        console.log(`AI improved code: ${aiResult.reason}`)
+        fixedCode = aiResult.fixedCode
       } else if (aiResult && !aiResult.shouldUseAI) {
-        console.log(`Using rule-based fixes: ${aiResult.reason}`);
+        console.log(`Using rule-based fixes: ${aiResult.reason}`)
       }
     }
-    
-    return fixedCode;
+
+    return fixedCode
   } catch (error) {
-    console.error("JavaScript fixer error:", error);
-    return code;
+    console.error("JavaScript fixer error:", error)
+    return code
   }
 }
 
 async function fixEmbeddedCBuffer(code, filePath = "") {
   try {
-    const fixer = new EmbeddedCFixer(code, filePath);
-    await fixer.analyze();
-    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    const fixer = new EmbeddedCFixer(code, filePath)
+    const result = await fixer.analyze()
+    return getRawFixerOutput(fixer, result, code)
   } catch (error) {
-    console.error("Embedded C fixer error:", error);
-    return code;
+    console.error("Embedded C fixer error:", error)
+    return code
   }
 }
 
 async function fixJavaBuffer(code, filePath = "") {
   try {
-    const fixer = new JavaFixer(code, filePath);
-    await fixer.analyze();
-    return fixer.applyFixes ? fixer.applyFixes() : fixer.fixedCode || code;
+    const fixer = new JavaFixer(code, filePath)
+    const result = await fixer.analyze()
+    return getRawFixerOutput(fixer, result, code)
   } catch (error) {
-    console.error("Java fixer error:", error);
-    return code;
+    console.error("Java fixer error:", error)
+    return code
   }
 }
 
 async function fixHtmlBuffer(code, filePath = "") {
   try {
-    const fixer = new HtmlFixer(code, filePath);
-    const result = await fixer.analyze();
-
-    // Handle different return patterns
-    if (result && result.formatted) {
-      return result.formatted;
-    }
-
-    if (result && result.success && result.formatted) {
-      return result.formatted;
-    }
-
-    // Fallback to standard methods
-    if (fixer.applyFixes) {
-      return fixer.applyFixes();
-    }
-
-    if (fixer.fixedCode) {
-      return fixer.fixedCode;
-    }
-
-    console.warn("HtmlFixer: No fixes applied, returning original code");
-    return code;
+    const fixer = new HtmlFixer(code, filePath)
+    const result = await fixer.analyze()
+    return getRawFixerOutput(fixer, result, code)
   } catch (error) {
-    console.error("HTML fixer error:", error);
-    return code;
+    console.error("HTML fixer error:", error)
+    return code
   }
 }
 
 // Unified fixer function that detects language and routes appropriately
 async function fixCodeBuffer(code, filePath = "", language = "") {
   const lang =
-    language ||
-    detectLanguageFromPath(filePath) ||
-    detectLanguageFromCode(code);
+    language || detectLanguageFromPath(filePath) || detectLanguageFromCode(code)
 
-  console.log(`🔧 Fixing code (${lang}) for: ${filePath || "buffer"}`);
+  console.log(`🔧 Fixing code (${lang}) for: ${filePath || "buffer"}`)
 
   switch (lang.toLowerCase()) {
     case "python":
     case "py":
-      return await fixPythonBuffer(code, filePath);
+      return await fixPythonBuffer(code, filePath)
 
     case "javascript":
     case "js":
     case "typescript":
     case "ts":
-      return await fixJSBuffer(code, filePath);
+      return await fixJSBuffer(code, filePath)
 
     case "c":
     case "cpp":
     case "c++":
     case "embedded-c":
-      return await fixEmbeddedCBuffer(code, filePath);
+      return await fixEmbeddedCBuffer(code, filePath)
 
     case "java":
-      return await fixJavaBuffer(code, filePath);
+      return await fixJavaBuffer(code, filePath)
 
     case "html":
     case "htm":
-      return await fixHtmlBuffer(code, filePath);
+      return await fixHtmlBuffer(code, filePath)
 
     default:
-      console.warn(`No fixer available for language: ${lang}`);
-      return code;
+      console.warn(`No fixer available for language: ${lang}`)
+      return code
   }
 }
 
 // Helper functions
 function detectLanguageFromPath(filePath) {
-  if (!filePath) return "";
+  if (!filePath) return ""
 
-  const ext = filePath.split(".").pop().toLowerCase();
+  const ext = filePath.split(".").pop().toLowerCase()
   const extensionMap = {
     py: "python",
     js: "javascript",
@@ -162,32 +168,32 @@ function detectLanguageFromPath(filePath) {
     h: "c",
     java: "java",
     html: "html",
-    htm: "html",
-  };
+    htm: "html"
+  }
 
-  return extensionMap[ext] || "";
+  return extensionMap[ext] || ""
 }
 
 function detectLanguageFromCode(code) {
-  const firstLine = code.trim().split("\n")[0];
+  const firstLine = code.trim().split("\n")[0]
 
   if (
     firstLine.includes("#!/usr/bin/env python") ||
     firstLine.includes("#!/usr/bin/python")
   ) {
-    return "python";
+    return "python"
   }
   if (firstLine.includes("<html") || code.includes("</html>")) {
-    return "html";
+    return "html"
   }
   if (code.includes("public class") || code.includes("import java.")) {
-    return "java";
+    return "java"
   }
   if (code.includes("#include") || code.includes("int main(")) {
-    return "c";
+    return "c"
   }
 
-  return "";
+  return ""
 }
 
 // Export all functions
@@ -199,5 +205,5 @@ module.exports = {
   fixHtmlBuffer,
   fixCodeBuffer, // Unified interface
   detectLanguageFromPath,
-  detectLanguageFromCode,
-};
+  detectLanguageFromCode
+}
