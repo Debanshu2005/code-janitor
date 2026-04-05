@@ -197,7 +197,7 @@ class AIAgent {
           stream: true,
           options: {
             temperature: 0.1,
-            num_predict: mode === "heavy" ? 400 : 180,
+            num_predict: mode === "heavy" ? 400 : 120,
             top_k: 20,
             top_p: 0.8
           }

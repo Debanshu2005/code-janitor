@@ -35,21 +35,10 @@ class ChatPanel {
       this.panel = null;
     });
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceFolder) {
-      this.panel.webview.postMessage({
-        type: "status",
-        text: "Scanning codebase..."
-      });
-      const fileCount = await this.agent.ensureCodebaseScanned(
-        workspaceFolder,
-        true
-      );
-      this.panel.webview.postMessage({
-        type: "status",
-        text: `Scanned ${fileCount} files. Ready.`
-      });
-    }
+    this.panel.webview.postMessage({
+      type: "status",
+      text: "Ready. Fast mode avoids codebase scanning unless needed."
+    });
   }
 
   _setupMessageHandler() {
