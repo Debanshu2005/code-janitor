@@ -14,7 +14,17 @@
     "type": "git",
     "url": "https://github.com/Debanshu2005/code-janitor.git"
   },
-  "keywords": ["formatter", "linter", "javascript", "python", "java", "c", "cpp", "html", "code-quality"],
+  "keywords": [
+    "formatter",
+    "linter",
+    "javascript",
+    "python",
+    "java",
+    "c",
+    "cpp",
+    "html",
+    "code-quality"
+  ],
   "engines": {
     "vscode": "^1.80.0",
     "node": ">=18"
@@ -44,13 +54,40 @@
         },
         "codeJanitor.autoCorrection.languages": {
           "type": "array",
-          "default": ["python", "javascript", "java", "c", "cpp", "html"],
+          "default": [
+            "python",
+            "javascript",
+            "java",
+            "c",
+            "cpp",
+            "html"
+          ],
           "description": "Languages to enable auto-correction for"
         },
         "codeJanitor.ai.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Enable AI-powered syntax fixing with Ollama (DISABLED - causes code corruption)"
+        },
+        "codeJanitor.ai.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "groq",
+            "openrouter"
+          ],
+          "description": "AI provider: ollama (local), groq (cloud, free), openrouter (cloud, 100+ models)"
+        },
+        "codeJanitor.ai.groqApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Groq API key (get free key at https://console.groq.com)"
+        },
+        "codeJanitor.ai.openrouterApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter API key (get key at https://openrouter.ai)"
         },
         "codeJanitor.ai.ollamaUrl": {
           "type": "string",
@@ -159,7 +196,6 @@
     "package": ".\\node_modules\\.bin\\vsce.cmd package",
     "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
   },
-
   "dependencies": {
     "@babel/core": "^7.26.0",
     "@babel/generator": "^7.26.2",

@@ -1,4 +1,6 @@
 const vscode = require("vscode");
+const fs = require("fs");
+const path = require("path");
 const AIAgent = require("./agent");
 
 class ChatPanel {
@@ -13,7 +15,6 @@ class ChatPanel {
 
     this.agent.setActiveEditor(this.lastActiveEditor);
 
-    // Track last active editor before focus moves to chat panel
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor) this.lastActiveEditor = editor;
     }, null, context.subscriptions);
@@ -37,20 +38,84 @@ class ChatPanel {
 
     this.panel.webview.html = this._getHtmlContent();
     this._setupMessageHandler();
-    this.panel.onDidDispose(() => {
-      this.panel = null;
-    });
+    this.panel.onDidDispose(() => { this.panel = null; });
 
-    this.panel.webview.postMessage({
-      type: "status",
-      text: "Ready. Fast mode avoids codebase scanning unless needed."
-    });
+    // Populate model list from Ollama
+    this._fetchAndSendModels();
+  }
+
+  async _runSyntaxScan(workspaceFolder, specificFiles) {
+    if (!workspaceFolder) {
+      this.panel.webview.postMessage({ type: "status", text: "No workspace open." });
+      return;
+    }
+    this.panel.webview.postMessage({ type: "thinking" });
+    await this.agent.ensureCodebaseScanned(workspaceFolder);
+    const files = specificFiles || Array.from(this.agent.codebaseContext.keys()).filter(f =>
+      /\.(js|jsx|ts|tsx|py|java)$/i.test(f)
+    );
+    let reply = `Scanning ${files.length} file(s) for syntax errors...\n`;
+    this.panel.webview.postMessage({ type: "stream", text: reply });
+    let found = false;
+    for (const f of files) {
+      const result = await this.agent._runSyntaxCheck(f.replace(/\\/g, "/"), workspaceFolder, null);
+      if (result && !result.skipped && (!result.success || (result.output || "").trim())) {
+        const msg = `\n\u274c ${f}:\n${result.error || result.output}`;
+        this.panel.webview.postMessage({ type: "stream", text: msg });
+        reply += msg;
+        found = true;
+      }
+    }
+    const summary = found ? "\n\nScan complete. Issues found above." : "\n\n\u2705 No syntax errors found.";
+    this.panel.webview.postMessage({ type: "stream", text: summary });
+    this.panel.webview.postMessage({ type: "done" });
+  }
+
+  _getHtmlContent() {
+    return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
+  }
+
+  async _fetchAndSendModels() {
+    try {
+      const config = this.agent.getConfig();
+      if (config.provider === "groq") {
+        const models = [
+          "llama-3.1-8b-instant", "llama-3.1-70b-versatile",
+          "llama3-8b-8192", "llama3-70b-8192",
+          "mixtral-8x7b-32768", "gemma2-9b-it"
+        ];
+        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "groq" });
+        return;
+      }
+      if (config.provider === "openrouter") {
+        const models = [
+          "meta-llama/llama-3.1-8b-instruct:free",
+          "meta-llama/llama-3.1-70b-instruct:free",
+          "microsoft/phi-3-mini-128k-instruct:free",
+          "google/gemma-2-9b-it:free",
+          "deepseek/deepseek-coder",
+          "qwen/qwen-2.5-coder-32b-instruct"
+        ];
+        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "openrouter" });
+        return;
+      }
+      // Ollama — fetch live
+      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        const models = (data.models || []).map(m => m.name).filter(Boolean);
+        if (models.length > 0 && this.panel) {
+          this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "ollama" });
+        }
+      }
+    } catch (_) {}
   }
 
   _setupMessageHandler() {
     this.panel.webview.onDidReceiveMessage(async (message) => {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
       if (message.type === "chat") {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const trimmedText = (message.text || "").trim();
 
         if (/^\/fast$/i.test(trimmedText)) {
@@ -59,20 +124,17 @@ class ChatPanel {
           this.panel.webview.postMessage({ type: "done" });
           return;
         }
-
         if (/^\/heavy$/i.test(trimmedText)) {
           this.chatMode = "heavy";
           this.panel.webview.postMessage({ type: "status", text: "Mode switched to Heavy." });
           this.panel.webview.postMessage({ type: "done" });
           return;
         }
-
         if (/^\/scan$/i.test(trimmedText)) {
           this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
           this.panel.webview.postMessage({ type: "thinking" });
           const overview = await this.agent.getCodebaseOverview(workspaceFolder);
           this.panel.webview.postMessage({ type: "stream", text: overview });
-          this.panel.webview.postMessage({ type: "status", text: "Workspace overview ready." });
           this.panel.webview.postMessage({ type: "done" });
           return;
         }
@@ -84,15 +146,11 @@ class ChatPanel {
         const response = await this.agent.chat(
           trimmedText,
           workspaceFolder,
-          (chunk) => {
-            this.panel.webview.postMessage({ type: "stream", text: chunk });
-          },
+          (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
           this.abortController.signal,
           {
             mode: this.chatMode,
-            onStatus: (text) => {
-              this.panel.webview.postMessage({ type: "status", text });
-            }
+            onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
           }
         );
 
@@ -112,46 +170,43 @@ class ChatPanel {
         if (response.actions && response.actions.length > 0) {
           for (const action of response.actions) {
             if (action.type === "file") {
-              const result = await this.agent.applyChanges(
-                action.path,
-                action.content
-              );
+              const result = await this.agent.applyChanges(action.path, action.content);
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success
                   ? `Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              // Auto syntax-check the written file
+              if (result.success && result.syntaxCheckCmd) {
+                this.panel.webview.postMessage({ type: "status", text: `Checking syntax: ${result.relativePath}` });
+                const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
+                const ok = checkResult.success && !(checkResult.output || "").trim();
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: ok
+                    ? `\u2705 No syntax errors in ${result.relativePath}`
+                    : `\u274c Syntax issues in ${result.relativePath}:\n${checkResult.error || checkResult.output || ""}`
+                });
+              }
             } else if (action.type === "mkdir") {
               const result = await this.agent.createFolder(action.path);
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
-                text: result.success
-                  ? `Created folder ${action.path}`
-                  : result.error
+                text: result.success ? `Created folder ${action.path}` : result.error
               });
             } else if (action.type === "cmd") {
               const validation = this.agent.validateCommand(action.command);
               if (!validation.allowed) {
-                this.panel.webview.postMessage({
-                  type: "status",
-                  text: `Blocked command: ${validation.reason}`
-                });
+                this.panel.webview.postMessage({ type: "status", text: `Blocked: ${validation.reason}` });
                 continue;
               }
-
-              // Ask permission inside the chat UI
               this.panel.webview.postMessage({ type: "confirm", command: action.command });
-
-              const allowed = await new Promise((resolve) => {
-                this._confirmResolve = resolve;
-              });
-
+              const allowed = await new Promise((resolve) => { this._confirmResolve = resolve; });
               if (!allowed) {
-                this.panel.webview.postMessage({ type: "status", text: `Command denied: ${action.command}` });
+                this.panel.webview.postMessage({ type: "status", text: `Denied: ${action.command}` });
                 continue;
               }
-
               this.panel.webview.postMessage({ type: "status", text: `Running: ${action.command}` });
               const result = await this.agent.executeCommand(action.command, workspaceFolder);
               this.panel.webview.postMessage({
@@ -161,6 +216,7 @@ class ChatPanel {
             }
           }
         }
+
       } else if (message.type === "confirmResponse") {
         if (this._confirmResolve) {
           this._confirmResolve(message.allowed);
@@ -172,10 +228,7 @@ class ChatPanel {
           this.panel.webview.postMessage({ type: "done" });
         }
       } else if (message.type === "apply") {
-        const result = await this.agent.applyChanges(
-          message.filePath,
-          message.content
-        );
+        const result = await this.agent.applyChanges(message.filePath, message.content);
         this.panel.webview.postMessage({
           type: result.success ? "applied" : "error",
           text: result.success
@@ -186,388 +239,35 @@ class ChatPanel {
         this.agent.clearHistory();
         this.panel.webview.postMessage({ type: "cleared" });
       } else if (message.type === "scanOverview") {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
         this.panel.webview.postMessage({ type: "thinking" });
         const overview = await this.agent.getCodebaseOverview(workspaceFolder);
         this.panel.webview.postMessage({ type: "stream", text: overview });
-        this.panel.webview.postMessage({ type: "status", text: "Workspace overview ready." });
         this.panel.webview.postMessage({ type: "done" });
+      } else if (message.type === "syntaxScan") {
+        // Triggered by action chip — run directly without model
+        const files = message.activeOnly
+          ? (this.lastActiveEditor ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")] : [])
+          : null;
+        await this._runSyntaxScan(workspaceFolder, files);
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
-        this.panel.webview.postMessage({
-          type: "status",
-          text:
-            this.chatMode === "heavy"
-              ? "Mode switched to Heavy."
-              : "Mode switched to Fast."
-        });
+      } else if (message.type === "setModel") {
+        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+        await cfg.update("model", message.model, vscode.ConfigurationTarget.Global);
+      } else if (message.type === "setProvider") {
+        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+        await cfg.update("provider", message.provider, vscode.ConfigurationTarget.Global);
+        if (message.apiKey && message.provider === "groq") {
+          await cfg.update("groqApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+        }
+        if (message.apiKey && message.provider === "openrouter") {
+          await cfg.update("openrouterApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+        }
+        this._fetchAndSendModels();
       }
     });
-  }
-
-  _getHtmlContent() {
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      color: #e4e4e7;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    #header {
-      padding: 20px;
-      background: rgba(0, 0, 0, 0.3);
-      border-bottom: 2px solid #0ea5e9;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-    #header h2 { font-size: 20px; font-weight: 600; color: #0ea5e9; }
-    #header-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    #mode-switch {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: #cbd5e1;
-    }
-    #mode {
-      padding: 8px 10px;
-      background: rgba(15, 23, 42, 0.9);
-      color: #e2e8f0;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      font-size: 12px;
-    }
-    #chat { flex: 1; overflow-y: auto; padding: 20px; }
-    .message {
-      margin-bottom: 20px;
-      padding: 15px 20px;
-      border-radius: 12px;
-      animation: fadeIn 0.3s;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .user {
-      background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
-      margin-left: 15%;
-      border-bottom-right-radius: 4px;
-    }
-    .ai {
-      background: rgba(30, 41, 59, 0.8);
-      margin-right: 15%;
-      border: 1px solid #334155;
-      border-bottom-left-radius: 4px;
-    }
-    .typing-indicator {
-      display: flex;
-      gap: 5px;
-      align-items: center;
-      padding: 4px 0;
-    }
-    .typing-indicator span {
-      width: 8px; height: 8px;
-      background: #0ea5e9;
-      border-radius: 50%;
-      animation: bounce 1.2s infinite;
-    }
-    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce {
-      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-      40% { transform: scale(1); opacity: 1; }
-    }
-    .status {
-      text-align: center;
-      color: #94a3b8;
-      font-size: 13px;
-      padding: 8px;
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 8px;
-      display: inline-block;
-      margin: 0 auto 16px;
-    }
-    pre {
-      background: #0f172a;
-      padding: 15px;
-      border-radius: 8px;
-      overflow-x: auto;
-      border-left: 3px solid #0ea5e9;
-      margin: 10px 0;
-    }
-    code { font-family: "Fira Code", "Courier New", monospace; font-size: 13px; color: #e2e8f0; }
-    #input-area {
-      display: flex;
-      padding: 20px;
-      background: rgba(0, 0, 0, 0.3);
-      border-top: 2px solid #334155;
-      gap: 10px;
-    }
-    #input {
-      flex: 1;
-      padding: 14px 18px;
-      background: rgba(30, 41, 59, 0.6);
-      border: 2px solid #334155;
-      color: #e4e4e7;
-      border-radius: 10px;
-      font-size: 14px;
-    }
-    #input:focus { outline: none; border-color: #0ea5e9; }
-    button {
-      padding: 12px 24px;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-    }
-    #send { background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); }
-    #scan { background: linear-gradient(135deg, #22c55e 0%, #15803d 100%); }
-    #stop { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); display: none; }
-    #clear { background: linear-gradient(135deg, #64748b 0%, #475569 100%); }
-  </style>
-</head>
-<body>
-  <div id="header">
-    <div id="header-left">
-      <h2>Code Janitor AI</h2>
-      <span style="font-size: 12px; color: #64748b;">Powered by Ollama</span>
-    </div>
-    <div id="mode-switch">
-      <label for="mode">Mode</label>
-      <select id="mode">
-        <option value="fast" selected>Fast</option>
-        <option value="heavy">Heavy</option>
-      </select>
-    </div>
-  </div>
-  <div id="chat"></div>
-  <div id="input-area">
-    <input id="input" type="text" placeholder="Ask anything. Use /scan, /fast, /heavy" />
-    <button id="send">Send</button>
-    <button id="scan">Scan</button>
-    <button id="stop">Stop</button>
-    <button id="clear">Clear</button>
-  </div>
-  <script>
-    const vscode = acquireVsCodeApi();
-    const chat = document.getElementById("chat");
-    const input = document.getElementById("input");
-    const send = document.getElementById("send");
-    const scan = document.getElementById("scan");
-    const stop = document.getElementById("stop");
-    const clear = document.getElementById("clear");
-    const mode = document.getElementById("mode");
-    let currentMessage = null;
-
-    function escapeHtml(text) {
-      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function copyToClipboard(text, btn) {
-      navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = "Copied!";
-        setTimeout(() => { btn.textContent = "Copy"; }, 1500);
-      });
-    }
-
-    function makeCodeBlock(lang, code) {
-      const isBash = /^(bash|sh|shell|cmd|)$/i.test(lang);
-      const wrapper = document.createElement("div");
-      wrapper.style.cssText = "position:relative;margin:10px 0;";
-      const pre = document.createElement("pre");
-      pre.style.cssText = "background:#0d1117;border-radius:8px;padding:14px 16px;overflow-x:auto;border-left:3px solid " + (isBash ? "#22c55e" : "#0ea5e9") + ";margin:0;";
-      const codeEl = document.createElement("code");
-      codeEl.style.cssText = "font-family:'Fira Code','Courier New',monospace;font-size:13px;color:" + (isBash ? "#86efac" : "#e2e8f0") + ";white-space:pre;";
-      codeEl.textContent = code;
-      pre.appendChild(codeEl);
-      const btn = document.createElement("button");
-      btn.textContent = "Copy";
-      btn.style.cssText = "position:absolute;top:8px;right:8px;padding:3px 10px;font-size:11px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:5px;cursor:pointer;";
-      btn.onclick = () => copyToClipboard(code, btn);
-      wrapper.appendChild(pre);
-      wrapper.appendChild(btn);
-      return wrapper;
-    }
-
-    function renderContent(text) {
-      const container = document.createElement("div");
-      // Split on fenced code blocks
-      const parts = text.split(/(```[\w]*\n[\s\S]*?```)/g);
-      for (const part of parts) {
-        const fenceMatch = part.match(/^```([\w]*)\n([\s\S]*?)```$/);
-        if (fenceMatch) {
-          container.appendChild(makeCodeBlock(fenceMatch[1], fenceMatch[2]));
-          continue;
-        }
-        // Render plain text segments line by line
-        const lines = part.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          // CMD: lines get their own bash block
-          const cmdMatch = line.match(/^CMD:\s*(.+)$/);
-          if (cmdMatch) {
-            container.appendChild(makeCodeBlock("bash", cmdMatch[1]));
-            continue;
-          }
-          // Inline code
-          const span = document.createElement("span");
-          span.style.whiteSpace = "pre-wrap";
-          span.innerHTML = escapeHtml(line)
-            .replace(/`([^`]+)`/g, "<code style='background:#0f172a;padding:2px 5px;border-radius:3px;color:#7dd3fc;font-family:monospace;'>$1</code>")
-            .replace(/(error[^\n]*?line\s*\d+)/gi, "<span style='background:#7f1d1d;color:#fca5a5;padding:1px 4px;border-radius:3px;'>$1</span>")
-            .replace(/(\bline\s+\d+\b)/gi, "<span style='color:#fbbf24;'>$1</span>");
-          container.appendChild(span);
-          if (i < lines.length - 1) container.appendChild(document.createElement("br"));
-        }
-      }
-      return container;
-    }
-
-    function addMessage(text, type) {
-      const msg = document.createElement("div");
-      msg.className = "message " + type;
-      if (type === "status") {
-        msg.textContent = text;
-      } else {
-        msg.appendChild(renderContent(text));
-      }
-      chat.appendChild(msg);
-      chat.scrollTop = chat.scrollHeight;
-      return msg;
-    }
-
-    send.onclick = () => {
-      const text = input.value.trim();
-      if (!text) return;
-      addMessage(text, "user");
-      vscode.postMessage({ type: "chat", text });
-      input.value = "";
-      send.style.display = "none";
-      scan.style.display = "none";
-      stop.style.display = "inline-block";
-    };
-
-    scan.onclick = () => {
-      addMessage("/scan", "user");
-      vscode.postMessage({ type: "scanOverview" });
-      send.style.display = "none";
-      scan.style.display = "none";
-      stop.style.display = "inline-block";
-    };
-
-    stop.onclick = () => {
-      vscode.postMessage({ type: "stop" });
-      send.style.display = "inline-block";
-      scan.style.display = "inline-block";
-      stop.style.display = "none";
-      if (currentMessage) {
-        currentMessage.innerHTML += "<br><em style='color:#94a3b8;'>(stopped)</em>";
-      }
-    };
-
-    clear.onclick = () => {
-      chat.innerHTML = "";
-      vscode.postMessage({ type: "clear" });
-      addMessage("Conversation cleared.", "status");
-    };
-
-    mode.onchange = () => {
-      vscode.postMessage({ type: "mode", value: mode.value });
-    };
-
-    input.onkeypress = (event) => {
-      if (event.key === "Enter") {
-        send.click();
-      }
-    };
-
-    window.addEventListener("message", (event) => {
-      const msg = event.data;
-      if (msg.type === "status") {
-        addMessage(msg.text, "status");
-      } else if (msg.type === "thinking") {
-        currentMessage = document.createElement("div");
-        currentMessage.className = "message ai";
-        currentMessage.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-        currentMessage._rawText = "";
-        chat.appendChild(currentMessage);
-        chat.scrollTop = chat.scrollHeight;
-      } else if (msg.type === "stream" && currentMessage) {
-        const indicator = currentMessage.querySelector(".typing-indicator");
-        if (indicator) indicator.remove();
-        currentMessage._rawText += msg.text;
-        // While streaming show plain text for performance; final render happens on done
-        if (!currentMessage._streamNode) {
-          currentMessage._streamNode = document.createElement("span");
-          currentMessage._streamNode.style.whiteSpace = "pre-wrap";
-          currentMessage.appendChild(currentMessage._streamNode);
-        }
-        currentMessage._streamNode.textContent = currentMessage._rawText;
-        chat.scrollTop = chat.scrollHeight;
-      } else if (msg.type === "done") {
-        if (currentMessage && currentMessage._rawText) {
-          currentMessage.innerHTML = "";
-          currentMessage.appendChild(renderContent(currentMessage._rawText));
-        }
-        currentMessage = null;
-        send.style.display = "inline-block";
-        scan.style.display = "inline-block";
-        stop.style.display = "none";
-        chat.scrollTop = chat.scrollHeight;
-      } else if (msg.type === "confirm") {
-        const confirmDiv = document.createElement("div");
-        confirmDiv.className = "message ai";
-        const pre = document.createElement("code");
-        pre.style.cssText = "background:#0f172a;padding:4px 8px;border-radius:4px;display:block;margin:8px 0;";
-        pre.textContent = msg.command;
-        const label = document.createElement("span");
-        label.style.color = "#fbbf24";
-        label.textContent = "\u26a1 Run command?";
-        const allowBtn = document.createElement("button");
-        allowBtn.textContent = "Allow";
-        allowBtn.style.cssText = "padding:6px 16px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;margin-right:8px;margin-top:8px;";
-        allowBtn.onclick = () => { confirmDiv.remove(); vscode.postMessage({ type: "confirmResponse", allowed: true }); };
-        const denyBtn = document.createElement("button");
-        denyBtn.textContent = "Deny";
-        denyBtn.style.cssText = "padding:6px 16px;background:#ef4444;color:white;border:none;border-radius:6px;cursor:pointer;margin-top:8px;";
-        denyBtn.onclick = () => { confirmDiv.remove(); vscode.postMessage({ type: "confirmResponse", allowed: false }); };
-        confirmDiv.appendChild(label);
-        confirmDiv.appendChild(pre);
-        confirmDiv.appendChild(allowBtn);
-        confirmDiv.appendChild(denyBtn);
-        chat.appendChild(confirmDiv);
-        chat.scrollTop = chat.scrollHeight;
-      } else if (msg.type === "error") {
-        send.style.display = "inline-block";
-        scan.style.display = "inline-block";
-        stop.style.display = "none";
-        addMessage("Error: " + msg.text, "status");
-      } else if (msg.type === "applied") {
-        addMessage(msg.text, "status");
-      }
-    });
-  </script>
-</body>
-</html>`;
   }
 }
 
 module.exports = ChatPanel;
-

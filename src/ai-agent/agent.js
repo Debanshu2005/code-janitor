@@ -70,11 +70,74 @@ class AIAgent {
 
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const provider = config.get("provider", "ollama");
     return {
       enabled: config.get("enabled", true),
+      provider,
       ollamaUrl: config.get("ollamaUrl", "http://localhost:11434"),
-      model: config.get("model", "codellama:latest"),
+      model: config.get("model", provider === "groq" ? "llama-3.1-8b-instant" : provider === "openrouter" ? "meta-llama/llama-3.1-8b-instruct:free" : "codellama:latest"),
+      groqApiKey: config.get("groqApiKey", ""),
+      openrouterApiKey: config.get("openrouterApiKey", ""),
       timeout: config.get("timeout", 90_000)
+    };
+  }
+
+  _buildRequestOptions(config, prompt) {
+    if (config.provider === "groq") {
+      return {
+        url: "https://api.groq.com/openai/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${config.groqApiKey}`
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{ role: "user", content: prompt }],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: 512
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
+          try { return JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null; } catch { return null; }
+        }
+      };
+    }
+    if (config.provider === "openrouter") {
+      return {
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${config.openrouterApiKey}`,
+          "HTTP-Referer": "https://github.com/Debanshu2005/code-janitor",
+          "X-Title": "Code Janitor"
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{ role: "user", content: prompt }],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: 512
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
+          try { return JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null; } catch { return null; }
+        }
+      };
+    }
+    // Default: Ollama
+    return {
+      url: `${config.ollamaUrl}/api/generate`,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.model,
+        prompt,
+        stream: true,
+        options: { temperature: 0.05, num_predict: 512, top_k: 10, top_p: 0.7 }
+      }),
+      parseChunk: (line) => {
+        try { const d = JSON.parse(line); return d.response || null; } catch { return null; }
+      }
     };
   }
 
@@ -266,6 +329,34 @@ class AIAgent {
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
 
+    // Only intercept factual questions the model cannot answer
+    const lowerMsg = userMessage.trim().toLowerCase();
+    if (/\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(lowerMsg)) {
+      const reply = `Today is ${new Date().toDateString()}.`;
+      if (streamCallback) streamCallback(reply);
+      this.conversationHistory.push({ role: "assistant", content: reply });
+      return { text: reply, actions: [] };
+    }
+    if (/\b(what (time|day) is it|current time|what'?s the time)\b/i.test(lowerMsg)) {
+      const reply = `Current date and time: ${new Date().toString()}.`;
+      if (streamCallback) streamCallback(reply);
+      this.conversationHistory.push({ role: "assistant", content: reply });
+      return { text: reply, actions: [] };
+    }
+
+    // Inject active file path so the model never needs to ask for it
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
+    let resolvedMessage = userMessage;
+    if (
+      activeEditor &&
+      workspaceFolder &&
+      /\b(active|current)\s*(file|tab)?\b/i.test(userMessage) &&
+      !/[/\\]/.test(userMessage)
+    ) {
+      const rel = path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/");
+      resolvedMessage = userMessage.replace(/\b(active|current)\s*(file|tab)?\b/gi, `"${rel}"`);
+    }
+
     let prompt;
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...");
@@ -283,10 +374,10 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant with shell access. You can run shell commands to check syntax errors or inspect files.
-When running shell commands, always use the exact file path from the context below — never use placeholder names like file.js or script.py.
-Answer only based on the file context and shell output. If something is not in the context, say "I don't have enough context" — do not invent details.
-Only rewrite files if the user explicitly asks to fix them.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
+      prompt = `You are a concise coding assistant embedded in VS Code. Answer directly and helpfully.
+To run a shell command, write it on its own line starting with CMD: followed by the exact command.
+To edit a file, use FILE: path then a code block.
+Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -316,7 +407,7 @@ Only rewrite files if the user explicitly asks to fix them.${activeFileContext ?
           );
       this.currentEditableTargets = editableTargets.paths.length ? new Set(editableTargets.paths) : null;
       prompt = this._buildPrompt(
-        userMessage, relevantFiles, activeFileContext,
+        resolvedMessage, relevantFiles, activeFileContext,
         editorStateContext, openTabSnippetContext,
         isTabQuestion, editableTargets, mode
       );
@@ -324,25 +415,16 @@ Only rewrite files if the user explicitly asks to fix them.${activeFileContext ?
 
     try {
       reportStatus?.("Contacting Ollama...");
-      const response = await fetch(`${config.ollamaUrl}/api/generate`, {
+      const reqOpts = this._buildRequestOptions(config, prompt);
+      const response = await fetch(reqOpts.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reqOpts.headers,
         signal: abortSignal || AbortSignal.timeout(config.timeout),
-        body: JSON.stringify({
-          model: config.model,
-          prompt,
-          stream: true,
-          options: {
-            temperature: 0.05,
-            num_predict: 512,
-            top_k: 10,
-            top_p: 0.7
-          }
-        })
+        body: reqOpts.body
       });
 
       if (!response.ok) {
-        throw new Error(`Ollama request failed with status ${response.status}`);
+        throw new Error(`AI request failed with status ${response.status}`);
       }
 
       let fullResponse = "";
@@ -367,29 +449,19 @@ Only rewrite files if the user explicitly asks to fix them.${activeFileContext ?
 
         for (const line of lines) {
           try {
-            const data = JSON.parse(line);
-            if (data.response) {
-              const nextResponse = fullResponse + data.response;
-              if (this._isRepeatingResponse(nextResponse)) {
-                repetitionDetected = true;
-                streamDone = true;
-                if (!abortSignal?.aborted) {
-                  try {
-                    reader.cancel();
-                  } catch (cancelError) {
-                    // Ignore cancel failures from already-closing streams.
-                  }
-                }
-                break;
-              }
-
-              fullResponse += data.response;
-              if (streamCallback) {
-                streamCallback(data.response);
-              }
+            const token = reqOpts.parseChunk(line);
+            if (token === null) continue;
+            const nextResponse = fullResponse + token;
+            if (this._isRepeatingResponse(nextResponse)) {
+              repetitionDetected = true;
+              streamDone = true;
+              if (!abortSignal?.aborted) { try { reader.cancel(); } catch (_) {} }
+              break;
             }
+            fullResponse += token;
+            if (streamCallback) streamCallback(token);
           } catch (parseError) {
-            // Ignore partial streaming chunks that are not valid JSON yet.
+            // ignore partial chunks
           }
         }
       }
@@ -893,8 +965,31 @@ Only rewrite files if the user explicitly asks to fix them.${activeFileContext ?
     return filePaths.map((filePath) => `File: ${filePath}`).join("\n");
   }
 
-  getDeterministicActiveFileScanResponse(userMessage, workspaceFolder) {
+  _getSyntaxCheckCommand(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    const rel = filePath.replace(/\\/g, "/");
+    if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) return `node --check ${rel}`;
+    if (ext === ".py") return `python -m py_compile ${rel}`;
+    if (ext === ".java") return `javac ${rel}`;
+    if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext)) return `node -e "process.exit(0)" && echo "C/C++ syntax check requires a compiler - run: gcc -fsyntax-only ${rel}"`;
+    if (ext === ".html") return null; // HTML checked via parse5 in fixer
     return null;
+  }
+
+  async _runSyntaxCheck(relPath, workspaceFolder, streamCallback) {
+    const cmd = this._getSyntaxCheckCommand(relPath);
+    if (!cmd) return null;
+
+    // C/C++ — just report the command to run, can't execute compiler here
+    if (cmd.includes("gcc -fsyntax-only")) {
+      const msg = `C/C++ syntax check: run \`gcc -fsyntax-only ${relPath}\` in your terminal.`;
+      if (streamCallback) streamCallback(msg);
+      return { success: true, output: msg, skipped: true };
+    }
+
+    if (!this.validateCommand(cmd).allowed) return null;
+    const result = await this.executeCommand(cmd, workspaceFolder);
+    return result;
   }
 
   _findRelevantFiles(query, workspaceFolder) {
@@ -1005,22 +1100,12 @@ Only rewrite files if the user explicitly asks to fix them.${activeFileContext ?
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant embedded in a VS Code extension with shell access.
-You can run shell commands to check syntax, lint, or inspect files. Always use the exact file path from the indexed context — never use placeholder names like file.js or script.py.
-Answer only based on the indexed file context and shell output. If something is not present in the context, say "I don't have enough context" — never invent file names, functions, variables, or behaviour.
+    return `You are the Code Janitor AI assistant embedded in VS Code. Answer directly and helpfully.
 Mode: ${mode}.
-When asked to check for syntax errors or bugs:
-- Run the appropriate shell command using the real file path (e.g. CMD: node --check src/core/janitor.js or CMD: python -m py_compile src/core/fixers/python-fixer.py)
-- Report issues with file name and line number
-- Only rewrite the file if the user explicitly asks to fix it
-When rewriting files, use FILE: format and the changes are applied directly to the workspace.
-If you want to create or modify files:
-FILE: relative/path.ext
-\`\`\`language
-full file contents
-\`\`\`
-For folders: MKDIR: relative/path
-For shell commands: CMD: command (never wrap CMD: in code blocks, write it on its own line)
+To run a shell command write it on its own line as: CMD: <command>
+To edit a file write: FILE: relative/path then a code block with the full contents.
+To create a folder write: MKDIR: relative/path
+Never ask the user for a file path — use the exact paths shown in the context below.
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
@@ -1256,7 +1341,8 @@ Assistant:`;
         path: fullPath,
         relativePath,
         changeSummary: changeSummary.summary,
-        changed: changeSummary.changed
+        changed: changeSummary.changed,
+        syntaxCheckCmd: this._getSyntaxCheckCommand(relativePath.replace(/\\/g, "/"))
       };
     } catch (error) {
       return { success: false, error: error.message };
