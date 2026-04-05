@@ -709,15 +709,9 @@ class AIAgent {
       return null;
     }
 
-    // Only intercept if the message is ONLY about tabs, not mixed with other intent
-    const isOnlyTabQuestion = /^(what|which|show|list|can you see|do you see|tell me)?.*(tab|tabs|active tab|open tab|visible tab|active file|current file).*$/.test(message);
-    if (!isOnlyTabQuestion) {
-      return null;
-    }
-
     const editorState = this._getEditorState(workspaceFolder);
     if (!editorState.available) {
-      return null; // Fall through to AI instead of returning no-access message
+      return null;
     }
 
     const wantsVisibleTabs = /\bvisible\s+tabs?\b/.test(message);
@@ -891,8 +885,8 @@ class AIAgent {
     mode
   ) {
     const historyEntries = isTabQuestion
-      ? this.conversationHistory.filter((entry) => entry.role === "user").slice(-2)
-      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES);
+      ? this.conversationHistory.filter((entry) => entry.role === "user").slice(-2, -1)
+      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES, -1);
     const history = historyEntries
       .map((entry) =>
         `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content}`
