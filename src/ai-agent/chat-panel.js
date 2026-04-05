@@ -458,14 +458,19 @@ class ChatPanel {
         const indicator = currentMessage.querySelector(".typing-indicator");
         if (indicator) {
           indicator.remove();
+          currentMessage._rawText = "";
           currentMessage._textNode = document.createTextNode("");
           currentMessage.appendChild(currentMessage._textNode);
         }
-        if (currentMessage._textNode) {
-          currentMessage._textNode.textContent += msg.text;
-        } else {
-          currentMessage.textContent += msg.text;
-        }
+        currentMessage._rawText = (currentMessage._rawText || "") + msg.text;
+        // Render with basic formatting
+        const raw = currentMessage._rawText;
+        const rendered = raw
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/\x60([^\x60]+)\x60/g, "<code style='background:#0f172a;padding:2px 5px;border-radius:3px;color:#7dd3fc;'>$1</code>")
+          .replace(/error.*?line\s*(\d+)/gi, "<span style='background:#7f1d1d;color:#fca5a5;padding:2px 4px;border-radius:3px;'>$&</span>")
+          .replace(/\bline\s*(\d+)/gi, "<span style='color:#fbbf24;'>$&</span>");
+        currentMessage.innerHTML = rendered;
         chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "confirm") {
         const confirmDiv = document.createElement("div");

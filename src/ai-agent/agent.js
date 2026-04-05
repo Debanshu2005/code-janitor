@@ -1017,7 +1017,7 @@ FILE: relative/path.ext
 full file contents
 \`\`\`
 For folders: MKDIR: relative/path
-For shell commands: CMD: command (user will be asked for permission)
+For shell commands: CMD: command (never wrap CMD: in code blocks, write it on its own line)
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
@@ -1052,7 +1052,7 @@ Assistant:`;
       });
     }
 
-    const cmdRegex = /CMD:\s*(.+)/g;
+    const cmdRegex = /(?:```\w*\s*)?CMD:\s*(.+?)(?:\s*```)?$/gm;
     while ((match = cmdRegex.exec(response)) !== null) {
       actions.push({ type: "cmd", command: match[1].trim() });
     }
