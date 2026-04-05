@@ -136,23 +136,37 @@ class AIAgent {
     return fileList;
   }
 
-  async chat(userMessage, workspaceFolder, streamCallback, abortSignal) {
+  async chat(userMessage, workspaceFolder, streamCallback, abortSignal, options = {}) {
     const config = this.getConfig();
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." };
     }
 
-    await this.ensureCodebaseScanned(workspaceFolder);
+    const mode = options.mode === "heavy" ? "heavy" : "fast";
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
+    const useHeavyContext =
+      mode === "heavy" || this._shouldUseHeavyContext(userMessage);
 
-    const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
-    const activeFileContext = this._getActiveFileContext(workspaceFolder);
+    if (useHeavyContext && workspaceFolder) {
+      await this.ensureCodebaseScanned(workspaceFolder);
+    }
+
+    const relevantFiles = useHeavyContext
+      ? this._findRelevantFiles(userMessage, workspaceFolder)
+      : [];
+    const activeFileContext =
+      useHeavyContext || this._isEditRequest(userMessage)
+        ? this._getActiveFileContext(workspaceFolder)
+        : "";
     const editorState = this._getEditorState(workspaceFolder);
-    const editorStateContext = this._buildEditorStateContext(editorState);
-    const openTabSnippetContext = this._getOpenTabSnippetContext(
-      editorState.allOpenTabs
-    );
+    const editorStateContext =
+      useHeavyContext || isTabQuestion
+        ? this._buildEditorStateContext(editorState)
+        : "";
+    const openTabSnippetContext = useHeavyContext
+      ? this._getOpenTabSnippetContext(editorState.allOpenTabs)
+      : "";
     const editableTargets = this._resolveEditableTargets(
       userMessage,
       workspaceFolder,
@@ -168,7 +182,8 @@ class AIAgent {
       editorStateContext,
       openTabSnippetContext,
       isTabQuestion,
-      editableTargets
+      editableTargets,
+      mode
     );
 
     try {
@@ -182,7 +197,7 @@ class AIAgent {
           stream: true,
           options: {
             temperature: 0.1,
-            num_predict: 400,
+            num_predict: mode === "heavy" ? 400 : 180,
             top_k: 20,
             top_p: 0.8
           }
@@ -412,6 +427,29 @@ class AIAgent {
     );
   }
 
+  _shouldUseHeavyContext(message) {
+    return /\b(file|files|workspace|project|codebase|function|class|bug|error|fix|refactor|implement|update|modify|change|analyze|scan|review|explain|debug|test|package\.json|\.js|\.ts|\.py|\.java|\.html|open tabs|visible tabs|active tab)\b/i.test(
+      message || ""
+    );
+  }
+
+  _getFastLocalResponse(userMessage) {
+    const message = (userMessage || "").trim().toLowerCase();
+    if (!message) {
+      return null;
+    }
+
+    if (/^(hi|hello|hey|yo|sup|hola|hii+)[!. ]*$/.test(message)) {
+      return "Hello! How can I help?";
+    }
+
+    if (/^(thanks|thank you|thx)[!. ]*$/.test(message)) {
+      return "You're welcome.";
+    }
+
+    return null;
+  }
+
   _isRepeatingResponse(text) {
     if (!text || text.length < REPETITION_WINDOW * 2) {
       return false;
@@ -612,7 +650,8 @@ class AIAgent {
     editorStateContext,
     openTabSnippetContext,
     isTabQuestion,
-    editableTargets
+    editableTargets,
+    mode
   ) {
     const historyEntries = isTabQuestion
       ? this.conversationHistory.filter((entry) => entry.role === "user").slice(-2)
@@ -641,6 +680,7 @@ class AIAgent {
     );
 
     return `You are the Code Janitor AI assistant for a VS Code extension.
+Mode: ${mode}.
 You can read the indexed workspace context and propose direct file edits.
 Prefer editing files in the workspace over suggesting shell commands.
 Only claim to know the active tab, visible tabs, or open tabs when they are listed in the provided context.

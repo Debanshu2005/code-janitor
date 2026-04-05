@@ -8,6 +8,7 @@ class ChatPanel {
     this.agent = new AIAgent();
     this.abortController = null;
     this.lastActiveEditor = null;
+    this.chatMode = "fast";
 
     // Track last active editor before focus moves to chat panel
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -55,6 +56,15 @@ class ChatPanel {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "chat") {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const fastLocalResponse = this.agent._getFastLocalResponse(message.text);
+
+        if (fastLocalResponse) {
+          this.panel.webview.postMessage({ type: "thinking" });
+          this.panel.webview.postMessage({ type: "stream", text: fastLocalResponse });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
         // Pass last known active editor to agent
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         const deterministicResponse =
@@ -79,7 +89,8 @@ class ChatPanel {
           (chunk) => {
             this.panel.webview.postMessage({ type: "stream", text: chunk });
           },
-          this.abortController.signal
+          this.abortController.signal,
+          { mode: this.chatMode }
         );
 
         if (response.error) {
@@ -176,6 +187,15 @@ class ChatPanel {
       } else if (message.type === "clear") {
         this.agent.clearHistory();
         this.panel.webview.postMessage({ type: "cleared" });
+      } else if (message.type === "mode") {
+        this.chatMode = message.value === "heavy" ? "heavy" : "fast";
+        this.panel.webview.postMessage({
+          type: "status",
+          text:
+            this.chatMode === "heavy"
+              ? "Mode switched to Heavy."
+              : "Mode switched to Fast."
+        });
       }
     });
   }
@@ -201,9 +221,30 @@ class ChatPanel {
       border-bottom: 2px solid #0ea5e9;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 10px;
     }
     #header h2 { font-size: 20px; font-weight: 600; color: #0ea5e9; }
+    #header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #mode-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+    #mode {
+      padding: 8px 10px;
+      background: rgba(15, 23, 42, 0.9);
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      font-size: 12px;
+    }
     #chat { flex: 1; overflow-y: auto; padding: 20px; }
     .message {
       margin-bottom: 20px;
@@ -280,8 +321,17 @@ class ChatPanel {
 </head>
 <body>
   <div id="header">
-    <h2>Code Janitor AI</h2>
-    <span style="font-size: 12px; color: #64748b;">Powered by Ollama</span>
+    <div id="header-left">
+      <h2>Code Janitor AI</h2>
+      <span style="font-size: 12px; color: #64748b;">Powered by Ollama</span>
+    </div>
+    <div id="mode-switch">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="fast" selected>Fast</option>
+        <option value="heavy">Heavy</option>
+      </select>
+    </div>
   </div>
   <div id="chat"></div>
   <div id="input-area">
@@ -297,6 +347,7 @@ class ChatPanel {
     const send = document.getElementById("send");
     const stop = document.getElementById("stop");
     const clear = document.getElementById("clear");
+    const mode = document.getElementById("mode");
     let currentMessage = null;
 
     function escapeHtml(text) {
@@ -344,6 +395,10 @@ class ChatPanel {
       chat.innerHTML = "";
       vscode.postMessage({ type: "clear" });
       addMessage("Conversation cleared.", "status");
+    };
+
+    mode.onchange = () => {
+      vscode.postMessage({ type: "mode", value: mode.value });
     };
 
     input.onkeypress = (event) => {
