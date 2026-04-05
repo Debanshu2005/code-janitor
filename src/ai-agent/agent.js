@@ -283,7 +283,7 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant. Answer briefly and directly.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
+      prompt = `You are a concise coding assistant with access to the workspace. When checking for syntax errors, use CMD: node --check file.js or CMD: python -m py_compile file.py. Report issues with file name and line number. Only rewrite files if asked to fix them.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -416,7 +416,14 @@ class AIAgent {
 
   _getActiveFileContext(workspaceFolder) {
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
-    if (!activeEditor) {
+    if (!activeEditor || !workspaceFolder) {
+      return "";
+    }
+
+    // Skip files outside the workspace (output panels, extensions, etc.)
+    const filePath = activeEditor.document.fileName;
+    const relative = path.relative(workspaceFolder, filePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
       return "";
     }
 
@@ -996,20 +1003,21 @@ class AIAgent {
         : "";
 
     return `You are the Code Janitor AI assistant embedded in a VS Code extension.
-You have access to the indexed workspace files listed below. Use them to answer questions about the codebase.
+You have direct access to the indexed workspace files. Use them to answer questions, find bugs, and fix code.
 Mode: ${mode}.
-When asked to scan or review the codebase, summarize the indexed files and their purpose based on the context provided.
-Only use the open-tab access disclaimer for explicit tab-visibility questions when editor-state data is unavailable.
+When asked to check for syntax errors or bugs:
+- First run the appropriate shell command to check (e.g. CMD: node --check file.js or CMD: python -m py_compile file.py)
+- Then report issues with file name and line number
+- Only rewrite the file if the user asks you to fix it
+When rewriting files, use FILE: format and the changes are applied directly to the workspace.
 Do not say you cannot access the workspace - the indexed file context below IS the workspace.
-If you want to create or modify files, use this exact format:
+If you want to create or modify files:
 FILE: relative/path.ext
 \`\`\`language
 full file contents
 \`\`\`
-If you want to create a folder, use:
-MKDIR: relative/path
-Only use CMD when the user explicitly asks to run a terminal command and the command is project-scoped.
-Never suggest package installation, global installs, network downloads, or system-wide setup commands.
+For folders: MKDIR: relative/path
+For shell commands: CMD: command (user will be asked for permission)
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
@@ -1119,15 +1127,25 @@ Assistant:`;
       "npm run ",
       "npm test",
       "npx ",
+      "node --check",
+      "node -e",
       "node ",
       "git status",
       "git diff",
       "git log",
       "git rev-parse",
+      "python -m py_compile",
+      "python -m flake8",
+      "python -m pylint",
       "python ",
+      "python3 -m py_compile",
+      "python3 -m flake8",
+      "python3 -m pylint",
       "python3 ",
       "pytest",
       "eslint ",
+      "javac ",
+      "java ",
       ".\\node_modules\\.bin\\",
       "./node_modules/.bin/"
     ];
