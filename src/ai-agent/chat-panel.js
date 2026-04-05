@@ -274,6 +274,24 @@ class ChatPanel {
       border: 1px solid #334155;
       border-bottom-left-radius: 4px;
     }
+    .typing-indicator {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      padding: 4px 0;
+    }
+    .typing-indicator span {
+      width: 8px; height: 8px;
+      background: #0ea5e9;
+      border-radius: 50%;
+      animation: bounce 1.2s infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
     .status {
       text-align: center;
       color: #94a3b8;
@@ -417,9 +435,23 @@ class ChatPanel {
       if (msg.type === "status") {
         addMessage(msg.text, "status");
       } else if (msg.type === "thinking") {
-        currentMessage = addMessage("", "ai");
+        currentMessage = document.createElement("div");
+        currentMessage.className = "message ai";
+        currentMessage.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+        chat.appendChild(currentMessage);
+        chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "stream" && currentMessage) {
-        currentMessage.textContent += msg.text;
+        const indicator = currentMessage.querySelector(".typing-indicator");
+        if (indicator) {
+          indicator.remove();
+          currentMessage._textNode = document.createTextNode("");
+          currentMessage.appendChild(currentMessage._textNode);
+        }
+        if (currentMessage._textNode) {
+          currentMessage._textNode.textContent += msg.text;
+        } else {
+          currentMessage.textContent += msg.text;
+        }
         chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "done") {
         currentMessage = null;

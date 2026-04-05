@@ -149,12 +149,11 @@ class AIAgent {
 
     let prompt;
     if (mode === "fast") {
-      // Minimal prompt - no codebase scan, no file context
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
-      const history = this.conversationHistory.slice(-2)
+      const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant. Answer briefly.\n${activeFileContext ? `\n${activeFileContext}\n` : ""}\n${history}\n\nUser: ${userMessage}\n\nAssistant:`;
+      prompt = `You are a concise coding assistant. Answer briefly.${activeFileContext ? `\n\n${activeFileContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
     } else {
       await this.ensureCodebaseScanned(workspaceFolder);
       const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
