@@ -45,7 +45,23 @@ class ChatPanel {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "chat") {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const fastLocalResponse = this.agent._getFastLocalResponse(message.text);
+        const trimmedText = (message.text || "").trim();
+
+        if (/^\/fast$/i.test(trimmedText)) {
+          this.chatMode = "fast";
+          this.panel.webview.postMessage({ type: "status", text: "Mode switched to Fast." });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
+        if (/^\/heavy$/i.test(trimmedText)) {
+          this.chatMode = "heavy";
+          this.panel.webview.postMessage({ type: "status", text: "Mode switched to Heavy." });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
+        const fastLocalResponse = this.agent._getFastLocalResponse(trimmedText);
 
         if (fastLocalResponse) {
           this.panel.webview.postMessage({ type: "thinking" });
@@ -58,7 +74,7 @@ class ChatPanel {
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         const deterministicResponse =
           this.agent.getDeterministicEditorStateResponse(
-            message.text,
+            trimmedText,
             workspaceFolder
           );
 
@@ -73,7 +89,7 @@ class ChatPanel {
         this.abortController = new AbortController();
 
         const response = await this.agent.chat(
-          message.text,
+          trimmedText,
           workspaceFolder,
           (chunk) => {
             this.panel.webview.postMessage({ type: "stream", text: chunk });

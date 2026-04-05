@@ -145,28 +145,19 @@ class AIAgent {
     const mode = options.mode === "heavy" ? "heavy" : "fast";
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
-    const useHeavyContext =
-      mode === "heavy" || this._shouldUseHeavyContext(userMessage);
+    const useHeavyContext = mode === "heavy";
 
     if (useHeavyContext && workspaceFolder) {
       await this.ensureCodebaseScanned(workspaceFolder);
     }
 
-    const relevantFiles = useHeavyContext
-      ? this._findRelevantFiles(userMessage, workspaceFolder)
-      : [];
-    const activeFileContext =
-      useHeavyContext || this._isEditRequest(userMessage)
-        ? this._getActiveFileContext(workspaceFolder)
-        : "";
-    const editorState = this._getEditorState(workspaceFolder);
-    const editorStateContext =
-      useHeavyContext || isTabQuestion
-        ? this._buildEditorStateContext(editorState)
-        : "";
-    const openTabSnippetContext = useHeavyContext
-      ? this._getOpenTabSnippetContext(editorState.allOpenTabs)
+    const relevantFiles = useHeavyContext ? this._findRelevantFiles(userMessage, workspaceFolder) : [];
+    const activeFileContext = this._isEditRequest(userMessage)
+      ? this._getActiveFileContext(workspaceFolder)
       : "";
+    const editorState = this._getEditorState(workspaceFolder);
+    const editorStateContext = useHeavyContext ? this._buildEditorStateContext(editorState) : "";
+    const openTabSnippetContext = useHeavyContext ? this._getOpenTabSnippetContext(editorState.allOpenTabs) : "";
     const editableTargets = this._resolveEditableTargets(
       userMessage,
       workspaceFolder,
@@ -261,13 +252,13 @@ class AIAgent {
         role: "assistant",
         content: repetitionDetected
           ? `${fullResponse}\n\n[stopped repetitive output]`
-          : fullResponse
+          : fullResponse || this._getEmptyResponseFallback(mode)
       });
 
       return this._parseResponse(
         repetitionDetected
           ? `${fullResponse}\n\nStopped because the response started repeating.`
-          : fullResponse
+          : fullResponse || this._getEmptyResponseFallback(mode)
       );
     } catch (error) {
       if (error.name === "AbortError") {
@@ -427,12 +418,6 @@ class AIAgent {
     );
   }
 
-  _shouldUseHeavyContext(message) {
-    return /\b(file|files|workspace|project|codebase|function|class|bug|error|fix|refactor|implement|update|modify|change|analyze|scan|review|explain|debug|test|package\.json|\.js|\.ts|\.py|\.java|\.html|open tabs|visible tabs|active tab)\b/i.test(
-      message || ""
-    );
-  }
-
   _getFastLocalResponse(userMessage) {
     const message = (userMessage || "").trim().toLowerCase();
     if (!message) {
@@ -448,6 +433,12 @@ class AIAgent {
     }
 
     return null;
+  }
+
+  _getEmptyResponseFallback(mode) {
+    return mode === "heavy"
+      ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
+      : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
   }
 
   _isRepeatingResponse(text) {
@@ -672,7 +663,9 @@ class AIAgent {
     }
 
     if (!context) {
-      context = "No directly relevant files found in the indexed workspace.\n";
+      context = mode === "heavy"
+        ? "No directly relevant files found in the indexed workspace.\n"
+        : "No indexed workspace context attached in Fast mode.\n";
     }
 
     const editableTargetsContext = this._buildEditableTargetsContext(
@@ -681,6 +674,9 @@ class AIAgent {
 
     return `You are the Code Janitor AI assistant for a VS Code extension.
 Mode: ${mode}.
+${mode === "fast"
+  ? "In Fast mode, use the simple pipeline: prefer concise conversational replies, avoid repo-wide reasoning, and rely only on the directly attached context."
+  : "In Heavy mode, use the repo-aware context to help with code, files, and workspace edits."}
 You can read the indexed workspace context and propose direct file edits.
 Prefer editing files in the workspace over suggesting shell commands.
 Only claim to know the active tab, visible tabs, or open tabs when they are listed in the provided context.
