@@ -4,7 +4,7 @@ const vscode = require("vscode");
 class OllamaClient {
   constructor() {
     this.baseUrl = "http://localhost:11434";
-    this.model = "qwen2.5-coder:1.5b";
+    this.model = "codellama:latest";
   }
 
   getConfig() {
@@ -55,18 +55,89 @@ class OllamaClient {
       };
     }
 
-    const prompt = `You are a minimal code fixer. Only fix actual syntax ERRORS. Do NOT add semicolons to working code.
+    const prompts = {
+      javascript: `Fix syntax errors in this JavaScript code. Add semicolons ONLY where genuinely required.
 
-IMPORTANT:
-- If code already works, return it UNCHANGED
-- Only fix: missing closing brackets, missing colons in Python, actual syntax errors
-- NEVER add semicolons unless they are truly missing and cause errors
-- Do NOT reformat or style the code
+Rules:
+- Add semicolons ONLY where missing them causes syntax errors
+- Do NOT add after: function/class declarations, if/for/while, blocks
+- Keep existing style
 
 Code:
 ${originalCode}
 
-Fixed code (or same if no errors):`;
+Fixed code:`,
+
+      python: `Fix all possible syntax errors in this Python code.
+
+Rules:
+- Add missing colons after: def, class, if, else, elif, for, while, try, except, finally, with
+- Fix indentation issues
+- Convert JavaScript syntax to Python (true→True, false→False, null→None)
+- Keep existing style
+
+Code:
+${originalCode}
+
+Fixed code:`,
+
+      java: `Fix all possible syntax errors in this Java code.
+
+Rules:
+- Add missing semicolons at end of statements
+- Fix missing braces
+- Keep existing style
+
+Code:
+${originalCode}
+
+Fixed code:`,
+
+      c: `Fix all possible syntax errors in this C code.
+
+Rules:
+- Add missing semicolons
+- Fix missing braces
+- Keep existing style
+
+Code:
+${originalCode}
+
+Fixed code:`,
+
+      cpp: `Fix all possible syntax errors in this C++code.
+
+Rules:
+- Add missing semicolons
+- Fix missing braces
+- Keep existing style
+
+Code:
+${originalCode}
+
+Fixed code:`,
+
+      html: `Fix all possible syntax errors in this HTML code.
+
+Rules:
+- Close unclosed tags
+- Fix malformed attributes
+- Keep existing style
+
+Code:
+${originalCode}
+
+Fixed code:`
+    };
+
+    const prompt =
+      prompts[language] ||
+      `Fix syntax errors in this ${language} code. Keep existing style.
+
+Code:
+${originalCode}
+
+Fixed code:`;
 
     try {
       console.log(`🤖 Sending AI validation request for ${language}...`);
@@ -78,8 +149,10 @@ Fixed code (or same if no errors):`;
           prompt: prompt,
           stream: false,
           options: {
-            temperature: 0.1,
-            num_predict: 2048
+            temperature: 0.2,
+            num_predict: 1024,
+            top_k: 40,
+            top_p: 0.9
           }
         })
       });
@@ -126,7 +199,7 @@ Fixed code (or same if no errors):`;
         console.warn(`⚠️ AI added ${semicolonDiff} semicolons, rejecting`);
         return {
           shouldUseAI: false,
-          fixedCode: ruleBasedFix,
+          fixedCode: originalCode, // Use original, not rule-based
           reason: "AI made too many changes",
           securityIssues: []
         };

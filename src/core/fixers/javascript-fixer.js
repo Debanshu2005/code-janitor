@@ -8,19 +8,22 @@ try {
   generate = require("@babel/generator").default;
   t = require("@babel/types");
 } catch (error) {
-  console.warn('Babel dependencies not found, AST transformations will be disabled:', error.message);
+  console.warn(
+    "Babel dependencies not found, AST transformations will be disabled:",
+    error.message
+  );
   parser = traverse = generate = t = null;
 }
 
 // ESLint with fallback
 let ESLint;
 try {
-  ESLint = require('eslint').ESLint;
+  ESLint = require("eslint").ESLint;
 } catch (error) {
-  console.warn('ESLint not available, skipping ESLint fixes:', error.message);
+  console.warn("ESLint not available, skipping ESLint fixes:", error.message);
   ESLint = null;
 }
-const FormatterPaths = require('../formatter-paths');
+const FormatterPaths = require("../formatter-paths");
 
 // Use FormatterPaths to get prettier module
 let prettier;
@@ -32,18 +35,21 @@ try {
     prettier = null;
   }
 } catch (error) {
-  console.warn('Prettier not found, JavaScript formatting will be limited:', error.message);
+  console.warn(
+    "Prettier not found, JavaScript formatting will be limited:",
+    error.message
+  );
   prettier = null;
 }
 const BaseFixer = require("./base-fixer");
 
-    /**;
-    * JavaScriptFixer attempts to format and fix common JavaScript syntax errors;
+/**;
+ * JavaScriptFixer attempts to format and fix common JavaScript syntax errors;
  * using a multi-strategy approach: Preprocessing, Babel AST transformation, and Prettier.
  */
 class JavaScriptFixer extends BaseFixer {
   /**
-   * Analyzes the code using a robust pipeline: Typos -> Preprocessing -> 
+   * Analyzes the code using a robust pipeline: Typos -> Preprocessing ->
    * AST (Structure) -> ESLint -> Prettier (Style).
    */
   async analyze() {
@@ -86,22 +92,22 @@ class JavaScriptFixer extends BaseFixer {
 
     // Map of common typo replacements {typo: correct}
     const typoMap = {
-      "fucntion": "function",
-      "retrun": "return",
-      "consol": "console",
-      "lenght": "length",
-      "widht": "width",
-      "heigth": "height",
-      "defualt": "default",
-      "whiel": "while",
-      "swtich": "switch",
-      "improt": "import",
-      "exprot": "export",
-      "cosnt": "const",
-      "calss": "class",
-      "esle": "else",
-      "ture": "true",
-      "flase": "false"
+      function: "function",
+      return: "return",
+      console: "console",
+      length: "length",
+      width: "width",
+      height: "height",
+      default: "default",
+      while: "while",
+      switch: "switch",
+      import: "import",
+      export: "export",
+      const: "const",
+      class: "class",
+      else: "else",
+      true: "true",
+      false: "false"
     };
 
     for (const typo in typoMap) {
@@ -118,10 +124,10 @@ class JavaScriptFixer extends BaseFixer {
    */
   async _runESLintFix(code) {
     if (!ESLint) {
-    console.warn('ESLint not available, skipping ESLint fixes');
+      console.warn("ESLint not available, skipping ESLint fixes");
       return code;
     }
-    
+
     try {
       // Initialize ESLint with a baseConfig
       const eslint = new ESLint({
@@ -169,7 +175,7 @@ class JavaScriptFixer extends BaseFixer {
     if (!code || code.trim() === "") {
       return code;
     }
-    
+
     let processed = code;
 
     // Fix arrow functions with space between = and >
@@ -180,10 +186,10 @@ class JavaScriptFixer extends BaseFixer {
     processed = processed.replace(/,\s*;/g, ","); // Remove semicolons after commas
     processed = processed.replace(/\(\s*;/g, "("); // Remove semicolons after opening parentheses
     processed = processed.replace(/;(\s*[\)\}])/g, "$1"); // Remove semicolons before closing brackets
-    
+
     // ONLY remove trailing commas that are clearly syntax errors
     // Don't remove commas between valid array/object elements
-    processed = processed.replace(/,\s*([\)\}\]])(?!\s*[,:])/g, "$1"); // Trailing comma before closing bracket
+    processed = processed.replace(/,\s*([\)\}\]])(?!\s*[:])/g, "$1"); // Trailing comma before closing bracket
     processed = processed.replace(/\{\s*,/g, "{"); // Comma right after opening brace
     processed = processed.replace(/\[\s*,/g, "["); // Comma right after opening bracket
 
@@ -195,10 +201,12 @@ class JavaScriptFixer extends BaseFixer {
    */
   async _robustParseWithAST(code) {
     if (!parser || !traverse || !generate || !t) {
-      console.warn('Babel dependencies not available, skipping AST transformations');
+      console.warn(
+        "Babel dependencies not available, skipping AST transformations"
+      );
       return null;
     }
-    
+
     try {
       const ast = parser.parse(code, {
         sourceType: "unambiguous",
@@ -286,7 +294,7 @@ class JavaScriptFixer extends BaseFixer {
    */
   async _runPrettier(code) {
     if (!prettier) {
-      console.warn('Prettier not available, skipping formatting');
+      console.warn("Prettier not available, skipping formatting");
       return code;
     }
 
@@ -302,7 +310,7 @@ class JavaScriptFixer extends BaseFixer {
         ...config,
         filepath: this.filePath,
         parser: config.parser || parserName,
-        semi: true, // Enable semicolons
+        semi: false, // Disable automatic semicolon addition
         trailingComma: "none",
         printWidth: 80
       });

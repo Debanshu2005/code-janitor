@@ -4,7 +4,7 @@
 ![Node Version](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![NPM Version](https://img.shields.io/badge/NPM-%3E%3D9-red?logo=npm)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-0.7.6-orange)
+![Version](https://img.shields.io/badge/Version-0.8.0-orange)
 
 Code Janitor is a VSCode extension that automatically **analyzes, fixes, and formats code** for multiple programming languages, including Python, C/C++/Arduino, Java, HTML and JavaScript. It ensures your code is clean, consistent, and follows proper syntax conventions with intelligent auto-correction and real-time preview.
 
@@ -77,6 +77,13 @@ Code Janitor is a VSCode extension that automatically **analyzes, fixes, and for
 - **Multi-language support**: Enhanced fixing for Python, JavaScript, and more
 - **Seamless integration**: Works transparently with Alt+D keybinding
 - **Optional feature**: Requires Ollama installation (see setup below)
+
+### 10. AI Chat Agent 🤖 NEW!
+- **Codebase Understanding**: AI scans and understands your entire project
+- **Natural Language Commands**: Ask AI to modify code in plain English
+- **Context-Aware Changes**: AI finds relevant files and suggests precise modifications
+- **Interactive Chat Interface**: Built-in chat panel for continuous conversation
+- **Code Generation**: Generate entire files or functions from descriptions
 
 ## Installation (via npm)
 
@@ -266,6 +273,7 @@ function greet() {
 -  **Alt+l** : To lint JavaScript code
 -  **Alt+v** : To validate frontend dependencies
 -  **Alt+p** : For HTML/React preview feature (now supports JSX/TSX)
+-  **Alt+c** : Open AI Chat Agent (NEW!)
 
 ## 🔹 Real-Time Auto-Correction
 
@@ -412,6 +420,44 @@ function App() {
 - **Warning Only**: Shows warning but doesn't create files
 - **Validates**: CSS @imports, JS module imports, image sources
 
+### AI Chat Agent Examples
+
+**Using the AI Chat:**
+```
+1. Press Alt+C to open AI Chat
+2. Wait for codebase scan to complete
+3. Type your request:
+
+"Add error handling to all Python files"
+"Fix the bug in extension.js where AI validation fails"
+"Create a new feature to export code as PDF"
+"Add JSDoc comments to all JavaScript functions"
+"Refactor the JavaFixer class to use async/await"
+
+4. AI analyzes your codebase and provides:
+   - Detailed explanation
+   - Code changes with file paths
+   - Suggestions for implementation
+```
+
+**Example Conversation:**
+```
+You: "Add a function to validate email addresses in python-fixer.js"
+
+AI: "I'll add an email validation function to python-fixer.js:
+
+File: src/core/fixers/python-fixer.js
+```javascript
+function validateEmail(email) {
+  const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return regex.test(email);
+}
+```
+
+This function uses a regex pattern to validate email format.
+Would you like me to integrate this into the existing code?"
+```
+
 ---
 ## Contributing
 
@@ -469,6 +515,20 @@ function App() {
 - **Automatic display**: Opens preview beside editor when changes are made
 - **Non-intrusive**: Doesn't interfere with manual Alt+P preview
 - **Smart detection**: Only shows preview when actual fixes are applied
+
+## 🔹 What's New in v0.8.0
+
+### 🤖 AI Chat Agent
+- **Codebase Scanning**: Automatically scans all code files in workspace
+- **Natural Language Interface**: Chat with AI about your code
+- **Context-Aware Responses**: AI understands your project structure
+- **Code Modification Requests**: Ask AI to make changes across multiple files
+- **Alt+C Keybinding**: Quick access to AI chat panel
+
+### 🔧 Improvements
+- **Fixer File Exclusion**: AI validation skips fixer files to prevent false positives
+- **Performance Optimization**: Faster AI responses with optimized token limits
+- **Better Error Handling**: Improved Ollama connection detection
 
 ## 🔹 What's New in v0.7.6
 

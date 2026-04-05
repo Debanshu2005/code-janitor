@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "0.7.9",
+  "version": "0.8.9",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -60,7 +60,7 @@
         "codeJanitor.ai.model": {
           "type": "string",
           "default": "qwen2.5-coder:1.5b",
-          "description": "Ollama model to use (qwen2.5-coder:1.5b recommended for speed, codellama for accuracy)"
+          "description": "Ollama model to use (qwen2.5-coder:1.5b for speed, codellama:latest for accuracy)"
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
@@ -89,6 +89,11 @@
         "command": "codeJanitor.validateFrontend",
         "title": "Validate Frontend Dependencies",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.openChat",
+        "title": "Open AI Chat",
+        "category": "Code Janitor"
       }
     ],
     "menus": {
@@ -104,6 +109,9 @@
         },
         {
           "command": "codeJanitor.validateFrontend"
+        },
+        {
+          "command": "codeJanitor.openChat"
         }
       ]
     },
@@ -128,6 +136,11 @@
         "key": "alt+v",
         "mac": "alt+v",
         "when": "editorTextFocus && (resourceExtname == '.html' || resourceExtname == '.css' || resourceExtname == '.js' || resourceExtname == '.jsx' || resourceExtname == '.tsx')"
+      },
+      {
+        "command": "codeJanitor.openChat",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
       }
     ]
   },
