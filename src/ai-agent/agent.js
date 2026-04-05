@@ -7,6 +7,8 @@ const MAX_CONTEXT_CHARS = 14_000;
 const MAX_FILE_SNIPPET = 2_500;
 const MAX_RELEVANT_FILES = 8;
 const MAX_OPEN_TAB_SNIPPETS = 4;
+const MAX_HISTORY_ENTRIES = 4;
+const REPETITION_WINDOW = 180;
 const SCAN_STALE_MS = 30_000;
 const IGNORED_DIRS = new Set([
   ".git",
@@ -52,6 +54,7 @@ class AIAgent {
     this.scanVersion = 0;
     this.lastScanAt = 0;
     this.workspaceRoot = null;
+    this.currentEditableTargets = null;
   }
 
   getConfig() {
@@ -136,6 +139,7 @@ class AIAgent {
 
     await this.ensureCodebaseScanned(workspaceFolder);
     this.conversationHistory.push({ role: "user", content: userMessage });
+    const isTabQuestion = this._isTabQuestion(userMessage);
 
     const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
     const activeFileContext = this._getActiveFileContext(workspaceFolder);
@@ -144,12 +148,22 @@ class AIAgent {
     const openTabSnippetContext = this._getOpenTabSnippetContext(
       editorState.allOpenTabs
     );
+    const editableTargets = this._resolveEditableTargets(
+      userMessage,
+      workspaceFolder,
+      editorState
+    );
+    this.currentEditableTargets = editableTargets.paths.length
+      ? new Set(editableTargets.paths)
+      : null;
     const prompt = this._buildPrompt(
       userMessage,
       relevantFiles,
       activeFileContext,
       editorStateContext,
-      openTabSnippetContext
+      openTabSnippetContext,
+      isTabQuestion,
+      editableTargets
     );
 
     try {
@@ -178,6 +192,7 @@ class AIAgent {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let streamDone = false;
+      let repetitionDetected = false;
 
       while (!streamDone) {
         if (abortSignal?.aborted) {
@@ -197,6 +212,20 @@ class AIAgent {
           try {
             const data = JSON.parse(line);
             if (data.response) {
+              const nextResponse = fullResponse + data.response;
+              if (this._isRepeatingResponse(nextResponse)) {
+                repetitionDetected = true;
+                streamDone = true;
+                if (!abortSignal?.aborted) {
+                  try {
+                    reader.cancel();
+                  } catch (cancelError) {
+                    // Ignore cancel failures from already-closing streams.
+                  }
+                }
+                break;
+              }
+
               fullResponse += data.response;
               if (streamCallback) {
                 streamCallback(data.response);
@@ -210,16 +239,24 @@ class AIAgent {
 
       this.conversationHistory.push({
         role: "assistant",
-        content: fullResponse
+        content: repetitionDetected
+          ? `${fullResponse}\n\n[stopped repetitive output]`
+          : fullResponse
       });
 
-      return this._parseResponse(fullResponse);
+      return this._parseResponse(
+        repetitionDetected
+          ? `${fullResponse}\n\nStopped because the response started repeating.`
+          : fullResponse
+      );
     } catch (error) {
       if (error.name === "AbortError") {
         return { text: "Generation stopped", actions: [] };
       }
 
       return { error: `AI error: ${error.message}` };
+    } finally {
+      this.currentEditableTargets = null;
     }
   }
 
@@ -360,6 +397,26 @@ class AIAgent {
       .filter((word) => word && word.length > 1 && !STOP_WORDS.has(word));
   }
 
+  _isTabQuestion(message) {
+    return /\b(tab|tabs|active tab|open tab|visible tab)\b/i.test(message || "");
+  }
+
+  _isEditRequest(message) {
+    return /\b(edit|update|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format)\b/i.test(
+      message || ""
+    );
+  }
+
+  _isRepeatingResponse(text) {
+    if (!text || text.length < REPETITION_WINDOW * 2) {
+      return false;
+    }
+
+    const tail = text.slice(-REPETITION_WINDOW);
+    const previousText = text.slice(0, -REPETITION_WINDOW);
+    return previousText.includes(tail);
+  }
+
   _extractPathHints(query) {
     const matches = query.match(
       /(?:[A-Za-z]:\\[^\s"'`]+|(?:[\w.-]+[\\/])+[\w.-]+(?:\.[\w]+)?|[\w.-]+\.[A-Za-z0-9]+)/g
@@ -368,6 +425,128 @@ class AIAgent {
     return (matches || []).map((value) =>
       value.replace(/^["'`]|["'`]$/g, "").replace(/\\/g, "/").toLowerCase()
     );
+  }
+
+  _matchPathsFromHints(pathHints) {
+    const matches = new Set();
+
+    for (const hint of pathHints) {
+      const normalizedHint = hint.replace(/\\/g, "/").toLowerCase();
+      const hintedBaseName = path.basename(normalizedHint);
+
+      for (const relativePath of this.codebaseContext.keys()) {
+        const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();
+        const baseName = path.basename(normalizedPath);
+
+        if (
+          normalizedPath === normalizedHint ||
+          normalizedPath.endsWith(`/${normalizedHint}`) ||
+          baseName === hintedBaseName
+        ) {
+          matches.add(relativePath.replace(/\\/g, "/"));
+        }
+      }
+    }
+
+    return Array.from(matches).sort();
+  }
+
+  _resolveEditableTargets(userMessage, workspaceFolder, editorState) {
+    const message = userMessage || "";
+    const explicitPaths = this._matchPathsFromHints(this._extractPathHints(message));
+    const targetPaths = new Set(explicitPaths);
+    const isEditRequest = this._isEditRequest(message);
+
+    if (/\b(active|current)\s+(tab|file|editor)\b/i.test(message) && editorState.activeTabPath) {
+      targetPaths.add(editorState.activeTabPath);
+    }
+
+    if (/\bvisible\s+tabs?\b/i.test(message)) {
+      for (const tabPath of editorState.visibleTabs) {
+        targetPaths.add(tabPath);
+      }
+    }
+
+    if (/\b(all\s+)?open\s+tabs?\b/i.test(message) || /\bthese\s+tabs?\b/i.test(message)) {
+      for (const tabPath of editorState.allOpenTabs) {
+        targetPaths.add(tabPath);
+      }
+    }
+
+    if (
+      isEditRequest &&
+      targetPaths.size === 0 &&
+      editorState.activeTabPath &&
+      !/\bworkspace\b/i.test(message)
+    ) {
+      targetPaths.add(editorState.activeTabPath);
+    }
+
+    const paths = Array.from(targetPaths).sort();
+    return {
+      scope: paths.length > 0 ? "restricted" : "workspace",
+      paths
+    };
+  }
+
+  _buildEditableTargetsContext(editableTargets) {
+    if (editableTargets.scope !== "restricted") {
+      return "Editable targets: workspace-wide. You may edit any indexed workspace file only when the user clearly asks for it.\n";
+    }
+
+    return `Editable targets (only edit these files):\n${editableTargets.paths
+      .map((filePath) => `File: ${filePath}`)
+      .join("\n")}\n`;
+  }
+
+  getDeterministicEditorStateResponse(userMessage, workspaceFolder) {
+    const message = (userMessage || "").trim().toLowerCase();
+    if (!this._isTabQuestion(message) || this._isEditRequest(message)) {
+      return null;
+    }
+
+    const editorState = this._getEditorState(workspaceFolder);
+    if (!editorState.available) {
+      return "I do not have access to the current open tabs.";
+    }
+
+    const wantsVisibleTabs = /\bvisible\s+tabs?\b/.test(message);
+    const wantsOpenTabs =
+      /\b(all\s+)?open\s+tabs?\b/.test(message) || /\bcurrent\s+open\s+tabs?\b/.test(message);
+    const wantsActiveTab =
+      /\bactive\s+tabs?\b/.test(message) ||
+      /\bactive\s+file\b/.test(message) ||
+      /\bcurrent\s+tab\b/.test(message);
+
+    if (wantsVisibleTabs) {
+      return this._formatDeterministicFileList(
+        editorState.visibleTabs,
+        "I do not have access to the current open tabs."
+      );
+    }
+
+    if (wantsOpenTabs) {
+      return this._formatDeterministicFileList(
+        editorState.allOpenTabs,
+        "I do not have access to the current open tabs."
+      );
+    }
+
+    if (wantsActiveTab || /\btabs?\b/.test(message)) {
+      return editorState.activeTabPath
+        ? `File: ${editorState.activeTabPath}`
+        : "I do not have access to the current open tabs.";
+    }
+
+    return null;
+  }
+
+  _formatDeterministicFileList(filePaths, emptyMessage) {
+    if (!filePaths || filePaths.length === 0) {
+      return emptyMessage;
+    }
+
+    return filePaths.map((filePath) => `File: ${filePath}`).join("\n");
   }
 
   _findRelevantFiles(query, workspaceFolder) {
@@ -426,10 +605,14 @@ class AIAgent {
     relevantFiles,
     activeFileContext,
     editorStateContext,
-    openTabSnippetContext
+    openTabSnippetContext,
+    isTabQuestion,
+    editableTargets
   ) {
-    const history = this.conversationHistory
-      .slice(-4)
+    const historyEntries = isTabQuestion
+      ? this.conversationHistory.filter((entry) => entry.role === "user").slice(-2)
+      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES);
+    const history = historyEntries
       .map((entry) =>
         `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content}`
       )
@@ -448,14 +631,22 @@ class AIAgent {
       context = "No directly relevant files found in the indexed workspace.\n";
     }
 
+    const editableTargetsContext = this._buildEditableTargetsContext(
+      editableTargets
+    );
+
     return `You are the Code Janitor AI assistant for a VS Code extension.
 You can read the indexed workspace context and propose direct file edits.
 Prefer editing files in the workspace over suggesting shell commands.
 Only claim to know the active tab, visible tabs, or open tabs when they are listed in the provided context.
 If editor-state data is unavailable, say exactly that you do not have access to the current open tabs.
 Do not infer, guess, or invent tabs, active files, or workspace state.
+For questions asking which tabs are open, visible, or active, do not provide sample code, API guidance, or general VS Code advice.
+If editor-state context is present, answer tab questions by repeating only the exact tab entries from that context.
+If editor-state context is unavailable, answer only with: I do not have access to the current open tabs.
 If the user asks about a file that appears in the open-tab lists or indexed file context, answer the file question directly instead of repeating the tab-access disclaimer.
 Treat open-tab visibility and file-analysis ability as separate: you may analyze a file from indexed or snippet context even if tab visibility is limited.
+Respect the editable targets context. If a restricted target list is provided, only create or modify those files.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
@@ -468,7 +659,7 @@ Never suggest package installation, global installs, network downloads, or syste
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
-${editorStateContext ? `${editorStateContext}\n` : ""}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
+${editorStateContext ? `${editorStateContext}\n` : ""}${editableTargetsContext}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
 ${history ? `${history}\n\n` : ""}User: ${userMessage}
 
 Assistant:`;
@@ -476,13 +667,24 @@ Assistant:`;
 
   _parseResponse(response) {
     const actions = [];
+    const warnings = [];
 
     const fileRegex = /FILE:\s*([^\n]+)\n```(\w+)?\n([\s\S]*?)```/g;
     let match;
     while ((match = fileRegex.exec(response)) !== null) {
+      const normalizedPath = match[1].trim().replace(/\\/g, "/");
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        continue;
+      }
+
       actions.push({
         type: "file",
-        path: match[1].trim(),
+        path: normalizedPath,
         language: match[2] || "text",
         content: match[3]
       });
@@ -498,7 +700,7 @@ Assistant:`;
       actions.push({ type: "mkdir", path: match[1].trim() });
     }
 
-    return { text: response, actions };
+    return { text: response, actions, warnings };
   }
 
   _resolveWorkspacePath(inputPath) {

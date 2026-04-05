@@ -49,6 +49,19 @@ class ChatPanel {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "chat") {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const deterministicResponse =
+          this.agent.getDeterministicEditorStateResponse(
+            message.text,
+            workspaceFolder
+          );
+
+        if (deterministicResponse) {
+          this.panel.webview.postMessage({ type: "thinking" });
+          this.panel.webview.postMessage({ type: "stream", text: deterministicResponse });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
         this.panel.webview.postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 
@@ -67,6 +80,12 @@ class ChatPanel {
         }
 
         this.panel.webview.postMessage({ type: "done" });
+
+        if (response.warnings && response.warnings.length > 0) {
+          for (const warning of response.warnings) {
+            this.panel.webview.postMessage({ type: "status", text: warning });
+          }
+        }
 
         if (response.actions && response.actions.length > 0) {
           for (const action of response.actions) {
