@@ -7,8 +7,10 @@ class ChatPanel {
     this.panel = null;
     this.agent = new AIAgent();
     this.abortController = null;
-    this.lastActiveEditor = null;
+    this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
+
+    this.agent.setActiveEditor(this.lastActiveEditor);
 
     // Track last active editor before focus moves to chat panel
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -17,6 +19,9 @@ class ChatPanel {
   }
 
   async show() {
+    this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
+    this.agent.setActiveEditor(this.lastActiveEditor);
+
     if (this.panel) {
       this.panel.reveal();
       return;
@@ -63,8 +68,10 @@ class ChatPanel {
 
         if (/^\/scan$/i.test(trimmedText)) {
           this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
-          const fileCount = await this.agent.scanCodebase(workspaceFolder);
-          this.panel.webview.postMessage({ type: "status", text: `✓ Scanned ${fileCount} files.` });
+          this.panel.webview.postMessage({ type: "thinking" });
+          const overview = await this.agent.getCodebaseOverview(workspaceFolder);
+          this.panel.webview.postMessage({ type: "stream", text: overview });
+          this.panel.webview.postMessage({ type: "status", text: "Workspace overview ready." });
           this.panel.webview.postMessage({ type: "done" });
           return;
         }
@@ -227,6 +234,14 @@ class ChatPanel {
       } else if (message.type === "clear") {
         this.agent.clearHistory();
         this.panel.webview.postMessage({ type: "cleared" });
+      } else if (message.type === "scanOverview") {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
+        this.panel.webview.postMessage({ type: "thinking" });
+        const overview = await this.agent.getCodebaseOverview(workspaceFolder);
+        this.panel.webview.postMessage({ type: "stream", text: overview });
+        this.panel.webview.postMessage({ type: "status", text: "Workspace overview ready." });
+        this.panel.webview.postMessage({ type: "done" });
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
         this.panel.webview.postMessage({
@@ -373,6 +388,7 @@ class ChatPanel {
       font-size: 14px;
     }
     #send { background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); }
+    #scan { background: linear-gradient(135deg, #22c55e 0%, #15803d 100%); }
     #stop { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); display: none; }
     #clear { background: linear-gradient(135deg, #64748b 0%, #475569 100%); }
   </style>
@@ -395,6 +411,7 @@ class ChatPanel {
   <div id="input-area">
     <input id="input" type="text" placeholder="Ask anything. Use /scan, /fast, /heavy" />
     <button id="send">Send</button>
+    <button id="scan">Scan</button>
     <button id="stop">Stop</button>
     <button id="clear">Clear</button>
   </div>
@@ -403,6 +420,7 @@ class ChatPanel {
     const chat = document.getElementById("chat");
     const input = document.getElementById("input");
     const send = document.getElementById("send");
+    const scan = document.getElementById("scan");
     const stop = document.getElementById("stop");
     const clear = document.getElementById("clear");
     const mode = document.getElementById("mode");
@@ -437,12 +455,22 @@ class ChatPanel {
       vscode.postMessage({ type: "chat", text });
       input.value = "";
       send.style.display = "none";
+      scan.style.display = "none";
+      stop.style.display = "inline-block";
+    };
+
+    scan.onclick = () => {
+      addMessage("/scan", "user");
+      vscode.postMessage({ type: "scanOverview" });
+      send.style.display = "none";
+      scan.style.display = "none";
       stop.style.display = "inline-block";
     };
 
     stop.onclick = () => {
       vscode.postMessage({ type: "stop" });
       send.style.display = "inline-block";
+      scan.style.display = "inline-block";
       stop.style.display = "none";
       if (currentMessage) {
         currentMessage.innerHTML += "<br><em style='color:#94a3b8;'>(stopped)</em>";
@@ -491,8 +519,12 @@ class ChatPanel {
       } else if (msg.type === "done") {
         currentMessage = null;
         send.style.display = "inline-block";
+        scan.style.display = "inline-block";
         stop.style.display = "none";
       } else if (msg.type === "error") {
+        send.style.display = "inline-block";
+        scan.style.display = "inline-block";
+        stop.style.display = "none";
         addMessage("Error: " + msg.text, "status");
       } else if (msg.type === "applied") {
         addMessage(msg.text, "status");
@@ -505,3 +537,4 @@ class ChatPanel {
 }
 
 module.exports = ChatPanel;
+

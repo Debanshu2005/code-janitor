@@ -55,7 +55,7 @@ class AIAgent {
     this.lastScanAt = 0;
     this.workspaceRoot = null;
     this.currentEditableTargets = null;
-    this._lastActiveEditor = null;
+    this._lastActiveEditor = vscode.window.activeTextEditor || null;
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor) this._lastActiveEditor = editor;
@@ -121,6 +121,15 @@ class AIAgent {
     return this.codebaseContext.size;
   }
 
+  async getCodebaseOverview(workspaceFolder) {
+    if (!workspaceFolder) {
+      return "No workspace is open, so I can't scan the codebase yet.";
+    }
+
+    await this.ensureCodebaseScanned(workspaceFolder, true);
+    return this._buildCodebaseOverview(workspaceFolder);
+  }
+
   async _getAllFiles(dir, fileList = []) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
 
@@ -140,6 +149,108 @@ class AIAgent {
     }
 
     return fileList;
+  }
+
+  _buildCodebaseOverview(workspaceFolder) {
+    const normalizedPaths = Array.from(this.codebaseContext.keys())
+      .map((relativePath) => relativePath.replace(/\\/g, "/"))
+      .sort();
+
+    if (normalizedPaths.length === 0) {
+      return "Scan completed, but no supported code files were indexed.";
+    }
+
+    const extensionCounts = new Map();
+    const topLevelCounts = new Map();
+    const topLevelSamples = new Map();
+    const tree = new Map();
+
+    for (const relativePath of normalizedPaths) {
+      const ext = path.extname(relativePath).toLowerCase() || "[no extension]";
+      extensionCounts.set(ext, (extensionCounts.get(ext) || 0) + 1);
+
+      const parts = relativePath.split("/");
+      const topLevel = parts.length > 1 ? parts[0] : "[root]";
+      topLevelCounts.set(topLevel, (topLevelCounts.get(topLevel) || 0) + 1);
+
+      if (!topLevelSamples.has(topLevel)) {
+        topLevelSamples.set(topLevel, []);
+      }
+      if (topLevelSamples.get(topLevel).length < 3) {
+        topLevelSamples.get(topLevel).push(relativePath);
+      }
+
+      let node = tree;
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        if (!node.has(part)) {
+          node.set(part, new Map());
+        }
+        node = node.get(part);
+      }
+    }
+
+    const totalLines = Array.from(this.codebaseContext.values()).reduce(
+      (sum, fileData) => sum + fileData.content.split(/\r?\n/).length,
+      0
+    );
+
+    const formatRankedCounts = (sourceMap, limit, suffix = "") =>
+      Array.from(sourceMap.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, limit)
+        .map(([name, count]) => `- ${name}: ${count}${suffix}`)
+        .join("\n");
+
+    const renderTree = (node, prefix = "", depth = 0, lines = []) => {
+      if (depth >= 3 || lines.length >= 30) {
+        return lines;
+      }
+
+      const entries = Array.from(node.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(0, depth === 0 ? 8 : 6);
+
+      for (const [name, child] of entries) {
+        const isLeaf = child.size === 0;
+        lines.push(`${prefix}${isLeaf ? "- " : "+ "}${name}`);
+        if (!isLeaf) {
+          renderTree(child, `${prefix}  `, depth + 1, lines);
+        }
+        if (lines.length >= 30) {
+          break;
+        }
+      }
+
+      return lines;
+    };
+
+    const topLevelSection = Array.from(topLevelCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 8)
+      .map(([name, count]) => {
+        const samples = topLevelSamples.get(name) || [];
+        const sampleText = samples.length > 0 ? ` Examples: ${samples.join(", ")}` : "";
+        return `- ${name}: ${count} files.${sampleText}`;
+      })
+      .join("\n");
+
+    const treeLines = renderTree(tree).join("\n");
+
+    return [
+      `Workspace: ${path.basename(workspaceFolder)}`,
+      `Indexed files: ${normalizedPaths.length}`,
+      `Estimated total lines: ${totalLines}`,
+      "",
+      "Top-level structure:",
+      topLevelSection || "- [root]: 0 files.",
+      "",
+      "Primary file types:",
+      formatRankedCounts(extensionCounts, 8, " files") || "- none",
+      "",
+      "Tree preview:",
+      treeLines || "- no files"
+    ].join("\n");
   }
 
   async chat(userMessage, workspaceFolder, streamCallback, abortSignal, options = {}) {
@@ -594,6 +705,25 @@ class AIAgent {
     );
   }
 
+  _isLikelyActiveFileFollowUp(message) {
+    const text = (message || "").trim();
+    if (!text) {
+      return false;
+    }
+
+    if (this._mentionsEditorFiles(text) || this._extractPathHints(text).length > 0) {
+      return false;
+    }
+
+    if (/\b(codebase|repo|repository|project|workspace|all files?)\b/i.test(text)) {
+      return false;
+    }
+
+    return /\b(find|check|inspect|analy[sz]e|review|look(?:\s+for)?|explain|summari[sz]e|debug)\b/i.test(text) ||
+      /\b(issue|issues|problem|problems|bug|bugs|error|errors|wrong|fix)\b/i.test(text) ||
+      /\b(this|it|that)\b/i.test(text);
+  }
+
   _buildRelevantFileContext(relevantFiles) {
     if (!Array.isArray(relevantFiles) || relevantFiles.length === 0) {
       return "";
@@ -911,6 +1041,10 @@ class AIAgent {
     const editableTargetsContext = this._buildEditableTargetsContext(
       editableTargets
     );
+    const implicitActiveFileGuidance =
+      activeFileContext && this._isLikelyActiveFileFollowUp(userMessage)
+        ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
+        : "";
 
     return `You are the Code Janitor AI assistant for a VS Code extension.
 Mode: ${mode}.
@@ -927,7 +1061,7 @@ If editor-state context is present, answer tab questions by repeating only the e
 If editor-state context is unavailable, answer only with: I do not have access to the current open tabs.
 If the user asks about a file that appears in the open-tab lists or indexed file context, answer the file question directly instead of repeating the tab-access disclaimer.
 Treat open-tab visibility and file-analysis ability as separate: you may analyze a file from indexed or snippet context even if tab visibility is limited.
-Respect the editable targets context. If a restricted target list is provided, only create or modify those files.
+${implicitActiveFileGuidance}Respect the editable targets context. If a restricted target list is provided, only create or modify those files.
 If you want to create or modify files, use this exact format:
 FILE: relative/path.ext
 \`\`\`language
