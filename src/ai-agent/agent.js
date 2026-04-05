@@ -426,7 +426,7 @@ class AIAgent {
 
   _buildEditorStateContext(editorState) {
     if (!editorState.available) {
-      return "Editor state: unavailable. If asked about active, visible, or open tabs, say you do not have access to them.\n";
+      return "";
     }
 
     const sections = [
@@ -547,12 +547,16 @@ class AIAgent {
     return /\b(tab|tabs|active tab|open tab|visible tab)\b/i.test(message || "");
   }
 
+  _mentionsEditorFiles(message) {
+    return /\b(active|current|visible|open)?\s*(file|files|fies|tab|tabs|editor|editors)\b/i.test(
+      message || ""
+    );
+  }
+
   _isActiveFileScanRequest(message) {
     return /\b(scan|inspect|analyze|review|check|read|summari[sz]e)\b/i.test(
       message || ""
-    ) && /\b(active|current|visible|open)\s+(files?|tabs?|editors?)\b/i.test(
-      message || ""
-    );
+    ) && this._mentionsEditorFiles(message);
   }
 
   _isEditRequest(message) {
@@ -766,13 +770,19 @@ class AIAgent {
       /\bvisible\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
     const wantsOpen =
       /\b(all\s+)?open\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
+    const wantsActive =
+      /\b(active|current)\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
     const targetPaths = wantsVisible
       ? editorState.visibleTabs
       : wantsOpen
         ? editorState.allOpenTabs
-        : editorState.visibleTabs.length > 0
+        : wantsActive && editorState.activeTabPath
+          ? [editorState.activeTabPath]
+          : editorState.visibleTabs.length > 0
           ? editorState.visibleTabs
-          : editorState.allOpenTabs;
+          : editorState.activeTabPath
+            ? [editorState.activeTabPath]
+            : editorState.allOpenTabs;
 
     if (!targetPaths || targetPaths.length === 0) {
       return "I do not have access to the current open tabs.";
