@@ -67,8 +67,8 @@ class AIAgent {
     return {
       enabled: config.get("enabled", true),
       ollamaUrl: config.get("ollamaUrl", "http://localhost:11434"),
-      model: config.get("model", "qwen2.5-coder:1.5b"),
-      timeout: config.get("timeout", 20_000)
+      model: config.get("model", "codellama:latest"),
+      timeout: config.get("timeout", 90_000)
     };
   }
 
@@ -143,39 +143,33 @@ class AIAgent {
     }
 
     const mode = options.mode === "heavy" ? "heavy" : "fast";
+
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
-    const useHeavyContext = mode === "heavy";
 
-    if (useHeavyContext && workspaceFolder) {
+    let prompt;
+    if (mode === "fast") {
+      // Minimal prompt - no codebase scan, no file context
+      const activeFileContext = this._getActiveFileContext(workspaceFolder);
+      const history = this.conversationHistory.slice(-2)
+        .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
+        .join("\n\n");
+      prompt = `You are a concise coding assistant. Answer briefly.\n${activeFileContext ? `\n${activeFileContext}\n` : ""}\n${history}\n\nUser: ${userMessage}\n\nAssistant:`;
+    } else {
       await this.ensureCodebaseScanned(workspaceFolder);
+      const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
+      const activeFileContext = this._getActiveFileContext(workspaceFolder);
+      const editorState = this._getEditorState(workspaceFolder);
+      const editorStateContext = this._buildEditorStateContext(editorState);
+      const openTabSnippetContext = this._getOpenTabSnippetContext(editorState.allOpenTabs);
+      const editableTargets = this._resolveEditableTargets(userMessage, workspaceFolder, editorState);
+      this.currentEditableTargets = editableTargets.paths.length ? new Set(editableTargets.paths) : null;
+      prompt = this._buildPrompt(
+        userMessage, relevantFiles, activeFileContext,
+        editorStateContext, openTabSnippetContext,
+        isTabQuestion, editableTargets, mode
+      );
     }
-
-    const relevantFiles = useHeavyContext ? this._findRelevantFiles(userMessage, workspaceFolder) : [];
-    const activeFileContext = this._isEditRequest(userMessage)
-      ? this._getActiveFileContext(workspaceFolder)
-      : "";
-    const editorState = this._getEditorState(workspaceFolder);
-    const editorStateContext = useHeavyContext ? this._buildEditorStateContext(editorState) : "";
-    const openTabSnippetContext = useHeavyContext ? this._getOpenTabSnippetContext(editorState.allOpenTabs) : "";
-    const editableTargets = this._resolveEditableTargets(
-      userMessage,
-      workspaceFolder,
-      editorState
-    );
-    this.currentEditableTargets = editableTargets.paths.length
-      ? new Set(editableTargets.paths)
-      : null;
-    const prompt = this._buildPrompt(
-      userMessage,
-      relevantFiles,
-      activeFileContext,
-      editorStateContext,
-      openTabSnippetContext,
-      isTabQuestion,
-      editableTargets,
-      mode
-    );
 
     try {
       const response = await fetch(`${config.ollamaUrl}/api/generate`, {
@@ -188,7 +182,7 @@ class AIAgent {
           stream: true,
           options: {
             temperature: 0.1,
-            num_predict: mode === "heavy" ? 400 : 120,
+            num_predict: 1024,
             top_k: 20,
             top_p: 0.8
           }
