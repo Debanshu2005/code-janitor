@@ -258,7 +258,6 @@ class ChatPanel {
       border-radius: 12px;
       animation: fadeIn 0.3s;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-      white-space: pre-wrap;
     }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(10px); }
@@ -378,22 +377,77 @@ class ChatPanel {
     let currentMessage = null;
 
     function escapeHtml(text) {
-      return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function copyToClipboard(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+      });
+    }
+
+    function makeCodeBlock(lang, code) {
+      const isBash = /^(bash|sh|shell|cmd|)$/i.test(lang);
+      const wrapper = document.createElement("div");
+      wrapper.style.cssText = "position:relative;margin:10px 0;";
+      const pre = document.createElement("pre");
+      pre.style.cssText = "background:#0d1117;border-radius:8px;padding:14px 16px;overflow-x:auto;border-left:3px solid " + (isBash ? "#22c55e" : "#0ea5e9") + ";margin:0;";
+      const codeEl = document.createElement("code");
+      codeEl.style.cssText = "font-family:'Fira Code','Courier New',monospace;font-size:13px;color:" + (isBash ? "#86efac" : "#e2e8f0") + ";white-space:pre;";
+      codeEl.textContent = code;
+      pre.appendChild(codeEl);
+      const btn = document.createElement("button");
+      btn.textContent = "Copy";
+      btn.style.cssText = "position:absolute;top:8px;right:8px;padding:3px 10px;font-size:11px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:5px;cursor:pointer;";
+      btn.onclick = () => copyToClipboard(code, btn);
+      wrapper.appendChild(pre);
+      wrapper.appendChild(btn);
+      return wrapper;
     }
 
     function renderContent(text) {
-      const escaped = escapeHtml(text);
-      const fence = "\\x60\\x60\\x60";
-      return escaped.replace(new RegExp(fence + "(\\\\w+)?\\\\n([\\\\s\\\\S]*?)" + fence, "g"), "<pre><code>$2</code></pre>");
+      const container = document.createElement("div");
+      // Split on fenced code blocks
+      const parts = text.split(/(```[\w]*\n[\s\S]*?```)/g);
+      for (const part of parts) {
+        const fenceMatch = part.match(/^```([\w]*)\n([\s\S]*?)```$/);
+        if (fenceMatch) {
+          container.appendChild(makeCodeBlock(fenceMatch[1], fenceMatch[2]));
+          continue;
+        }
+        // Render plain text segments line by line
+        const lines = part.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          // CMD: lines get their own bash block
+          const cmdMatch = line.match(/^CMD:\s*(.+)$/);
+          if (cmdMatch) {
+            container.appendChild(makeCodeBlock("bash", cmdMatch[1]));
+            continue;
+          }
+          // Inline code
+          const span = document.createElement("span");
+          span.style.whiteSpace = "pre-wrap";
+          span.innerHTML = escapeHtml(line)
+            .replace(/`([^`]+)`/g, "<code style='background:#0f172a;padding:2px 5px;border-radius:3px;color:#7dd3fc;font-family:monospace;'>$1</code>")
+            .replace(/(error[^\n]*?line\s*\d+)/gi, "<span style='background:#7f1d1d;color:#fca5a5;padding:1px 4px;border-radius:3px;'>$1</span>")
+            .replace(/(\bline\s+\d+\b)/gi, "<span style='color:#fbbf24;'>$1</span>");
+          container.appendChild(span);
+          if (i < lines.length - 1) container.appendChild(document.createElement("br"));
+        }
+      }
+      return container;
     }
 
     function addMessage(text, type) {
       const msg = document.createElement("div");
       msg.className = "message " + type;
-      msg.innerHTML = renderContent(text);
+      if (type === "status") {
+        msg.textContent = text;
+      } else {
+        msg.appendChild(renderContent(text));
+      }
       chat.appendChild(msg);
       chat.scrollTop = chat.scrollHeight;
       return msg;
@@ -452,25 +506,30 @@ class ChatPanel {
         currentMessage = document.createElement("div");
         currentMessage.className = "message ai";
         currentMessage.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+        currentMessage._rawText = "";
         chat.appendChild(currentMessage);
         chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "stream" && currentMessage) {
         const indicator = currentMessage.querySelector(".typing-indicator");
-        if (indicator) {
-          indicator.remove();
-          currentMessage._rawText = "";
-          currentMessage._textNode = document.createTextNode("");
-          currentMessage.appendChild(currentMessage._textNode);
+        if (indicator) indicator.remove();
+        currentMessage._rawText += msg.text;
+        // While streaming show plain text for performance; final render happens on done
+        if (!currentMessage._streamNode) {
+          currentMessage._streamNode = document.createElement("span");
+          currentMessage._streamNode.style.whiteSpace = "pre-wrap";
+          currentMessage.appendChild(currentMessage._streamNode);
         }
-        currentMessage._rawText = (currentMessage._rawText || "") + msg.text;
-        // Render with basic formatting
-        const raw = currentMessage._rawText;
-        const rendered = raw
-          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/\x60([^\x60]+)\x60/g, "<code style='background:#0f172a;padding:2px 5px;border-radius:3px;color:#7dd3fc;'>$1</code>")
-          .replace(/error.*?line\s*(\d+)/gi, "<span style='background:#7f1d1d;color:#fca5a5;padding:2px 4px;border-radius:3px;'>$&</span>")
-          .replace(/\bline\s*(\d+)/gi, "<span style='color:#fbbf24;'>$&</span>");
-        currentMessage.innerHTML = rendered;
+        currentMessage._streamNode.textContent = currentMessage._rawText;
+        chat.scrollTop = chat.scrollHeight;
+      } else if (msg.type === "done") {
+        if (currentMessage && currentMessage._rawText) {
+          currentMessage.innerHTML = "";
+          currentMessage.appendChild(renderContent(currentMessage._rawText));
+        }
+        currentMessage = null;
+        send.style.display = "inline-block";
+        scan.style.display = "inline-block";
+        stop.style.display = "none";
         chat.scrollTop = chat.scrollHeight;
       } else if (msg.type === "confirm") {
         const confirmDiv = document.createElement("div");
@@ -495,11 +554,6 @@ class ChatPanel {
         confirmDiv.appendChild(denyBtn);
         chat.appendChild(confirmDiv);
         chat.scrollTop = chat.scrollHeight;
-      } else if (msg.type === "done") {
-        currentMessage = null;
-        send.style.display = "inline-block";
-        scan.style.display = "inline-block";
-        stop.style.display = "none";
       } else if (msg.type === "error") {
         send.style.display = "inline-block";
         scan.style.display = "inline-block";

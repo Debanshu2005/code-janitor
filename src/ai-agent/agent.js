@@ -283,7 +283,10 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant with access to the workspace. When checking for syntax errors, use CMD: node --check file.js or CMD: python -m py_compile file.py. Report issues with file name and line number. Only rewrite files if asked to fix them.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
+      prompt = `You are a concise coding assistant with shell access. You can run shell commands to check syntax errors or inspect files.
+When running shell commands, always use the exact file path from the context below — never use placeholder names like file.js or script.py.
+Answer only based on the file context and shell output. If something is not in the context, say "I don't have enough context" — do not invent details.
+Only rewrite files if the user explicitly asks to fix them.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -330,10 +333,10 @@ class AIAgent {
           prompt,
           stream: true,
           options: {
-            temperature: 0.1,
-            num_predict: 1024,
-            top_k: 20,
-            top_p: 0.8
+            temperature: 0.05,
+            num_predict: 512,
+            top_k: 10,
+            top_p: 0.7
           }
         })
       });
@@ -1002,15 +1005,15 @@ class AIAgent {
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant embedded in a VS Code extension.
-You have direct access to the indexed workspace files. Use them to answer questions, find bugs, and fix code.
+    return `You are the Code Janitor AI assistant embedded in a VS Code extension with shell access.
+You can run shell commands to check syntax, lint, or inspect files. Always use the exact file path from the indexed context — never use placeholder names like file.js or script.py.
+Answer only based on the indexed file context and shell output. If something is not present in the context, say "I don't have enough context" — never invent file names, functions, variables, or behaviour.
 Mode: ${mode}.
 When asked to check for syntax errors or bugs:
-- First run the appropriate shell command to check (e.g. CMD: node --check file.js or CMD: python -m py_compile file.py)
-- Then report issues with file name and line number
-- Only rewrite the file if the user asks you to fix it
+- Run the appropriate shell command using the real file path (e.g. CMD: node --check src/core/janitor.js or CMD: python -m py_compile src/core/fixers/python-fixer.py)
+- Report issues with file name and line number
+- Only rewrite the file if the user explicitly asks to fix it
 When rewriting files, use FILE: format and the changes are applied directly to the workspace.
-Do not say you cannot access the workspace - the indexed file context below IS the workspace.
 If you want to create or modify files:
 FILE: relative/path.ext
 \`\`\`language
