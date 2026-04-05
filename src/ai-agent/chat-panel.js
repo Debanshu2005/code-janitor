@@ -87,6 +87,26 @@ class ChatPanel {
           return;
         }
 
+        const deterministicScanResponse =
+          this.agent.getDeterministicActiveFileScanResponse(
+            trimmedText,
+            workspaceFolder
+          );
+
+        if (deterministicScanResponse) {
+          this.panel.webview.postMessage({
+            type: "status",
+            text: "Scanning active files from editor state."
+          });
+          this.panel.webview.postMessage({ type: "thinking" });
+          this.panel.webview.postMessage({
+            type: "stream",
+            text: deterministicScanResponse
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+
         this.panel.webview.postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 

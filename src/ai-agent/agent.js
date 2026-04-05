@@ -174,17 +174,32 @@ class AIAgent {
         .join("\n\n");
       prompt = `You are a concise coding assistant. Answer briefly and directly.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${userMessage}\n\nAssistant:`;
     } else {
-      reportStatus?.("Scanning workspace...");
+      const editorState = this._getEditorState(workspaceFolder);
+      const editableTargets = this._resolveEditableTargets(
+        userMessage,
+        workspaceFolder,
+        editorState
+      );
+      const isScopedActiveFileEdit =
+        this._isActiveFileScanRequest(userMessage) &&
+        this._isEditRequest(userMessage) &&
+        editableTargets.paths.length > 0;
+
+      reportStatus?.(
+        isScopedActiveFileEdit
+          ? "Scanning active files..."
+          : "Scanning workspace..."
+      );
       await this.ensureCodebaseScanned(workspaceFolder);
       const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
-      const editorState = this._getEditorState(workspaceFolder);
       const editorStateContext = this._buildEditorStateContext(editorState);
-      const openTabSnippetContext = this._getOpenTabSnippetContext(
-        editorState.allOpenTabs,
-        workspaceFolder
-      );
-      const editableTargets = this._resolveEditableTargets(userMessage, workspaceFolder, editorState);
+      const openTabSnippetContext = isScopedActiveFileEdit
+        ? this._getTargetSnippetContext(editableTargets.paths, workspaceFolder)
+        : this._getOpenTabSnippetContext(
+            editorState.allOpenTabs,
+            workspaceFolder
+          );
       this.currentEditableTargets = editableTargets.paths.length ? new Set(editableTargets.paths) : null;
       prompt = this._buildPrompt(
         userMessage, relevantFiles, activeFileContext,
@@ -471,6 +486,56 @@ class AIAgent {
     return snippetBlocks.join("");
   }
 
+  _getTargetSnippetContext(targetPaths, workspaceFolder, maxSnippets = MAX_RELEVANT_FILES) {
+    if (!Array.isArray(targetPaths) || targetPaths.length === 0) {
+      return "";
+    }
+
+    const snippetBlocks = [];
+    const openDocuments = new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.fileName,
+        document
+      ])
+    );
+
+    for (const targetPath of targetPaths) {
+      let snippet = "";
+      const fullPath = workspaceFolder
+        ? path.join(workspaceFolder, targetPath)
+        : targetPath;
+      const openDocument = openDocuments.get(fullPath);
+
+      if (openDocument) {
+        snippet = this._buildDocumentContext(
+          "Editable target content",
+          openDocument,
+          workspaceFolder,
+          MAX_FILE_SNIPPET
+        );
+      } else {
+        const fileData = this.codebaseContext.get(targetPath);
+        if (!fileData) {
+          continue;
+        }
+
+        snippet =
+          `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
+            0,
+            MAX_FILE_SNIPPET
+          )}\n\`\`\``;
+      }
+
+      snippetBlocks.push(`${snippet}\n\n`);
+
+      if (snippetBlocks.length >= maxSnippets) {
+        break;
+      }
+    }
+
+    return snippetBlocks.join("");
+  }
+
   _extractKeywords(query) {
     return query
       .toLowerCase()
@@ -480,6 +545,14 @@ class AIAgent {
 
   _isTabQuestion(message) {
     return /\b(tab|tabs|active tab|open tab|visible tab)\b/i.test(message || "");
+  }
+
+  _isActiveFileScanRequest(message) {
+    return /\b(scan|inspect|analyze|review|check|read|summari[sz]e)\b/i.test(
+      message || ""
+    ) && /\b(active|current|visible|open)\s+(files?|tabs?|editors?)\b/i.test(
+      message || ""
+    );
   }
 
   _isEditRequest(message) {
@@ -674,6 +747,70 @@ class AIAgent {
     }
 
     return filePaths.map((filePath) => `File: ${filePath}`).join("\n");
+  }
+
+  getDeterministicActiveFileScanResponse(userMessage, workspaceFolder) {
+    if (
+      !this._isActiveFileScanRequest(userMessage) ||
+      this._isEditRequest(userMessage)
+    ) {
+      return null;
+    }
+
+    const editorState = this._getEditorState(workspaceFolder);
+    if (!editorState.available) {
+      return "I do not have access to the current open tabs.";
+    }
+
+    const wantsVisible =
+      /\bvisible\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
+    const wantsOpen =
+      /\b(all\s+)?open\s+(files?|tabs?|editors?)\b/i.test(userMessage || "");
+    const targetPaths = wantsVisible
+      ? editorState.visibleTabs
+      : wantsOpen
+        ? editorState.allOpenTabs
+        : editorState.visibleTabs.length > 0
+          ? editorState.visibleTabs
+          : editorState.allOpenTabs;
+
+    if (!targetPaths || targetPaths.length === 0) {
+      return "I do not have access to the current open tabs.";
+    }
+
+    const openDocuments = new Map(
+      vscode.workspace.textDocuments.map((document) => [document.fileName, document])
+    );
+    const sections = [];
+
+    if (editorState.activeTabPath) {
+      sections.push(`Active file: ${editorState.activeTabPath}`);
+    }
+
+    for (const tabPath of targetPaths.slice(0, MAX_OPEN_TAB_SNIPPETS)) {
+      const fullPath = workspaceFolder ? path.join(workspaceFolder, tabPath) : tabPath;
+      const openDocument = openDocuments.get(fullPath);
+      const fileData = this.codebaseContext.get(tabPath);
+      const content = openDocument
+        ? openDocument.getText()
+        : fileData
+          ? fileData.content
+          : "";
+
+      sections.push(
+        `File: ${tabPath}\n\`\`\`\n${content.slice(0, MAX_FILE_SNIPPET)}\n\`\`\``
+      );
+    }
+
+    if (targetPaths.length > MAX_OPEN_TAB_SNIPPETS) {
+      sections.push(
+        `Additional open files not expanded: ${targetPaths
+          .slice(MAX_OPEN_TAB_SNIPPETS)
+          .join(", ")}`
+      );
+    }
+
+    return sections.join("\n\n");
   }
 
   _findRelevantFiles(query, workspaceFolder) {
