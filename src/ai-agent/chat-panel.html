@@ -458,21 +458,12 @@
     </div>
 
     <div id="api-key-row">
-      <span style="font-size: 11px; color: #64748b; white-space: nowrap"
-        >API Key:</span
-      >
-      <input
-        id="api-key-input"
-        type="password"
-        placeholder="Paste your API key here..."
-      />
-      <button id="api-key-save">Save</button>
-      <a
-        id="api-key-link"
-        href=""
-        style="font-size: 10px; color: #3b82f6; white-space: nowrap"
-        >Get key</a
-      >
+      <span style="font-size:11px;color:#64748b;white-space:nowrap;">API Key:</span>
+      <span id="api-key-status" style="font-size:11px;color:#22c55e;display:none;">&#10003; Key saved</span>
+      <input id="api-key-input" type="password" placeholder="Paste your API key here..." style="flex:1;padding:4px 8px;background:#1e2a3a;border:1px solid #2d3f55;border-radius:6px;color:#e2e8f0;font-size:11px;" />
+      <button id="api-key-save" style="padding:4px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;">Save</button>
+      <button id="api-key-change" style="font-size:11px;color:#3b82f6;background:none;border:none;cursor:pointer;text-decoration:underline;display:none;">Change</button>
+      <a id="api-key-link" href="" style="font-size:10px;color:#3b82f6;white-space:nowrap;">Get key</a>
     </div>
 
     <div id="action-bar">
@@ -518,6 +509,22 @@
       var apiKeyInput = document.getElementById("api-key-input");
       var apiKeySave = document.getElementById("api-key-save");
       var apiKeyLink = document.getElementById("api-key-link");
+      var apiKeyStatus = document.getElementById("api-key-status");
+      var apiKeyChange = document.getElementById("api-key-change");
+
+      function showKeySaved() {
+        apiKeyInput.style.display = "none";
+        apiKeySave.style.display = "none";
+        apiKeyStatus.style.display = "inline";
+        apiKeyChange.style.display = "inline";
+      }
+      function showKeyInput() {
+        apiKeyInput.style.display = "";
+        apiKeySave.style.display = "";
+        apiKeyStatus.style.display = "none";
+        apiKeyChange.style.display = "none";
+      }
+      apiKeyChange.onclick = function() { showKeyInput(); apiKeyInput.focus(); };
       var modelSelect = document.getElementById("model-select");
 
       var providerLinks = {
@@ -526,15 +533,38 @@
         anthropic: "https://console.anthropic.com/settings/keys",
       };
 
+      var modelsByProvider = {
+        groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
+        openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
+        anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
+      };
+
+      function populateModels(models) {
+        modelSelect.innerHTML = "";
+        models.forEach(function(m) {
+          var opt = document.createElement("option");
+          opt.value = m; opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+      }
+
       providerSelect.onchange = function () {
         var p = providerSelect.value;
-        var needsKey = p === "groq" || p === "openrouter";
+        var needsKey = p === "groq" || p === "openrouter" || p === "anthropic";
         apiKeyRow.classList.toggle("visible", needsKey);
-        if (needsKey) {
+        if (needsKey && providerLinks[p]) {
           apiKeyLink.href = providerLinks[p];
           apiKeyLink.textContent = "Get " + p + " key";
         }
+        if (modelsByProvider[p]) {
+          populateModels(modelsByProvider[p]);
+        } else {
+          // Ollama — show defaults immediately, backend will refresh if running
+          populateModels(["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"]);
+        }
         vscode.postMessage({ type: "setProvider", provider: p });
+        // Always re-fetch Ollama models on switch so newly pulled models appear
+        if (p === "ollama") vscode.postMessage({ type: "refreshOllamaModels" });
       };
 
       apiKeySave.onclick = function () {
@@ -546,6 +576,7 @@
           apiKey: key,
         });
         apiKeyInput.value = "";
+        showKeySaved();
         addRow("API key saved for " + providerSelect.value + ".", "status");
       };
       var currentMessage = null;
@@ -887,6 +918,20 @@
           addRow("\u274c " + msg.text, "status");
         } else if (msg.type === "applied") {
           addRow(msg.text, "status");
+        } else if (msg.type === "setCurrentProvider") {
+          if (msg.provider) {
+            providerSelect.value = msg.provider;
+            var needsKey = msg.provider === "groq" || msg.provider === "openrouter" || msg.provider === "anthropic";
+            apiKeyRow.classList.toggle("visible", needsKey);
+            if (needsKey && providerLinks[msg.provider]) {
+              apiKeyLink.href = providerLinks[msg.provider];
+              apiKeyLink.textContent = "Get " + msg.provider + " key";
+            }
+            var hasKey = (msg.provider === "groq" && msg.hasGroqKey) ||
+                         (msg.provider === "openrouter" && msg.hasOpenrouterKey) ||
+                         (msg.provider === "anthropic" && msg.hasAnthropicKey);
+            if (hasKey) { showKeySaved(); } else { showKeyInput(); }
+          }
         } else if (msg.type === "setModelOptions") {
           // Populate model list from Ollama
           var sel = modelSelect;
@@ -909,6 +954,7 @@
       });
 
       // Init
+      vscode.postMessage({ type: "ready" });
       addRow(
         "Ready. Select a model above, pick an action chip, or just ask.",
         "status",

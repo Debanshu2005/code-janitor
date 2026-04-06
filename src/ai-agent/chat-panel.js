@@ -37,11 +37,9 @@ class ChatPanel {
     );
 
     this.panel.webview.html = this._getHtmlContent();
+    // Initial state is sent when the webview fires the "ready" message
     this._setupMessageHandler();
     this.panel.onDidDispose(() => { this.panel = null; });
-
-    // Populate model list from Ollama
-    this._fetchAndSendModels();
   }
 
   async _runSyntaxScan(workspaceFolder, specificFiles) {
@@ -76,55 +74,28 @@ class ChatPanel {
   }
 
   async _fetchAndSendModels() {
+    // Only needed for Ollama — other providers populate models client-side
     try {
       const config = this.agent.getConfig();
-      if (config.provider === "anthropic") {
-        const models = [
-          "claude-opus-4-5",
-          "claude-sonnet-4-5",
-          "claude-3-5-sonnet-20241022",
-          "claude-3-5-haiku-20241022",
-          "claude-3-opus-20240229"
-        ];
-        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "anthropic" });
-        return;
-      }
-      if (config.provider === "groq") {
-        const models = [
-          "llama-3.1-8b-instant", "llama-3.1-70b-versatile",
-          "llama3-8b-8192", "llama3-70b-8192",
-          "mixtral-8x7b-32768", "gemma2-9b-it"
-        ];
-        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "groq" });
-        return;
-      }
-      if (config.provider === "openrouter") {
-        const models = [
-          "qwen/qwen-2.5-coder-32b-instruct",
-          "qwen/qwen-2.5-72b-instruct",
-          "deepseek/deepseek-coder-v2",
-          "deepseek/deepseek-r1-distill-qwen-32b",
-          "meta-llama/llama-3.1-70b-instruct",
-          "meta-llama/llama-3.3-70b-instruct",
-          "microsoft/phi-4",
-          "google/gemini-2.0-flash-exp:free",
-          "google/gemma-3-27b-it:free",
-          "meta-llama/llama-3.1-8b-instruct:free",
-          "mistralai/mistral-7b-instruct:free"
-        ];
-        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "openrouter" });
-        return;
-      }
-      // Ollama — fetch live
+      if (config.provider !== "ollama") return;
       const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(4000) });
       if (res.ok) {
         const data = await res.json();
         const models = (data.models || []).map(m => m.name).filter(Boolean);
         if (models.length > 0 && this.panel) {
           this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "ollama" });
+          return;
         }
       }
     } catch (_) {}
+    // Ollama unreachable or no models — show default so dropdown isn't stuck
+    if (this.panel) {
+      this.panel.webview.postMessage({
+        type: "setModelOptions",
+        models: ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
+        provider: "ollama"
+      });
+    }
   }
 
   _setupMessageHandler() {
@@ -266,6 +237,20 @@ class ChatPanel {
           ? (this.lastActiveEditor ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")] : [])
           : null;
         await this._runSyntaxScan(workspaceFolder, files);
+      } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
+        // Webview signals it's fully loaded or user switched to Ollama — send current state
+        if (message.type === "ready") {
+          const savedConfig = this.agent.getConfig();
+          this.panel.webview.postMessage({
+            type: "setCurrentProvider",
+            provider: savedConfig.provider,
+            model: savedConfig.model,
+            hasGroqKey: !!savedConfig.groqApiKey,
+            hasOpenrouterKey: !!savedConfig.openrouterApiKey,
+            hasAnthropicKey: !!savedConfig.anthropicApiKey
+          });
+        }
+        this._fetchAndSendModels();
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
@@ -283,7 +268,9 @@ class ChatPanel {
         if (message.apiKey && message.provider === "anthropic") {
           await cfg.update("anthropicApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
         }
-        this._fetchAndSendModels();
+        // Wait for config to persist before fetching models
+        await new Promise(r => setTimeout(r, 300));
+        await this._fetchAndSendModels();
       }
     });
   }

@@ -83,7 +83,8 @@ class AIAgent {
     };
   }
 
-  _buildRequestOptions(config, prompt) {
+  _buildRequestOptions(config, prompt, mode = "fast") {
+    const maxTokens = mode === "heavy" ? 4096 : 512;
     if (config.provider === "anthropic") {
       return {
         url: "https://api.anthropic.com/v1/messages",
@@ -94,7 +95,7 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
-          max_tokens: 1024,
+          max_tokens: maxTokens,
           stream: true,
           messages: [{ role: "user", content: prompt }]
         }),
@@ -119,7 +120,7 @@ class AIAgent {
           messages: [{ role: "user", content: prompt }],
           stream: true,
           temperature: 0.05,
-          max_tokens: 512
+          max_tokens: maxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -141,7 +142,7 @@ class AIAgent {
           messages: [{ role: "user", content: prompt }],
           stream: true,
           temperature: 0.05,
-          max_tokens: 512
+          max_tokens: maxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -157,7 +158,7 @@ class AIAgent {
         model: config.model,
         prompt,
         stream: true,
-        options: { temperature: 0.05, num_predict: 512, top_k: 10, top_p: 0.7 }
+        options: { temperature: 0.05, num_predict: mode === "heavy" ? -1 : 512, top_k: 10, top_p: 0.7 }
       }),
       parseChunk: (line) => {
         try { const d = JSON.parse(line); return d.response || null; } catch { return null; }
@@ -398,9 +399,9 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant embedded in VS Code. Answer directly and helpfully.
-To run a shell command, write it on its own line starting with CMD: followed by the exact command.
-To edit a file, use FILE: path then a code block.
+      prompt = `You are a concise coding assistant embedded in VS Code. Reply conversationally to greetings and simple questions. For coding tasks, answer directly and helpfully.
+Only use CMD: to suggest a shell command if the user explicitly asks to run something.
+Only use FILE: path + code block if the user explicitly asks to edit or create a file.
 Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
@@ -439,7 +440,7 @@ Never ask the user for a file path — use the file paths shown in the context b
 
     try {
       reportStatus?.("Contacting Ollama...");
-      const reqOpts = this._buildRequestOptions(config, prompt);
+      const reqOpts = this._buildRequestOptions(config, prompt, mode);
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
@@ -1124,11 +1125,11 @@ Never ask the user for a file path — use the file paths shown in the context b
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant embedded in VS Code. Answer directly and helpfully.
+    return `You are the Code Janitor AI assistant embedded in VS Code. Reply conversationally to greetings and simple questions. For coding tasks, answer directly and helpfully.
 Mode: ${mode}.
-To run a shell command write it on its own line as: CMD: <command>
-To edit a file write: FILE: relative/path then a code block with the full contents.
-To create a folder write: MKDIR: relative/path
+Only use CMD: <command> on its own line if the user explicitly asks to run a shell command.
+Only use FILE: relative/path then a code block if the user explicitly asks to edit or create a file.
+Only use MKDIR: relative/path if the user explicitly asks to create a folder.
 Never ask the user for a file path — use the exact paths shown in the context below.
 Do not wrap the whole response in markdown.
 
