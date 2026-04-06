@@ -400,10 +400,10 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant embedded in VS Code. Reply conversationally to greetings and simple questions. For coding tasks, answer directly and helpfully.
-Only use CMD: to suggest a shell command if the user explicitly asks to run something.
-Only use FILE: path + code block if the user explicitly asks to edit or create a file.
-Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nRespond concisely and stop when done. Do not repeat the question or the context above.\n\nAssistant:`;
+      prompt = `You are a concise coding assistant embedded in VS Code. Answer directly and helpfully.
+To run a shell command, write it on its own line starting with CMD: followed by the exact command.
+To edit a file, use FILE: path then a code block.
+Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -416,13 +416,14 @@ Never ask the user for a file path — use the file paths shown in the context b
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0;
 
-      reportStatus?.(
-        isScopedActiveFileEdit
-          ? "Scanning active files..."
-          : "Scanning workspace..."
-      );
+      reportStatus?.(isScopedActiveFileEdit ? "Scanning active files..." : "Scanning workspace...");
       await this.ensureCodebaseScanned(workspaceFolder);
-      const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
+
+      // For full codebase scan requests, inject the overview + snippets directly
+      const isFullScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project)\b/i.test(userMessage);
+      const relevantFiles = isFullScan
+        ? Array.from(this.codebaseContext.entries()).slice(0, MAX_RELEVANT_FILES).map(([p, d]) => ({ path: p.replace(/\\/g, "/"), score: 1, content: d.content.slice(0, MAX_FILE_SNIPPET) }))
+        : this._findRelevantFiles(userMessage, workspaceFolder);
       const activeFileContext = this._getActiveFileContext(workspaceFolder);
       const editorStateContext = this._buildEditorStateContext(editorState);
       const openTabSnippetContext = isScopedActiveFileEdit
@@ -458,7 +459,6 @@ Never ask the user for a file path — use the file paths shown in the context b
       const decoder = new TextDecoder();
       let streamDone = false;
       let repetitionDetected = false;
-      let promptEchoStripped = false;
 
       while (!streamDone) {
         if (abortSignal?.aborted) {
@@ -478,24 +478,6 @@ Never ask the user for a file path — use the file paths shown in the context b
           try {
             const token = reqOpts.parseChunk(line);
             if (token === null) continue;
-
-            // Strip prompt echo — some Ollama models repeat the prompt before answering
-            if (!promptEchoStripped) {
-              fullResponse += token;
-              const userMarker = `User: ${resolvedMessage}`;
-              const assistantMarker = "Assistant:";
-              const markerIdx = fullResponse.indexOf(assistantMarker);
-              if (markerIdx !== -1) {
-                fullResponse = fullResponse.slice(markerIdx + assistantMarker.length).trimStart();
-                promptEchoStripped = true;
-                if (streamCallback && fullResponse) streamCallback(fullResponse);
-              } else if (fullResponse.length > prompt.length + 200) {
-                // Gave up waiting for marker — just use what we have
-                promptEchoStripped = true;
-              }
-              continue;
-            }
-
             const nextResponse = fullResponse + token;
             if (this._isRepeatingResponse(nextResponse, mode)) {
               repetitionDetected = true;
@@ -827,7 +809,7 @@ Never ask the user for a file path — use the file paths shown in the context b
   }
 
   _shouldUseRepoContextInFastMode(message) {
-    return /\b(scan|codebase|repo|repository|project|workspace|relevant files|entire codebase|why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
+    return /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all|overview|readme|why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
       message || ""
     );
   }
@@ -1111,23 +1093,23 @@ Never ask the user for a file path — use the file paths shown in the context b
     const isWritingTask = /\b(readme|documentation|docs|write|generate|create)\b/i.test(userMessage);
     const MAX_PROMPT_CHARS = isWritingTask ? 6_000 : 12_000;
 
+    const isCodbaseScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files)\b/i.test(userMessage);
+    const snippetSize = isWritingTask ? 200 : 500;
+
     let context = "";
     for (const file of relevantFiles) {
       const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
-      if ((context + block).length > MAX_PROMPT_CHARS) {
-        break;
-      }
+      if ((context + block).length > MAX_PROMPT_CHARS) break;
       context += block;
     }
 
-    if (!context && !isWritingTask) {
+    if (!context) {
       const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
       if (allFiles.length > 0) {
-        const isCodbaseScan = /\b(scan|review|analyze|what does|what is|overview|summarize|describe|syntax|error|errors|bug|bugs|issue|issues|logical|logic|problem|problems|check|inspect|audit)\b/i.test(userMessage);
         if (isCodbaseScan) {
           let snippetContext = "";
           for (const [relativePath, fileData] of this.codebaseContext.entries()) {
-            const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`;
+            const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, snippetSize)}\n\`\`\`\n\n`;
             if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
             snippetContext += block;
           }
@@ -1138,16 +1120,6 @@ Never ask the user for a file path — use the file paths shown in the context b
       } else {
         context = "No indexed files found.\n";
       }
-    } else if (!context && isWritingTask) {
-      // For writing tasks with repo context, include file list + short snippets
-      const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
-      let snippetContext = "";
-      for (const [relativePath, fileData] of this.codebaseContext.entries()) {
-        const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 200)}\n\`\`\`\n\n`;
-        if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
-        snippetContext += block;
-      }
-      context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
     }
 
     const editableTargetsContext = this._buildEditableTargetsContext(
@@ -1158,17 +1130,19 @@ Never ask the user for a file path — use the file paths shown in the context b
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant embedded in VS Code. Reply conversationally to greetings and simple questions. For coding tasks, answer directly and helpfully.
+    return `You are the Code Janitor AI assistant embedded in VS Code. Answer directly and helpfully.
 Mode: ${mode}.
-Only use CMD: <command> on its own line if the user explicitly asks to run a shell command.
-Only use FILE: relative/path then a code block if the user explicitly asks to edit or create a file.
-Only use MKDIR: relative/path if the user explicitly asks to create a folder.
+To run a shell command write it on its own line as: CMD: <command>
+To edit a file write: FILE: relative/path then a code block with the full contents.
+To create a folder write: MKDIR: relative/path
 Never ask the user for a file path — use the exact paths shown in the context below.
 Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
 ${editorStateContext ? `${editorStateContext}\n` : ""}${editableTargetsContext}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
-${history ? `${history}\n\n` : ""}User: ${userMessage}\n\nRespond concisely and stop when done. Do not repeat the question or the context above.\n\nAssistant:`;
+${history ? `${history}\n\n` : ""}User: ${userMessage}
+
+Assistant:`;
   }
 
   _parseResponse(response) {
