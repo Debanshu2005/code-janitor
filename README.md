@@ -7,6 +7,9 @@
 
 Code Janitor is a VS Code extension for fixing and formatting code with a mix of rule-based repair, formatting tools, and optional Ollama-powered AI fallback.
 
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/eca83cbb-b276-4e00-a332-f64a204a85f7" />
+
+
 ## Features
 
 - Format and repair Python, JavaScript, Java, C/C++, Arduino, and HTML files.
@@ -15,6 +18,7 @@ Code Janitor is a VS Code extension for fixing and formatting code with a mix of
 - Preview HTML and React files in a live webview.
 - Validate frontend dependencies for HTML, CSS, and JavaScript files.
 - Open an AI chat panel for code-aware assistance.
+- An webpage pop-up will appear which will guide you through the set-up.
 
 ## Supported Languages
 
@@ -40,8 +44,14 @@ Code Janitor is a VS Code extension for fixing and formatting code with a mix of
 - `Alt+D`: format code
 - `Alt+L`: lint JavaScript
 - `Alt+P`: open live preview
+
+  <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/683c0c4f-1b8b-41c1-86b4-ed2341b223e9" />
+
 - `Alt+V`: validate frontend dependencies
 - `Ctrl+Alt+C`: open AI chat
+
+  <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/1c7091f1-dc90-4739-8d59-549bf8c85639" />
+
 
 ## Installation
 

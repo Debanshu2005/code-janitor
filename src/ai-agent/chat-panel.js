@@ -29,6 +29,20 @@ class ChatPanel {
       return;
     }
 
+    // Show setup guide on first ever open
+    const hasSeenSetup = this.context.globalState.get("codeJanitor.seenSetup", false);
+    if (!hasSeenSetup) {
+      this.context.globalState.update("codeJanitor.seenSetup", true);
+      vscode.window.showInformationMessage(
+        "👋 New to Code Janitor? Check the setup guide to configure AI models and API keys.",
+        "Open Setup Guide"
+      ).then(selection => {
+        if (selection === "Open Setup Guide") {
+          vscode.env.openExternal(vscode.Uri.parse("https://code-janitor-web.vercel.app"));
+        }
+      });
+    }
+
     this.panel = vscode.window.createWebviewPanel(
       "codeJanitorChat",
       "Code Janitor AI",

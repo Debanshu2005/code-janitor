@@ -188,7 +188,22 @@ let globalContext // Store context globally
 
 function activate(context) {
   console.log("✓ Code Janitor extension is activating...")
-  globalContext = context // Store context for global access
+  globalContext = context
+
+  // Show setup guide on first install
+  const hasSeenSetup = context.globalState.get("codeJanitor.seenSetup", false);
+  if (!hasSeenSetup) {
+    vscode.window.showInformationMessage(
+      "🧹 Welcome to Code Janitor! Check the setup guide to get started with AI models.",
+      "Open Setup Guide",
+      "Dismiss"
+    ).then(selection => {
+      if (selection === "Open Setup Guide") {
+        context.globalState.update("codeJanitor.seenSetup", true);
+        vscode.env.openExternal(vscode.Uri.parse("https://code-janitor-web.vercel.app"));
+      }
+    });
+  }
 
   // Auto-correction state
   let isAutoFixing = false
