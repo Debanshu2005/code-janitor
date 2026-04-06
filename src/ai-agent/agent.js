@@ -9,6 +9,7 @@ const MAX_RELEVANT_FILES = 4;
 const MAX_OPEN_TAB_SNIPPETS = 2;
 const MAX_HISTORY_ENTRIES = 4;
 const REPETITION_WINDOW = 180;
+const REPETITION_WINDOW_HEAVY = 400;
 const SCAN_STALE_MS = 30_000;
 const IGNORED_DIRS = new Set([
   ".git",
@@ -84,7 +85,7 @@ class AIAgent {
   }
 
   _buildRequestOptions(config, prompt, mode = "fast") {
-    const maxTokens = mode === "heavy" ? 4096 : 512;
+    const maxTokens = mode === "heavy" ? 8192 : 1024;
     if (config.provider === "anthropic") {
       return {
         url: "https://api.anthropic.com/v1/messages",
@@ -158,7 +159,7 @@ class AIAgent {
         model: config.model,
         prompt,
         stream: true,
-        options: { temperature: 0.05, num_predict: mode === "heavy" ? -1 : 512, top_k: 10, top_p: 0.7 }
+        options: { temperature: 0.05, num_predict: mode === "heavy" ? -1 : 1024, top_k: 10, top_p: 0.7 }
       }),
       parseChunk: (line) => {
         try { const d = JSON.parse(line); return d.response || null; } catch { return null; }
@@ -402,7 +403,7 @@ class AIAgent {
       prompt = `You are a concise coding assistant embedded in VS Code. Reply conversationally to greetings and simple questions. For coding tasks, answer directly and helpfully.
 Only use CMD: to suggest a shell command if the user explicitly asks to run something.
 Only use FILE: path + code block if the user explicitly asks to edit or create a file.
-Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nAssistant:`;
+Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nRespond concisely and stop when done. Do not repeat the question or the context above.\n\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -457,6 +458,7 @@ Never ask the user for a file path — use the file paths shown in the context b
       const decoder = new TextDecoder();
       let streamDone = false;
       let repetitionDetected = false;
+      let promptEchoStripped = false;
 
       while (!streamDone) {
         if (abortSignal?.aborted) {
@@ -476,8 +478,26 @@ Never ask the user for a file path — use the file paths shown in the context b
           try {
             const token = reqOpts.parseChunk(line);
             if (token === null) continue;
+
+            // Strip prompt echo — some Ollama models repeat the prompt before answering
+            if (!promptEchoStripped) {
+              fullResponse += token;
+              const userMarker = `User: ${resolvedMessage}`;
+              const assistantMarker = "Assistant:";
+              const markerIdx = fullResponse.indexOf(assistantMarker);
+              if (markerIdx !== -1) {
+                fullResponse = fullResponse.slice(markerIdx + assistantMarker.length).trimStart();
+                promptEchoStripped = true;
+                if (streamCallback && fullResponse) streamCallback(fullResponse);
+              } else if (fullResponse.length > prompt.length + 200) {
+                // Gave up waiting for marker — just use what we have
+                promptEchoStripped = true;
+              }
+              continue;
+            }
+
             const nextResponse = fullResponse + token;
-            if (this._isRepeatingResponse(nextResponse)) {
+            if (this._isRepeatingResponse(nextResponse, mode)) {
               repetitionDetected = true;
               streamDone = true;
               if (!abortSignal?.aborted) { try { reader.cancel(); } catch (_) {} }
@@ -848,13 +868,14 @@ Never ask the user for a file path — use the file paths shown in the context b
     return context.trim();
   }
 
-  _isRepeatingResponse(text) {
-    if (!text || text.length < REPETITION_WINDOW * 2) {
+  _isRepeatingResponse(text, mode = "fast") {
+    const window = mode === "heavy" ? REPETITION_WINDOW_HEAVY : REPETITION_WINDOW;
+    if (!text || text.length < window * 2) {
       return false;
     }
 
-    const tail = text.slice(-REPETITION_WINDOW);
-    const previousText = text.slice(0, -REPETITION_WINDOW);
+    const tail = text.slice(-window);
+    const previousText = text.slice(0, -window);
     return previousText.includes(tail);
   }
 
@@ -1087,25 +1108,27 @@ Never ask the user for a file path — use the file paths shown in the context b
       )
       .join("\n\n");
 
+    const isWritingTask = /\b(readme|documentation|docs|write|generate|create)\b/i.test(userMessage);
+    const MAX_PROMPT_CHARS = isWritingTask ? 6_000 : 12_000;
+
     let context = "";
     for (const file of relevantFiles) {
       const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
-      if ((context + block).length > MAX_CONTEXT_CHARS) {
+      if ((context + block).length > MAX_PROMPT_CHARS) {
         break;
       }
       context += block;
     }
 
-    if (!context) {
+    if (!context && !isWritingTask) {
       const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
       if (allFiles.length > 0) {
-        // If it's a general codebase scan request, include actual file snippets
         const isCodbaseScan = /\b(scan|review|analyze|what does|what is|overview|summarize|describe|syntax|error|errors|bug|bugs|issue|issues|logical|logic|problem|problems|check|inspect|audit)\b/i.test(userMessage);
         if (isCodbaseScan) {
           let snippetContext = "";
           for (const [relativePath, fileData] of this.codebaseContext.entries()) {
             const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`;
-            if ((snippetContext + block).length > MAX_CONTEXT_CHARS) break;
+            if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
             snippetContext += block;
           }
           context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
@@ -1115,6 +1138,16 @@ Never ask the user for a file path — use the file paths shown in the context b
       } else {
         context = "No indexed files found.\n";
       }
+    } else if (!context && isWritingTask) {
+      // For writing tasks with repo context, include file list + short snippets
+      const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
+      let snippetContext = "";
+      for (const [relativePath, fileData] of this.codebaseContext.entries()) {
+        const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 200)}\n\`\`\`\n\n`;
+        if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
+        snippetContext += block;
+      }
+      context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
     }
 
     const editableTargetsContext = this._buildEditableTargetsContext(
@@ -1135,9 +1168,7 @@ Do not wrap the whole response in markdown.
 
 Indexed files: ${this.codebaseContext.size}
 ${editorStateContext ? `${editorStateContext}\n` : ""}${editableTargetsContext}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
-${history ? `${history}\n\n` : ""}User: ${userMessage}
-
-Assistant:`;
+${history ? `${history}\n\n` : ""}User: ${userMessage}\n\nRespond concisely and stop when done. Do not repeat the question or the context above.\n\nAssistant:`;
   }
 
   _parseResponse(response) {
