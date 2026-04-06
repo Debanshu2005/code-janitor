@@ -1,690 +1,918 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      font-size: 13px;
-    }
-
-    /* ── Header ── */
-    #header {
-      padding: 10px 14px;
-      background: #161b27;
-      border-bottom: 1px solid #1e2a3a;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-    #header-left { display: flex; align-items: center; gap: 8px; }
-    #header-title { font-size: 14px; font-weight: 600; color: #7dd3fc; letter-spacing: 0.3px; }
-    #header-sub { font-size: 11px; color: #475569; }
-
-    #header-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-
-    select, .pill-btn {
-      background: #1e2a3a;
-      color: #cbd5e1;
-      border: 1px solid #2d3f55;
-      border-radius: 6px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-    select { padding: 4px 6px; }
-    select:focus { outline: none; border-color: #3b82f6; }
-
-    #api-key-row {
-      padding: 6px 14px;
-      background: #0f1117;
-      border-bottom: 1px solid #1a2332;
-      display: none;
-      gap: 6px;
-      align-items: center;
-    }
-    #api-key-row.visible { display: flex; }
-    #api-key-input {
-      flex: 1;
-      padding: 4px 8px;
-      background: #1e2a3a;
-      border: 1px solid #2d3f55;
-      border-radius: 6px;
-      color: #e2e8f0;
-      font-size: 11px;
-    }
-    #api-key-input:focus { outline: none; border-color: #3b82f6; }
-    #api-key-save {
-      padding: 4px 10px;
-      background: #1d4ed8;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-
-    .pill-btn {
-      padding: 4px 10px;
-      font-weight: 500;
-      transition: background 0.15s;
-    }
-    .pill-btn:hover { background: #263548; }
-    .pill-btn.active { background: #1d4ed8; color: #fff; border-color: #3b82f6; }
-
-    /* ── Action bar ── */
-    #action-bar {
-      padding: 6px 14px;
-      background: #0f1117;
-      border-bottom: 1px solid #1a2332;
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      flex-shrink: 0;
-    }
-    .action-chip {
-      padding: 3px 10px;
-      background: #1e2a3a;
-      border: 1px solid #2d3f55;
-      border-radius: 12px;
-      font-size: 11px;
-      color: #94a3b8;
-      cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
-    }
-    .action-chip:hover { background: #263548; color: #e2e8f0; border-color: #3b82f6; }
-
-    /* ── Chat area ── */
-    #chat {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    #chat::-webkit-scrollbar { width: 4px; }
-    #chat::-webkit-scrollbar-track { background: transparent; }
-    #chat::-webkit-scrollbar-thumb { background: #2d3f55; border-radius: 2px; }
-
-    .msg-row { display: flex; gap: 8px; align-items: flex-start; }
-    .msg-row.user { flex-direction: row-reverse; }
-
-    .avatar {
-      width: 26px; height: 26px;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 11px; font-weight: 700;
-      flex-shrink: 0;
-    }
-    .avatar.ai { background: #1d4ed8; color: #fff; }
-    .avatar.user { background: #0f766e; color: #fff; }
-
-    .bubble {
-      max-width: 85%;
-      padding: 10px 14px;
-      border-radius: 12px;
-      line-height: 1.55;
-      word-break: break-word;
-    }
-    .bubble.ai {
-      background: #161b27;
-      border: 1px solid #1e2a3a;
-      border-top-left-radius: 3px;
-    }
-    .bubble.user {
-      background: #1d4ed8;
-      border-top-right-radius: 3px;
-      white-space: pre-wrap;
-    }
-
-    /* status / system messages */
-    .status-row {
-      display: flex;
-      justify-content: center;
-    }
-    .status-pill {
-      font-size: 11px;
-      color: #64748b;
-      background: #161b27;
-      border: 1px solid #1e2a3a;
-      border-radius: 10px;
-      padding: 3px 10px;
-      white-space: pre-wrap;
-      text-align: center;
-    }
-
-    /* typing dots */
-    .typing { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
-    .typing span {
-      width: 6px; height: 6px;
-      background: #3b82f6;
-      border-radius: 50%;
-      animation: bounce 1.2s infinite;
-    }
-    .typing span:nth-child(2) { animation-delay: 0.2s; }
-    .typing span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce {
-      0%,80%,100% { transform: scale(0.6); opacity: 0.4; }
-      40%          { transform: scale(1);   opacity: 1; }
-    }
-
-    /* code blocks */
-    .cb-wrap { position: relative; margin: 8px 0; border-radius: 8px; overflow: hidden; }
-    .cb-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 4px 10px;
-      background: #0d1117;
-      border-bottom: 1px solid #1e2a3a;
-      font-size: 11px;
-      color: #64748b;
-    }
-    .cb-header.bash { border-left: 3px solid #22c55e; }
-    .cb-header.code { border-left: 3px solid #3b82f6; }
-    .cb-copy {
-      padding: 2px 8px;
-      background: #1e2a3a;
-      border: 1px solid #2d3f55;
-      border-radius: 4px;
-      color: #94a3b8;
-      font-size: 10px;
-      cursor: pointer;
-    }
-    .cb-copy:hover { background: #263548; color: #e2e8f0; }
-    .cb-body {
-      background: #0d1117;
-      padding: 12px 14px;
-      overflow-x: auto;
-      font-family: "Fira Code", "Cascadia Code", "Courier New", monospace;
-      font-size: 12px;
-      white-space: pre;
-      line-height: 1.5;
-    }
-    .cb-body.bash { color: #86efac; }
-    .cb-body.code { color: #e2e8f0; }
-
-    /* confirm block */
-    .confirm-wrap {
-      background: #161b27;
-      border: 1px solid #2d3f55;
-      border-radius: 10px;
-      padding: 12px 14px;
-    }
-    .confirm-label { font-size: 12px; color: #fbbf24; margin-bottom: 8px; }
-    .confirm-btns { display: flex; gap: 8px; margin-top: 10px; }
-    .btn-allow { padding: 5px 14px; background: #16a34a; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
-    .btn-deny  { padding: 5px 14px; background: #dc2626; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
-
-    /* ── Input area ── */
-    #input-area {
-      padding: 10px 14px;
-      background: #161b27;
-      border-top: 1px solid #1e2a3a;
-      flex-shrink: 0;
-    }
-    #input-row { display: flex; gap: 8px; align-items: flex-end; }
-    #input {
-      flex: 1;
-      padding: 9px 12px;
-      background: #0f1117;
-      border: 1px solid #2d3f55;
-      color: #e2e8f0;
-      border-radius: 8px;
-      font-size: 13px;
-      resize: none;
-      min-height: 38px;
-      max-height: 120px;
-      overflow-y: auto;
-      line-height: 1.4;
-      font-family: inherit;
-    }
-    #input:focus { outline: none; border-color: #3b82f6; }
-    #input::placeholder { color: #475569; }
-
-    .send-btn {
-      padding: 9px 14px;
-      background: #1d4ed8;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      transition: background 0.15s;
-      white-space: nowrap;
-    }
-    .send-btn:hover { background: #2563eb; }
-    .send-btn:disabled { background: #1e2a3a; color: #475569; cursor: not-allowed; }
-
-    #stop-btn {
-      padding: 9px 14px;
-      background: #7f1d1d;
-      color: #fca5a5;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      display: none;
-    }
-    #stop-btn:hover { background: #991b1b; }
-
-    #input-hint {
-      font-size: 10px;
-      color: #334155;
-      margin-top: 5px;
-      padding-left: 2px;
-    }
-  </style>
-</head>
-<body>
-
-  <div id="header">
-    <div id="header-left">
-      <div id="header-title">Code Janitor AI</div>
-      <div id="header-sub">Ollama</div>
-    </div>
-    <div id="header-controls">
-      <select id="provider-select" title="AI Provider">
-        <option value="ollama">🖥 Ollama (local)</option>
-        <option value="groq">⚡ Groq (cloud)</option>
-        <option value="openrouter">🌐 OpenRouter</option>
-      </select>
-      <select id="model-select" title="Switch model">
-        <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
-      </select>
-      <button class="pill-btn active" id="btn-fast" title="Fast mode">Fast</button>
-      <button class="pill-btn" id="btn-heavy" title="Heavy mode">Heavy</button>
-      <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
-    </div>
-  </div>
-
-  <div id="api-key-row">
-    <span style="font-size:11px;color:#64748b;white-space:nowrap;">API Key:</span>
-    <input id="api-key-input" type="password" placeholder="Paste your API key here..." />
-    <button id="api-key-save">Save</button>
-    <a id="api-key-link" href="" style="font-size:10px;color:#3b82f6;white-space:nowrap;">Get key</a>
-  </div>
-
-  <div id="action-bar">
-    <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
-    <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
-    <div class="action-chip" data-action="explain">💡 Explain file</div>
-    <div class="action-chip" data-action="fix">🔧 Fix issues</div>
-    <div class="action-chip" data-action="refactor">♻️ Refactor</div>
-    <div class="action-chip" data-action="tests">🧪 Generate tests</div>
-    <div class="action-chip" data-action="docs">📝 Add docs</div>
-    <div class="action-chip" data-action="git">📋 Git status</div>
-  </div>
-
-  <div id="chat"></div>
-
-  <div id="input-area">
-    <div id="input-row">
-      <textarea id="input" rows="1" placeholder="Ask anything about your code..."></textarea>
-      <button class="send-btn" id="send-btn">Send</button>
-      <button id="stop-btn">Stop</button>
-    </div>
-    <div id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; /scan /fast /heavy</div>
-  </div>
-
-  <script>
-    var vscode = acquireVsCodeApi();
-    var chat = document.getElementById("chat");
-    var input = document.getElementById("input");
-    var sendBtn = document.getElementById("send-btn");
-    var stopBtn = document.getElementById("stop-btn");
-    var btnFast = document.getElementById("btn-fast");
-    var btnHeavy = document.getElementById("btn-heavy");
-    var btnClear = document.getElementById("btn-clear");
-    var providerSelect = document.getElementById("provider-select");
-    var apiKeyRow = document.getElementById("api-key-row");
-    var apiKeyInput = document.getElementById("api-key-input");
-    var apiKeySave = document.getElementById("api-key-save");
-    var apiKeyLink = document.getElementById("api-key-link");
-    var modelSelect = document.getElementById("model-select");
-
-    var providerLinks = {
-      groq: "https://console.groq.com/keys",
-      openrouter: "https://openrouter.ai/keys"
-    };
-
-    providerSelect.onchange = function() {
-      var p = providerSelect.value;
-      var needsKey = p === "groq" || p === "openrouter";
-      apiKeyRow.classList.toggle("visible", needsKey);
-      if (needsKey) {
-        apiKeyLink.href = providerLinks[p];
-        apiKeyLink.textContent = "Get " + p + " key";
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
-      vscode.postMessage({ type: "setProvider", provider: p });
-    };
 
-    apiKeySave.onclick = function() {
-      var key = apiKeyInput.value.trim();
-      if (!key) return;
-      vscode.postMessage({ type: "setProvider", provider: providerSelect.value, apiKey: key });
-      apiKeyInput.value = "";
-      addRow("API key saved for " + providerSelect.value + ".", "status");
-    };
-    var currentMessage = null;
-    var chatMode = "fast";
-
-    // ── Helpers ──────────────────────────────────────────────
-
-    function escapeHtml(t) {
-      return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-    }
-
-    function copyText(text, btn) {
-      navigator.clipboard.writeText(text).then(function() {
-        btn.textContent = "Copied!";
-        setTimeout(function() { btn.textContent = "Copy"; }, 1500);
-      });
-    }
-
-    function makeCodeBlock(lang, code) {
-      var isBash = /^(bash|sh|shell|cmd|)$/i.test(lang);
-      var cls = isBash ? "bash" : "code";
-      var label = lang || (isBash ? "bash" : "code");
-      var wrap = document.createElement("div");
-      wrap.className = "cb-wrap";
-      var hdr = document.createElement("div");
-      hdr.className = "cb-header " + cls;
-      var lbl = document.createElement("span");
-      lbl.textContent = label;
-      var copyBtn = document.createElement("button");
-      copyBtn.className = "cb-copy";
-      copyBtn.textContent = "Copy";
-      copyBtn.onclick = function() { copyText(code, copyBtn); };
-      hdr.appendChild(lbl);
-      hdr.appendChild(copyBtn);
-      var body = document.createElement("div");
-      body.className = "cb-body " + cls;
-      body.textContent = code;
-      wrap.appendChild(hdr);
-      wrap.appendChild(body);
-      return wrap;
-    }
-
-    function renderContent(text) {
-      var container = document.createElement("div");
-      var segments = [];
-      var remaining = text;
-      while (remaining.length > 0) {
-        var fs = remaining.indexOf("```");
-        if (fs === -1) { segments.push({ type: "text", content: remaining }); break; }
-        if (fs > 0) segments.push({ type: "text", content: remaining.slice(0, fs) });
-        var nl = remaining.indexOf("\n", fs);
-        if (nl === -1) { segments.push({ type: "text", content: remaining.slice(fs) }); break; }
-        var lang = remaining.slice(fs + 3, nl).trim();
-        var fe = remaining.indexOf("```", nl + 1);
-        if (fe === -1) { segments.push({ type: "text", content: remaining.slice(fs) }); break; }
-        segments.push({ type: "code", lang: lang, content: remaining.slice(nl + 1, fe) });
-        remaining = remaining.slice(fe + 3);
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0f1117;
+        color: #e2e8f0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
       }
-      for (var s = 0; s < segments.length; s++) {
-        var seg = segments[s];
-        if (seg.type === "code") { container.appendChild(makeCodeBlock(seg.lang, seg.content)); continue; }
-        var lines = seg.content.split("\n");
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i];
-          var cm = line.match(/^CMD:\s*(.+)$/);
-          if (cm) { container.appendChild(makeCodeBlock("bash", cm[1])); continue; }
-          var sp = document.createElement("span");
-          sp.style.whiteSpace = "pre-wrap";
-          sp.innerHTML = escapeHtml(line)
-            .replace(/(error[^\n]*?line\s*\d+)/gi, "<span style='color:#fca5a5;background:#450a0a;padding:1px 4px;border-radius:3px;'>$1</span>")
-            .replace(/(\bline\s+\d+\b)/gi, "<span style='color:#fbbf24;'>$1</span>")
-            .replace(/(\u2705|\u274c)/g, "<span>$1</span>");
-          container.appendChild(sp);
-          if (i < lines.length - 1) container.appendChild(document.createElement("br"));
+
+      /* ── Header ── */
+      #header {
+        padding: 10px 14px;
+        background: #161b27;
+        border-bottom: 1px solid #1e2a3a;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      #header-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #header-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #7dd3fc;
+        letter-spacing: 0.3px;
+      }
+      #header-sub {
+        font-size: 11px;
+        color: #475569;
+      }
+
+      #header-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      select,
+      .pill-btn {
+        background: #1e2a3a;
+        color: #cbd5e1;
+        border: 1px solid #2d3f55;
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      select {
+        padding: 4px 6px;
+      }
+      select:focus {
+        outline: none;
+        border-color: #3b82f6;
+      }
+
+      #api-key-row {
+        padding: 6px 14px;
+        background: #0f1117;
+        border-bottom: 1px solid #1a2332;
+        display: none;
+        gap: 6px;
+        align-items: center;
+      }
+      #api-key-row.visible {
+        display: flex;
+      }
+      #api-key-input {
+        flex: 1;
+        padding: 4px 8px;
+        background: #1e2a3a;
+        border: 1px solid #2d3f55;
+        border-radius: 6px;
+        color: #e2e8f0;
+        font-size: 11px;
+      }
+      #api-key-input:focus {
+        outline: none;
+        border-color: #3b82f6;
+      }
+      #api-key-save {
+        padding: 4px 10px;
+        background: #1d4ed8;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .pill-btn {
+        padding: 4px 10px;
+        font-weight: 500;
+        transition: background 0.15s;
+      }
+      .pill-btn:hover {
+        background: #263548;
+      }
+      .pill-btn.active {
+        background: #1d4ed8;
+        color: #fff;
+        border-color: #3b82f6;
+      }
+
+      /* ── Action bar ── */
+      #action-bar {
+        padding: 6px 14px;
+        background: #0f1117;
+        border-bottom: 1px solid #1a2332;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+      }
+      .action-chip {
+        padding: 3px 10px;
+        background: #1e2a3a;
+        border: 1px solid #2d3f55;
+        border-radius: 12px;
+        font-size: 11px;
+        color: #94a3b8;
+        cursor: pointer;
+        transition: all 0.15s;
+        white-space: nowrap;
+      }
+      .action-chip:hover {
+        background: #263548;
+        color: #e2e8f0;
+        border-color: #3b82f6;
+      }
+
+      /* ── Chat area ── */
+      #chat {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #chat::-webkit-scrollbar {
+        width: 4px;
+      }
+      #chat::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      #chat::-webkit-scrollbar-thumb {
+        background: #2d3f55;
+        border-radius: 2px;
+      }
+
+      .msg-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .msg-row.user {
+        flex-direction: row-reverse;
+      }
+
+      .avatar {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .avatar.ai {
+        background: #1d4ed8;
+        color: #fff;
+      }
+      .avatar.user {
+        background: #0f766e;
+        color: #fff;
+      }
+
+      .bubble {
+        max-width: 85%;
+        padding: 10px 14px;
+        border-radius: 12px;
+        line-height: 1.55;
+        word-break: break-word;
+      }
+      .bubble.ai {
+        background: #161b27;
+        border: 1px solid #1e2a3a;
+        border-top-left-radius: 3px;
+      }
+      .bubble.user {
+        background: #1d4ed8;
+        border-top-right-radius: 3px;
+        white-space: pre-wrap;
+      }
+
+      /* status / system messages */
+      .status-row {
+        display: flex;
+        justify-content: center;
+      }
+      .status-pill {
+        font-size: 11px;
+        color: #64748b;
+        background: #161b27;
+        border: 1px solid #1e2a3a;
+        border-radius: 10px;
+        padding: 3px 10px;
+        white-space: pre-wrap;
+        text-align: center;
+      }
+
+      /* typing dots */
+      .typing {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        padding: 4px 0;
+      }
+      .typing span {
+        width: 6px;
+        height: 6px;
+        background: #3b82f6;
+        border-radius: 50%;
+        animation: bounce 1.2s infinite;
+      }
+      .typing span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .typing span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes bounce {
+        0%,
+        80%,
+        100% {
+          transform: scale(0.6);
+          opacity: 0.4;
+        }
+        40% {
+          transform: scale(1);
+          opacity: 1;
         }
       }
-      return container;
-    }
 
-    function addRow(content, type) {
-      if (type === "status") {
-        var row = document.createElement("div");
-        row.className = "status-row";
-        var pill = document.createElement("div");
-        pill.className = "status-pill";
-        pill.textContent = content;
-        row.appendChild(pill);
-        chat.appendChild(row);
-        chat.scrollTop = chat.scrollHeight;
-        return row;
+      /* code blocks */
+      .cb-wrap {
+        position: relative;
+        margin: 8px 0;
+        border-radius: 8px;
+        overflow: hidden;
       }
-      var row = document.createElement("div");
-      row.className = "msg-row " + type;
-      var av = document.createElement("div");
-      av.className = "avatar " + type;
-      av.textContent = type === "user" ? "U" : "AI";
-      var bubble = document.createElement("div");
-      bubble.className = "bubble " + type;
-      if (typeof content === "string") {
-        if (type === "user") {
-          bubble.textContent = content;
-        } else {
-          bubble.appendChild(renderContent(content));
-        }
-      } else {
-        bubble.appendChild(content);
+      .cb-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 10px;
+        background: #0d1117;
+        border-bottom: 1px solid #1e2a3a;
+        font-size: 11px;
+        color: #64748b;
       }
-      row.appendChild(av);
-      row.appendChild(bubble);
-      chat.appendChild(row);
-      chat.scrollTop = chat.scrollHeight;
-      return row;
-    }
-
-    function setInputState(busy) {
-      sendBtn.style.display = busy ? "none" : "inline-block";
-      stopBtn.style.display = busy ? "inline-block" : "none";
-      input.disabled = busy;
-    }
-
-    function setMode(m) {
-      chatMode = m;
-      btnFast.classList.toggle("active", m === "fast");
-      btnHeavy.classList.toggle("active", m === "heavy");
-      vscode.postMessage({ type: "mode", value: m });
-    }
-
-    // ── Send ─────────────────────────────────────────────────
-
-    function sendMessage(text) {
-      text = (text || input.value).trim();
-      if (!text) return;
-      addRow(text, "user");
-      input.value = "";
-      input.style.height = "38px";
-      setInputState(true);
-
-      if (/^\/fast$/i.test(text)) { setMode("fast"); setInputState(false); return; }
-      if (/^\/heavy$/i.test(text)) { setMode("heavy"); setInputState(false); return; }
-
-      vscode.postMessage({ type: "chat", text: text });
-    }
-
-    // ── Events ───────────────────────────────────────────────
-
-    sendBtn.onclick = function() { sendMessage(); };
-
-    stopBtn.onclick = function() {
-      vscode.postMessage({ type: "stop" });
-      setInputState(false);
-      if (currentMessage) {
-        var em = document.createElement("em");
-        em.style.color = "#64748b";
-        em.textContent = " (stopped)";
-        currentMessage.querySelector(".bubble").appendChild(em);
+      .cb-header.bash {
+        border-left: 3px solid #22c55e;
       }
-    };
-
-    btnFast.onclick = function() { setMode("fast"); addRow("Switched to Fast mode.", "status"); };
-    btnHeavy.onclick = function() { setMode("heavy"); addRow("Switched to Heavy mode.", "status"); };
-    btnClear.onclick = function() {
-      chat.innerHTML = "";
-      vscode.postMessage({ type: "clear" });
-      addRow("Conversation cleared.", "status");
-    };
-
-    modelSelect.onchange = function() {
-      vscode.postMessage({ type: "setModel", model: modelSelect.value });
-      addRow("Model switched to " + modelSelect.value, "status");
-    };
-
-    // Action chips
-    document.getElementById("action-bar").addEventListener("click", function(e) {
-      var chip = e.target.closest(".action-chip");
-      if (!chip) return;
-      var action = chip.dataset.action;
-      // Syntax/scan chips run directly without the model
-      if (action === "syntax") {
-        vscode.postMessage({ type: "syntaxScan", activeOnly: true });
-        return;
+      .cb-header.code {
+        border-left: 3px solid #3b82f6;
       }
-      if (action === "scan") {
-        vscode.postMessage({ type: "syntaxScan", activeOnly: false });
-        return;
+      .cb-copy {
+        padding: 2px 8px;
+        background: #1e2a3a;
+        border: 1px solid #2d3f55;
+        border-radius: 4px;
+        color: #94a3b8;
+        font-size: 10px;
+        cursor: pointer;
       }
-      var prompts = {
-        explain:  "Explain what the active file does",
-        fix:      "Fix all issues in the active file",
-        refactor: "Refactor the active file for clarity and performance",
-        tests:    "Generate unit tests for the active file",
-        docs:     "Add JSDoc/docstring comments to the active file",
-        git:      "Show git status"
+      .cb-copy:hover {
+        background: #263548;
+        color: #e2e8f0;
+      }
+      .cb-body {
+        background: #0d1117;
+        padding: 12px 14px;
+        overflow-x: auto;
+        font-family: "Fira Code", "Cascadia Code", "Courier New", monospace;
+        font-size: 12px;
+        white-space: pre;
+        line-height: 1.5;
+      }
+      .cb-body.bash {
+        color: #86efac;
+      }
+      .cb-body.code {
+        color: #e2e8f0;
+      }
+
+      /* confirm block */
+      .confirm-wrap {
+        background: #161b27;
+        border: 1px solid #2d3f55;
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .confirm-label {
+        font-size: 12px;
+        color: #fbbf24;
+        margin-bottom: 8px;
+      }
+      .confirm-btns {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .btn-allow {
+        padding: 5px 14px;
+        background: #16a34a;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .btn-deny {
+        padding: 5px 14px;
+        background: #dc2626;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      /* ── Input area ── */
+      #input-area {
+        padding: 10px 14px;
+        background: #161b27;
+        border-top: 1px solid #1e2a3a;
+        flex-shrink: 0;
+      }
+      #input-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      #input {
+        flex: 1;
+        padding: 9px 12px;
+        background: #0f1117;
+        border: 1px solid #2d3f55;
+        color: #e2e8f0;
+        border-radius: 8px;
+        font-size: 13px;
+        resize: none;
+        min-height: 38px;
+        max-height: 120px;
+        overflow-y: auto;
+        line-height: 1.4;
+        font-family: inherit;
+      }
+      #input:focus {
+        outline: none;
+        border-color: #3b82f6;
+      }
+      #input::placeholder {
+        color: #475569;
+      }
+
+      .send-btn {
+        padding: 9px 14px;
+        background: #1d4ed8;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        transition: background 0.15s;
+        white-space: nowrap;
+      }
+      .send-btn:hover {
+        background: #2563eb;
+      }
+      .send-btn:disabled {
+        background: #1e2a3a;
+        color: #475569;
+        cursor: not-allowed;
+      }
+
+      #stop-btn {
+        padding: 9px 14px;
+        background: #7f1d1d;
+        color: #fca5a5;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        display: none;
+      }
+      #stop-btn:hover {
+        background: #991b1b;
+      }
+
+      #input-hint {
+        font-size: 10px;
+        color: #334155;
+        margin-top: 5px;
+        padding-left: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="header">
+      <div id="header-left">
+        <div id="header-title">Code Janitor AI</div>
+        <div id="header-sub">Ollama</div>
+      </div>
+      <div id="header-controls">
+        <select id="provider-select" title="AI Provider">
+          <option value="ollama">🖥 Ollama (local)</option>
+          <option value="groq">⚡ Groq (cloud)</option>
+          <option value="openrouter">🌐 OpenRouter</option>
+          <option value="anthropic">🤖 Anthropic (Claude)</option>
+        </select>
+        <select id="model-select" title="Switch model">
+          <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
+        </select>
+        <button class="pill-btn active" id="btn-fast" title="Fast mode">
+          Fast
+        </button>
+        <button class="pill-btn" id="btn-heavy" title="Heavy mode">
+          Heavy
+        </button>
+        <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
+      </div>
+    </div>
+
+    <div id="api-key-row">
+      <span style="font-size: 11px; color: #64748b; white-space: nowrap"
+        >API Key:</span
+      >
+      <input
+        id="api-key-input"
+        type="password"
+        placeholder="Paste your API key here..."
+      />
+      <button id="api-key-save">Save</button>
+      <a
+        id="api-key-link"
+        href=""
+        style="font-size: 10px; color: #3b82f6; white-space: nowrap"
+        >Get key</a
+      >
+    </div>
+
+    <div id="action-bar">
+      <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
+      <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
+      <div class="action-chip" data-action="explain">💡 Explain file</div>
+      <div class="action-chip" data-action="fix">🔧 Fix issues</div>
+      <div class="action-chip" data-action="refactor">♻️ Refactor</div>
+      <div class="action-chip" data-action="tests">🧪 Generate tests</div>
+      <div class="action-chip" data-action="docs">📝 Add docs</div>
+      <div class="action-chip" data-action="git">📋 Git status</div>
+    </div>
+
+    <div id="chat"></div>
+
+    <div id="input-area">
+      <div id="input-row">
+        <textarea
+          id="input"
+          rows="1"
+          placeholder="Ask anything about your code..."
+        ></textarea>
+        <button class="send-btn" id="send-btn">Send</button>
+        <button id="stop-btn">Stop</button>
+      </div>
+      <div id="input-hint">
+        Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; /scan
+        /fast /heavy
+      </div>
+    </div>
+
+    <script>
+      var vscode = acquireVsCodeApi();
+      var chat = document.getElementById("chat");
+      var input = document.getElementById("input");
+      var sendBtn = document.getElementById("send-btn");
+      var stopBtn = document.getElementById("stop-btn");
+      var btnFast = document.getElementById("btn-fast");
+      var btnHeavy = document.getElementById("btn-heavy");
+      var btnClear = document.getElementById("btn-clear");
+      var providerSelect = document.getElementById("provider-select");
+      var apiKeyRow = document.getElementById("api-key-row");
+      var apiKeyInput = document.getElementById("api-key-input");
+      var apiKeySave = document.getElementById("api-key-save");
+      var apiKeyLink = document.getElementById("api-key-link");
+      var modelSelect = document.getElementById("model-select");
+
+      var providerLinks = {
+        groq: "https://console.groq.com/keys",
+        openrouter: "https://openrouter.ai/keys",
+        anthropic: "https://console.anthropic.com/settings/keys",
       };
-      if (prompts[action]) sendMessage(prompts[action]);
-    });
 
-    // Auto-resize textarea
-    input.addEventListener("input", function() {
-      input.style.height = "38px";
-      input.style.height = Math.min(input.scrollHeight, 120) + "px";
-    });
+      providerSelect.onchange = function () {
+        var p = providerSelect.value;
+        var needsKey = p === "groq" || p === "openrouter";
+        apiKeyRow.classList.toggle("visible", needsKey);
+        if (needsKey) {
+          apiKeyLink.href = providerLinks[p];
+          apiKeyLink.textContent = "Get " + p + " key";
+        }
+        vscode.postMessage({ type: "setProvider", provider: p });
+      };
 
-    input.addEventListener("keydown", function(e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+      apiKeySave.onclick = function () {
+        var key = apiKeyInput.value.trim();
+        if (!key) return;
+        vscode.postMessage({
+          type: "setProvider",
+          provider: providerSelect.value,
+          apiKey: key,
+        });
+        apiKeyInput.value = "";
+        addRow("API key saved for " + providerSelect.value + ".", "status");
+      };
+      var currentMessage = null;
+      var chatMode = "fast";
+
+      // ── Helpers ──────────────────────────────────────────────
+
+      function escapeHtml(t) {
+        return t
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
       }
-    });
 
-    // ── Messages from extension ───────────────────────────────
+      function copyText(text, btn) {
+        navigator.clipboard.writeText(text).then(function () {
+          btn.textContent = "Copied!";
+          setTimeout(function () {
+            btn.textContent = "Copy";
+          }, 1500);
+        });
+      }
 
-    window.addEventListener("message", function(event) {
-      var msg = event.data;
+      function makeCodeBlock(lang, code) {
+        var isBash = /^(bash|sh|shell|cmd|)$/i.test(lang);
+        var cls = isBash ? "bash" : "code";
+        var label = lang || (isBash ? "bash" : "code");
+        var wrap = document.createElement("div");
+        wrap.className = "cb-wrap";
+        var hdr = document.createElement("div");
+        hdr.className = "cb-header " + cls;
+        var lbl = document.createElement("span");
+        lbl.textContent = label;
+        var copyBtn = document.createElement("button");
+        copyBtn.className = "cb-copy";
+        copyBtn.textContent = "Copy";
+        copyBtn.onclick = function () {
+          copyText(code, copyBtn);
+        };
+        hdr.appendChild(lbl);
+        hdr.appendChild(copyBtn);
+        var body = document.createElement("div");
+        body.className = "cb-body " + cls;
+        body.textContent = code;
+        wrap.appendChild(hdr);
+        wrap.appendChild(body);
+        return wrap;
+      }
 
-      if (msg.type === "status") {
-        addRow(msg.text, "status");
+      function renderContent(text) {
+        var container = document.createElement("div");
+        var segments = [];
+        var remaining = text;
+        while (remaining.length > 0) {
+          var fs = remaining.indexOf("```");
+          if (fs === -1) {
+            segments.push({ type: "text", content: remaining });
+            break;
+          }
+          if (fs > 0)
+            segments.push({ type: "text", content: remaining.slice(0, fs) });
+          var nl = remaining.indexOf("\n", fs);
+          if (nl === -1) {
+            segments.push({ type: "text", content: remaining.slice(fs) });
+            break;
+          }
+          var lang = remaining.slice(fs + 3, nl).trim();
+          var fe = remaining.indexOf("```", nl + 1);
+          if (fe === -1) {
+            segments.push({ type: "text", content: remaining.slice(fs) });
+            break;
+          }
+          segments.push({
+            type: "code",
+            lang: lang,
+            content: remaining.slice(nl + 1, fe),
+          });
+          remaining = remaining.slice(fe + 3);
+        }
+        for (var s = 0; s < segments.length; s++) {
+          var seg = segments[s];
+          if (seg.type === "code") {
+            container.appendChild(makeCodeBlock(seg.lang, seg.content));
+            continue;
+          }
+          var lines = seg.content.split("\n");
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            var cm = line.match(/^CMD:\s*(.+)$/);
+            if (cm) {
+              container.appendChild(makeCodeBlock("bash", cm[1]));
+              continue;
+            }
+            var sp = document.createElement("span");
+            sp.style.whiteSpace = "pre-wrap";
+            sp.innerHTML = escapeHtml(line)
+              .replace(
+                /(error[^\n]*?line\s*\d+)/gi,
+                "<span style='color:#fca5a5;background:#450a0a;padding:1px 4px;border-radius:3px;'>$1</span>",
+              )
+              .replace(
+                /(\bline\s+\d+\b)/gi,
+                "<span style='color:#fbbf24;'>$1</span>",
+              )
+              .replace(/(\u2705|\u274c)/g, "<span>$1</span>");
+            container.appendChild(sp);
+            if (i < lines.length - 1)
+              container.appendChild(document.createElement("br"));
+          }
+        }
+        return container;
+      }
 
-      } else if (msg.type === "thinking") {
+      function addRow(content, type) {
+        if (type === "status") {
+          var row = document.createElement("div");
+          row.className = "status-row";
+          var pill = document.createElement("div");
+          pill.className = "status-pill";
+          pill.textContent = content;
+          row.appendChild(pill);
+          chat.appendChild(row);
+          chat.scrollTop = chat.scrollHeight;
+          return row;
+        }
         var row = document.createElement("div");
-        row.className = "msg-row ai";
+        row.className = "msg-row " + type;
         var av = document.createElement("div");
-        av.className = "avatar ai";
-        av.textContent = "AI";
+        av.className = "avatar " + type;
+        av.textContent = type === "user" ? "U" : "AI";
         var bubble = document.createElement("div");
-        bubble.className = "bubble ai";
-        bubble.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
-        bubble._rawText = "";
+        bubble.className = "bubble " + type;
+        if (typeof content === "string") {
+          if (type === "user") {
+            bubble.textContent = content;
+          } else {
+            bubble.appendChild(renderContent(content));
+          }
+        } else {
+          bubble.appendChild(content);
+        }
         row.appendChild(av);
         row.appendChild(bubble);
         chat.appendChild(row);
         chat.scrollTop = chat.scrollHeight;
-        currentMessage = row;
+        return row;
+      }
 
-      } else if (msg.type === "stream" && currentMessage) {
-        var bubble = currentMessage.querySelector(".bubble");
-        var ind = bubble.querySelector(".typing");
-        if (ind) ind.remove();
-        bubble._rawText = (bubble._rawText || "") + msg.text;
-        if (!bubble._streamNode) {
-          bubble._streamNode = document.createElement("span");
-          bubble._streamNode.style.whiteSpace = "pre-wrap";
-          bubble.appendChild(bubble._streamNode);
+      function setInputState(busy) {
+        sendBtn.style.display = busy ? "none" : "inline-block";
+        stopBtn.style.display = busy ? "inline-block" : "none";
+        input.disabled = busy;
+      }
+
+      function setMode(m) {
+        chatMode = m;
+        btnFast.classList.toggle("active", m === "fast");
+        btnHeavy.classList.toggle("active", m === "heavy");
+        vscode.postMessage({ type: "mode", value: m });
+      }
+
+      // ── Send ─────────────────────────────────────────────────
+
+      function sendMessage(text) {
+        text = (text || input.value).trim();
+        if (!text) return;
+        addRow(text, "user");
+        input.value = "";
+        input.style.height = "38px";
+        setInputState(true);
+
+        if (/^\/fast$/i.test(text)) {
+          setMode("fast");
+          setInputState(false);
+          return;
         }
-        bubble._streamNode.textContent = bubble._rawText;
-        chat.scrollTop = chat.scrollHeight;
+        if (/^\/heavy$/i.test(text)) {
+          setMode("heavy");
+          setInputState(false);
+          return;
+        }
 
-      } else if (msg.type === "done") {
+        vscode.postMessage({ type: "chat", text: text });
+      }
+
+      // ── Events ───────────────────────────────────────────────
+
+      sendBtn.onclick = function () {
+        sendMessage();
+      };
+
+      stopBtn.onclick = function () {
+        vscode.postMessage({ type: "stop" });
+        setInputState(false);
         if (currentMessage) {
+          var em = document.createElement("em");
+          em.style.color = "#64748b";
+          em.textContent = " (stopped)";
+          currentMessage.querySelector(".bubble").appendChild(em);
+        }
+      };
+
+      btnFast.onclick = function () {
+        setMode("fast");
+        addRow("Switched to Fast mode.", "status");
+      };
+      btnHeavy.onclick = function () {
+        setMode("heavy");
+        addRow("Switched to Heavy mode.", "status");
+      };
+      btnClear.onclick = function () {
+        chat.innerHTML = "";
+        vscode.postMessage({ type: "clear" });
+        addRow("Conversation cleared.", "status");
+      };
+
+      modelSelect.onchange = function () {
+        vscode.postMessage({ type: "setModel", model: modelSelect.value });
+        addRow("Model switched to " + modelSelect.value, "status");
+      };
+
+      // Action chips
+      document
+        .getElementById("action-bar")
+        .addEventListener("click", function (e) {
+          var chip = e.target.closest(".action-chip");
+          if (!chip) return;
+          var action = chip.dataset.action;
+          // Syntax/scan chips run directly without the model
+          if (action === "syntax") {
+            vscode.postMessage({ type: "syntaxScan", activeOnly: true });
+            return;
+          }
+          if (action === "scan") {
+            vscode.postMessage({ type: "syntaxScan", activeOnly: false });
+            return;
+          }
+          var prompts = {
+            explain: "Explain what the active file does",
+            fix: "Fix all issues in the active file",
+            refactor: "Refactor the active file for clarity and performance",
+            tests: "Generate unit tests for the active file",
+            docs: "Add JSDoc/docstring comments to the active file",
+            git: "Show git status",
+          };
+          if (prompts[action]) sendMessage(prompts[action]);
+        });
+
+      // Auto-resize textarea
+      input.addEventListener("input", function () {
+        input.style.height = "38px";
+        input.style.height = Math.min(input.scrollHeight, 120) + "px";
+      });
+
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      // ── Messages from extension ───────────────────────────────
+
+      window.addEventListener("message", function (event) {
+        var msg = event.data;
+
+        if (msg.type === "status") {
+          addRow(msg.text, "status");
+        } else if (msg.type === "thinking") {
+          var row = document.createElement("div");
+          row.className = "msg-row ai";
+          var av = document.createElement("div");
+          av.className = "avatar ai";
+          av.textContent = "AI";
+          var bubble = document.createElement("div");
+          bubble.className = "bubble ai";
+          bubble.innerHTML =
+            '<div class="typing"><span></span><span></span><span></span></div>';
+          bubble._rawText = "";
+          row.appendChild(av);
+          row.appendChild(bubble);
+          chat.appendChild(row);
+          chat.scrollTop = chat.scrollHeight;
+          currentMessage = row;
+        } else if (msg.type === "stream" && currentMessage) {
           var bubble = currentMessage.querySelector(".bubble");
-          if (bubble && bubble._rawText) {
-            bubble.innerHTML = "";
-            bubble.appendChild(renderContent(bubble._rawText));
+          var ind = bubble.querySelector(".typing");
+          if (ind) ind.remove();
+          bubble._rawText = (bubble._rawText || "") + msg.text;
+          if (!bubble._streamNode) {
+            bubble._streamNode = document.createElement("span");
+            bubble._streamNode.style.whiteSpace = "pre-wrap";
+            bubble.appendChild(bubble._streamNode);
+          }
+          bubble._streamNode.textContent = bubble._rawText;
+          chat.scrollTop = chat.scrollHeight;
+        } else if (msg.type === "done") {
+          if (currentMessage) {
+            var bubble = currentMessage.querySelector(".bubble");
+            if (bubble && bubble._rawText) {
+              bubble.innerHTML = "";
+              bubble.appendChild(renderContent(bubble._rawText));
+            }
+          }
+          currentMessage = null;
+          setInputState(false);
+          chat.scrollTop = chat.scrollHeight;
+        } else if (msg.type === "confirm") {
+          var wrap = document.createElement("div");
+          wrap.className = "confirm-wrap";
+          var lbl = document.createElement("div");
+          lbl.className = "confirm-label";
+          lbl.textContent = "\u26a1 Allow this command to run?";
+          var cb = makeCodeBlock("bash", msg.command);
+          var btns = document.createElement("div");
+          btns.className = "confirm-btns";
+          var allow = document.createElement("button");
+          allow.className = "btn-allow";
+          allow.textContent = "Allow";
+          allow.onclick = function () {
+            wrap.remove();
+            vscode.postMessage({ type: "confirmResponse", allowed: true });
+          };
+          var deny = document.createElement("button");
+          deny.className = "btn-deny";
+          deny.textContent = "Deny";
+          deny.onclick = function () {
+            wrap.remove();
+            vscode.postMessage({ type: "confirmResponse", allowed: false });
+          };
+          btns.appendChild(allow);
+          btns.appendChild(deny);
+          wrap.appendChild(lbl);
+          wrap.appendChild(cb);
+          wrap.appendChild(btns);
+          addRow(wrap, "ai");
+        } else if (msg.type === "error") {
+          setInputState(false);
+          addRow("\u274c " + msg.text, "status");
+        } else if (msg.type === "applied") {
+          addRow(msg.text, "status");
+        } else if (msg.type === "setModelOptions") {
+          // Populate model list from Ollama
+          var sel = modelSelect;
+          var current = sel.value;
+          sel.innerHTML = "";
+          msg.models.forEach(function (m) {
+            var opt = document.createElement("option");
+            opt.value = m;
+            opt.textContent = m;
+            if (m === current) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          if (msg.provider && providerSelect.value !== msg.provider) {
+            providerSelect.value = msg.provider;
+            var needsKey =
+              msg.provider === "groq" || msg.provider === "openrouter";
+            apiKeyRow.classList.toggle("visible", needsKey);
           }
         }
-        currentMessage = null;
-        setInputState(false);
-        chat.scrollTop = chat.scrollHeight;
+      });
 
-      } else if (msg.type === "confirm") {
-        var wrap = document.createElement("div");
-        wrap.className = "confirm-wrap";
-        var lbl = document.createElement("div");
-        lbl.className = "confirm-label";
-        lbl.textContent = "\u26a1 Allow this command to run?";
-        var cb = makeCodeBlock("bash", msg.command);
-        var btns = document.createElement("div");
-        btns.className = "confirm-btns";
-        var allow = document.createElement("button");
-        allow.className = "btn-allow";
-        allow.textContent = "Allow";
-        allow.onclick = function() { wrap.remove(); vscode.postMessage({ type: "confirmResponse", allowed: true }); };
-        var deny = document.createElement("button");
-        deny.className = "btn-deny";
-        deny.textContent = "Deny";
-        deny.onclick = function() { wrap.remove(); vscode.postMessage({ type: "confirmResponse", allowed: false }); };
-        btns.appendChild(allow);
-        btns.appendChild(deny);
-        wrap.appendChild(lbl);
-        wrap.appendChild(cb);
-        wrap.appendChild(btns);
-        addRow(wrap, "ai");
-
-      } else if (msg.type === "error") {
-        setInputState(false);
-        addRow("\u274c " + msg.text, "status");
-
-      } else if (msg.type === "applied") {
-        addRow(msg.text, "status");
-
-      } else if (msg.type === "setModelOptions") {
-        // Populate model list from Ollama
-        var sel = modelSelect;
-        var current = sel.value;
-        sel.innerHTML = "";
-        msg.models.forEach(function(m) {
-          var opt = document.createElement("option");
-          opt.value = m;
-          opt.textContent = m;
-          if (m === current) opt.selected = true;
-          sel.appendChild(opt);
-        });
-        if (msg.provider && providerSelect.value !== msg.provider) {
-          providerSelect.value = msg.provider;
-          var needsKey = msg.provider === "groq" || msg.provider === "openrouter";
-          apiKeyRow.classList.toggle("visible", needsKey);
-        }
-      }
-    });
-
-    // Init
-    addRow("Ready. Select a model above, pick an action chip, or just ask.", "status");
-  </script>
-</body>
+      // Init
+      addRow(
+        "Ready. Select a model above, pick an action chip, or just ask.",
+        "status",
+      );
+    </script>
+  </body>
 </html>

@@ -75,14 +75,38 @@ class AIAgent {
       enabled: config.get("enabled", true),
       provider,
       ollamaUrl: config.get("ollamaUrl", "http://localhost:11434"),
-      model: config.get("model", provider === "groq" ? "llama-3.1-8b-instant" : provider === "openrouter" ? "meta-llama/llama-3.1-8b-instruct:free" : "codellama:latest"),
+      model: config.get("model", provider === "groq" ? "llama-3.1-8b-instant" : provider === "openrouter" ? "meta-llama/llama-3.1-8b-instruct:free" : provider === "anthropic" ? "claude-3-5-haiku-20241022" : "codellama:latest"),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
+      anthropicApiKey: config.get("anthropicApiKey", ""),
       timeout: config.get("timeout", 90_000)
     };
   }
 
   _buildRequestOptions(config, prompt) {
+    if (config.provider === "anthropic") {
+      return {
+        url: "https://api.anthropic.com/v1/messages",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": config.anthropicApiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: config.model,
+          max_tokens: 1024,
+          stream: true,
+          messages: [{ role: "user", content: prompt }]
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ")) return null;
+          try {
+            const d = JSON.parse(line.slice(6));
+            return d.type === "content_block_delta" ? d.delta?.text || null : null;
+          } catch { return null; }
+        }
+      };
+    }
     if (config.provider === "groq") {
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",

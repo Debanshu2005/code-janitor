@@ -78,6 +78,17 @@ class ChatPanel {
   async _fetchAndSendModels() {
     try {
       const config = this.agent.getConfig();
+      if (config.provider === "anthropic") {
+        const models = [
+          "claude-opus-4-5",
+          "claude-sonnet-4-5",
+          "claude-3-5-sonnet-20241022",
+          "claude-3-5-haiku-20241022",
+          "claude-3-opus-20240229"
+        ];
+        if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "anthropic" });
+        return;
+      }
       if (config.provider === "groq") {
         const models = [
           "llama-3.1-8b-instant", "llama-3.1-70b-versatile",
@@ -89,12 +100,17 @@ class ChatPanel {
       }
       if (config.provider === "openrouter") {
         const models = [
+          "qwen/qwen-2.5-coder-32b-instruct",
+          "qwen/qwen-2.5-72b-instruct",
+          "deepseek/deepseek-coder-v2",
+          "deepseek/deepseek-r1-distill-qwen-32b",
+          "meta-llama/llama-3.1-70b-instruct",
+          "meta-llama/llama-3.3-70b-instruct",
+          "microsoft/phi-4",
+          "google/gemini-2.0-flash-exp:free",
+          "google/gemma-3-27b-it:free",
           "meta-llama/llama-3.1-8b-instruct:free",
-          "meta-llama/llama-3.1-70b-instruct:free",
-          "microsoft/phi-3-mini-128k-instruct:free",
-          "google/gemma-2-9b-it:free",
-          "deepseek/deepseek-coder",
-          "qwen/qwen-2.5-coder-32b-instruct"
+          "mistralai/mistral-7b-instruct:free"
         ];
         if (this.panel) this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "openrouter" });
         return;
@@ -263,6 +279,9 @@ class ChatPanel {
         }
         if (message.apiKey && message.provider === "openrouter") {
           await cfg.update("openrouterApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+        }
+        if (message.apiKey && message.provider === "anthropic") {
+          await cfg.update("anthropicApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
         }
         this._fetchAndSendModels();
       }
