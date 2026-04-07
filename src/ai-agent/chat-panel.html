@@ -548,6 +548,27 @@
         });
       }
 
+      function showNoModels(msg) {
+        modelSelect.innerHTML = "";
+        var opt = document.createElement("option");
+        opt.value = ""; opt.textContent = msg || "No models available";
+        opt.disabled = true; opt.selected = true;
+        modelSelect.appendChild(opt);
+      }
+
+      function showNoModels(msg) {
+        modelSelect.innerHTML = "";
+        var opt = document.createElement("option");
+        opt.value = ""; opt.textContent = msg || "No models available";
+        opt.disabled = true; opt.selected = true;
+        modelSelect.appendChild(opt);
+      }
+
+      // Track whether keys are saved
+      var currentHasGroqKey = false;
+      var currentHasOpenrouterKey = false;
+      var currentHasAnthropicKey = false;
+
       providerSelect.onchange = function () {
         var p = providerSelect.value;
         var needsKey = p === "groq" || p === "openrouter" || p === "anthropic";
@@ -557,27 +578,30 @@
           apiKeyLink.textContent = "Get " + p + " key";
         }
         if (modelsByProvider[p]) {
-          populateModels(modelsByProvider[p]);
+          var hasKey = (p === "groq" && currentHasGroqKey) ||
+                       (p === "openrouter" && currentHasOpenrouterKey) ||
+                       (p === "anthropic" && currentHasAnthropicKey);
+          if (hasKey) { populateModels(modelsByProvider[p]); }
+          else { showNoModels("Save an API key to see models"); }
         } else {
-          // Ollama — show defaults immediately, backend will refresh if running
-          populateModels(["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"]);
+          showNoModels("Loading models...");
         }
         vscode.postMessage({ type: "setProvider", provider: p });
-        // Always re-fetch Ollama models on switch so newly pulled models appear
         if (p === "ollama") vscode.postMessage({ type: "refreshOllamaModels" });
       };
 
       apiKeySave.onclick = function () {
         var key = apiKeyInput.value.trim();
         if (!key) return;
-        vscode.postMessage({
-          type: "setProvider",
-          provider: providerSelect.value,
-          apiKey: key,
-        });
+        var p = providerSelect.value;
+        vscode.postMessage({ type: "setProvider", provider: p, apiKey: key });
         apiKeyInput.value = "";
         showKeySaved();
-        addRow("API key saved for " + providerSelect.value + ".", "status");
+        if (p === "groq") currentHasGroqKey = true;
+        if (p === "openrouter") currentHasOpenrouterKey = true;
+        if (p === "anthropic") currentHasAnthropicKey = true;
+        if (modelsByProvider[p]) populateModels(modelsByProvider[p]);
+        addRow("API key saved for " + p + ".", "status");
       };
       var currentMessage = null;
       var chatMode = "fast";
@@ -884,13 +908,15 @@
           currentMessage = null;
           setInputState(false);
           chat.scrollTop = chat.scrollHeight;
-        } else if (msg.type === "confirm") {
+        } else if (msg.type === "confirm" || msg.type === "confirmOutsideEdit") {
           var wrap = document.createElement("div");
           wrap.className = "confirm-wrap";
           var lbl = document.createElement("div");
           lbl.className = "confirm-label";
-          lbl.textContent = "\u26a1 Allow this command to run?";
-          var cb = makeCodeBlock("bash", msg.command);
+          lbl.textContent = msg.type === "confirmOutsideEdit"
+            ? "\u26a0\ufe0f Allow edit outside workspace?"
+            : "\u26a1 Allow this command to run?";
+          var cb = makeCodeBlock(msg.type === "confirmOutsideEdit" ? "path" : "bash", msg.type === "confirmOutsideEdit" ? msg.path : msg.command);
           var btns = document.createElement("div");
           btns.className = "confirm-btns";
           var allow = document.createElement("button");
@@ -921,16 +947,25 @@
         } else if (msg.type === "setCurrentProvider") {
           if (msg.provider) {
             providerSelect.value = msg.provider;
+            currentHasGroqKey = !!msg.hasGroqKey;
+            currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
+            currentHasAnthropicKey = !!msg.hasAnthropicKey;
             var needsKey = msg.provider === "groq" || msg.provider === "openrouter" || msg.provider === "anthropic";
             apiKeyRow.classList.toggle("visible", needsKey);
             if (needsKey && providerLinks[msg.provider]) {
               apiKeyLink.href = providerLinks[msg.provider];
               apiKeyLink.textContent = "Get " + msg.provider + " key";
             }
-            var hasKey = (msg.provider === "groq" && msg.hasGroqKey) ||
-                         (msg.provider === "openrouter" && msg.hasOpenrouterKey) ||
-                         (msg.provider === "anthropic" && msg.hasAnthropicKey);
-            if (hasKey) { showKeySaved(); } else { showKeyInput(); }
+            var hasKey = (msg.provider === "groq" && currentHasGroqKey) ||
+                         (msg.provider === "openrouter" && currentHasOpenrouterKey) ||
+                         (msg.provider === "anthropic" && currentHasAnthropicKey);
+            if (hasKey) {
+              showKeySaved();
+              if (modelsByProvider[msg.provider]) populateModels(modelsByProvider[msg.provider]);
+            } else {
+              showKeyInput();
+              if (needsKey) showNoModels("Save an API key to see models");
+            }
           }
         } else if (msg.type === "setModelOptions") {
           // Populate model list from Ollama

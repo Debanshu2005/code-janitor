@@ -59,12 +59,14 @@ class AIAgent {
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor) this._lastActiveEditor = editor;
+      if (editor && editor.document.uri.scheme === "file") {
+        this._lastActiveEditor = editor;
+      }
     });
   }
 
   setActiveEditor(editor) {
-    if (editor) {
+    if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor;
     }
   }
@@ -400,10 +402,8 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a concise coding assistant embedded in VS Code. Answer directly and helpfully.
-To run a shell command, write it on its own line starting with CMD: followed by the exact command.
-To edit a file, use FILE: path then a code block.
-Never ask the user for a file path — use the file paths shown in the context below.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\n\nAssistant:`;
+      prompt = `You are a coding assistant embedded in VS Code with access to the user's codebase.
+Answer greetings naturally. For code tasks, use the context below. Only emit CMD:/FILE:/MKDIR: directives when explicitly asked.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\nAssistant:`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -441,7 +441,7 @@ Never ask the user for a file path — use the file paths shown in the context b
     }
 
     try {
-      reportStatus?.("Contacting Ollama...");
+      reportStatus?.(`Contacting ${config.provider}...`);
       const reqOpts = this._buildRequestOptions(config, prompt, mode);
       const response = await fetch(reqOpts.url, {
         method: "POST",
@@ -518,23 +518,19 @@ Never ask the user for a file path — use the file paths shown in the context b
 
   _getActiveFileContext(workspaceFolder) {
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
-    if (!activeEditor || !workspaceFolder) {
-      return "";
-    }
+    if (!activeEditor || !workspaceFolder) return "";
 
-    // Skip files outside the workspace (output panels, extensions, etc.)
-    const filePath = activeEditor.document.fileName;
+    const doc = activeEditor.document;
+    const filePath = doc.fileName;
+
+    // Skip untitled, output panels, and anything that isn't a real file on disk
+    if (doc.isUntitled) return "";
+    if (doc.uri.scheme !== "file") return "";
+
     const relative = path.relative(workspaceFolder, filePath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      return "";
-    }
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return "";
 
-    return this._buildDocumentContext(
-      "Active file",
-      activeEditor.document,
-      workspaceFolder,
-      4_000
-    );
+    return this._buildDocumentContext("Active file", doc, workspaceFolder, 4_000);
   }
 
   _toWorkspaceRelativePath(filePath, workspaceFolder) {
@@ -1130,18 +1126,11 @@ Never ask the user for a file path — use the file paths shown in the context b
         ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
         : "";
 
-    return `You are the Code Janitor AI assistant embedded in VS Code. Answer directly and helpfully.
-Mode: ${mode}.
-To run a shell command write it on its own line as: CMD: <command>
-To edit a file write: FILE: relative/path then a code block with the full contents.
-To create a folder write: MKDIR: relative/path
-Never ask the user for a file path — use the exact paths shown in the context below.
-Do not wrap the whole response in markdown.
-
+    return `You are a coding assistant embedded in VS Code with access to the user's codebase.
+Answer greetings naturally. For code tasks, use the context below. Only emit CMD:/FILE:/MKDIR: directives when explicitly asked.
 Indexed files: ${this.codebaseContext.size}
 ${editorStateContext ? `${editorStateContext}\n` : ""}${editableTargetsContext}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
 ${history ? `${history}\n\n` : ""}User: ${userMessage}
-
 Assistant:`;
   }
 
@@ -1340,31 +1329,43 @@ Assistant:`;
     };
   }
 
-  async applyChanges(filePath, newContent) {
+  async applyChanges(filePath, newContent, allowOutsideWorkspace = false) {
     try {
-      const { workspaceRoot, fullPath } = this._resolveWorkspacePath(filePath);
-      let oldContent = "";
+      let fullPath, workspaceRoot, relativePath;
 
       try {
-        oldContent = await fs.readFile(fullPath, "utf8");
-      } catch (readError) {
-        if (readError.code !== "ENOENT") {
-          throw readError;
+        const resolved = this._resolveWorkspacePath(filePath);
+        fullPath = resolved.fullPath;
+        workspaceRoot = resolved.workspaceRoot;
+        relativePath = path.relative(workspaceRoot, fullPath);
+      } catch (e) {
+        if (!allowOutsideWorkspace) {
+          return { success: false, error: "outside_workspace", path: filePath };
         }
+        fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+        relativePath = filePath;
+        workspaceRoot = null;
+      }
+
+      let oldContent = "";
+      try {
+        oldContent = await fs.readFile(fullPath, "utf8");
+      } catch (e) {
+        if (e.code !== "ENOENT") throw e;
       }
 
       const changeSummary = this._summarizeLineChanges(oldContent, newContent);
-
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
       await fs.writeFile(fullPath, newContent, "utf8");
 
-      const relativePath = path.relative(workspaceRoot, fullPath);
-      this.codebaseContext.set(relativePath, {
-        content: newContent,
-        fullPath,
-        fileName: path.basename(relativePath).toLowerCase(),
-        directory: path.dirname(relativePath).toLowerCase()
-      });
+      if (workspaceRoot) {
+        this.codebaseContext.set(relativePath, {
+          content: newContent,
+          fullPath,
+          fileName: path.basename(relativePath).toLowerCase(),
+          directory: path.dirname(relativePath).toLowerCase()
+        });
+      }
 
       return {
         success: true,

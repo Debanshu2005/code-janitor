@@ -16,7 +16,7 @@ class ChatPanel {
     this.agent.setActiveEditor(this.lastActiveEditor);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor) this.lastActiveEditor = editor;
+      if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
     }, null, context.subscriptions);
   }
 
@@ -171,7 +171,17 @@ class ChatPanel {
         if (response.actions && response.actions.length > 0) {
           for (const action of response.actions) {
             if (action.type === "file") {
-              const result = await this.agent.applyChanges(action.path, action.content);
+              let result = await this.agent.applyChanges(action.path, action.content);
+              if (result.error === "outside_workspace") {
+                this.panel.webview.postMessage({ type: "confirmOutsideEdit", path: action.path });
+                const allow = await new Promise((resolve) => { this._confirmResolve = resolve; });
+                if (allow) {
+                  result = await this.agent.applyChanges(action.path, action.content, true);
+                } else {
+                  this.panel.webview.postMessage({ type: "status", text: `\u274c Denied edit outside workspace: ${action.path}` });
+                  continue;
+                }
+              }
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success

@@ -393,6 +393,16 @@ function activate(context) {
   context.subscriptions.push(chatDisposable)
   console.log("✓ AI Chat command registered.")
 
+  // URI handler: vscode://Debanshu2005.code-janitor/check-models
+  const uriHandler = vscode.window.registerUriHandler({
+    handleUri(uri) {
+      if (uri.path === "/check-models") {
+        chatPanel.show()
+      }
+    }
+  })
+  context.subscriptions.push(uriHandler)
+
   // 6. Real-time Auto-correction
   const changeDisposable = vscode.workspace.onDidChangeTextDocument(
     async (event) => {
