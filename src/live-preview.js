@@ -339,31 +339,35 @@ function getCompiledLanguageView(languageId, fixedCode) {
 }
 
 function getMarkdownView(code) {
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Markdown Preview</title>
-        <script src="https://unpkg.com/marked/marked.min.js"></script>
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; max-width: 800px; margin: 0 auto; line-height: 1.7; color: #24292e; }
-          pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow-x: auto; }
-          code { background: #f6f8fa; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
-          blockquote { border-left: 4px solid #dfe2e5; margin: 0; padding-left: 16px; color: #6a737d; }
-          img { max-width: 100%; }
-          table { border-collapse: collapse; width: 100%; }
-          th, td { border: 1px solid #dfe2e5; padding: 8px 12px; }
-          th { background: #f6f8fa; }
-        </style>
-      </head>
-      <body>
-        <div id="content"></div>
-        <script>
-          document.getElementById("content").innerHTML = marked.parse(${JSON.stringify(code)});
-        </script>
-      </body>
-    </html>
-  `
+  // Convert markdown to HTML in Node — no CDN needed, no CSP issues
+  const escaped = code
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  const html = escaped
+    .replace(/^#{6}\s+(.+)$/gm, "<h6>$1</h6>")
+    .replace(/^#{5}\s+(.+)$/gm, "<h5>$1</h5>")
+    .replace(/^#{4}\s+(.+)$/gm, "<h4>$1</h4>")
+    .replace(/^#{3}\s+(.+)$/gm, "<h3>$1</h3>")
+    .replace(/^#{2}\s+(.+)$/gm, "<h2>$1</h2>")
+    .replace(/^#{1}\s+(.+)$/gm, "<h1>$1</h1>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/^```[\w]*\n([\s\S]*?)```$/gm, "<pre><code>$1</code></pre>")
+    .replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>")
+    .replace(/^-\s+(.+)$/gm, "<li>$1</li>")
+    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/^(?!<[a-z]).+$/gm, (line) => line.trim() ? `<p>${line}</p>` : "")
+  return `<!DOCTYPE html><html><head><title>Markdown Preview</title><style>
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px;max-width:800px;margin:0 auto;line-height:1.7;color:#24292e;}
+    h1,h2,h3,h4,h5,h6{margin:20px 0 10px;}
+    h2{border-bottom:1px solid #eee;padding-bottom:6px;}
+    pre{background:#f6f8fa;padding:16px;border-radius:6px;overflow-x:auto;}
+    code{background:#f6f8fa;padding:2px 5px;border-radius:3px;font-size:.9em;font-family:monospace;}
+    blockquote{border-left:4px solid #dfe2e5;margin:0;padding-left:16px;color:#6a737d;}
+    a{color:#0366d6;}ul{padding-left:24px;}
+    table{border-collapse:collapse;width:100%;}th,td{border:1px solid #dfe2e5;padding:8px 12px;}th{background:#f6f8fa;}
+  </style></head><body>${html}</body></html>`
 }
 
 function getCssView(languageId, code, filePath) {
@@ -403,37 +407,25 @@ function getCssView(languageId, code, filePath) {
 }
 
 function getJsonView(code) {
-  let formatted = code;
-  let parseError = null;
-  try { formatted = JSON.stringify(JSON.parse(code), null, 2); } catch(e) { parseError = e.message; }
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>JSON Preview</title>
-        <style>
-          body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; margin: 0; }
-          .error { color: #ff7b72; background: #2a0a0a; padding: 10px; border-radius: 4px; margin-bottom: 12px; }
-          pre { white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.6; }
-          .key { color: #7dd3fc; } .str { color: #86efac; } .num { color: #fbbf24; } .bool { color: #f87171; } .null { color: #94a3b8; }
-        </style>
-      </head>
-      <body>
-        ${parseError ? `<div class="error">JSON Parse Error: ${parseError}</div>` : ""}
-        <pre id="json"></pre>
-        <script>
-          const raw = ${JSON.stringify(formatted)};
-          document.getElementById("json").innerHTML = raw
-            .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-            .replace(/("[^"]+"):/g, '<span class="key">$1</span>:')
-            .replace(/: ("[^"]*")/g, ': <span class="str">$1</span>')
-            .replace(/: (-?\d+\.?\d*)/g, ': <span class="num">$1</span>')
-            .replace(/: (true|false)/g, ': <span class="bool">$1</span>')
-            .replace(/: (null)/g, ': <span class="null">$1</span>');
-        </script>
-      </body>
-    </html>
-  `
+  let formatted = code
+  let parseError = null
+  try { formatted = JSON.stringify(JSON.parse(code), null, 2) } catch(e) { parseError = e.message }
+  const highlighted = formatted
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/("[^"]+"):/g, '<span class="key">$1</span>:')
+    .replace(/: ("[^"]*")/g, ': <span class="str">$1</span>')
+    .replace(/: (-?\d+\.?\d*)/g, ': <span class="num">$1</span>')
+    .replace(/: (true|false)/g, ': <span class="bool">$1</span>')
+    .replace(/: (null)/g, ': <span class="null">$1</span>')
+  return `<!DOCTYPE html><html><head><title>JSON Preview</title><style>
+    body{font-family:monospace;padding:20px;background:#1e1e1e;color:#d4d4d4;margin:0;}
+    .error{color:#ff7b72;background:#2a0a0a;padding:10px;border-radius:4px;margin-bottom:12px;}
+    pre{white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.6;}
+    .key{color:#7dd3fc;}.str{color:#86efac;}.num{color:#fbbf24;}.bool{color:#f87171;}.null{color:#94a3b8;}
+  </style></head><body>
+  ${parseError ? `<div class="error">JSON Parse Error: ${parseError}</div>` : ""}
+  <pre>${highlighted}</pre>
+  </body></html>`
 }
 
 function getSvgView(code) {
