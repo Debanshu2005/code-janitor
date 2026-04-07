@@ -338,28 +338,125 @@ function getCompiledLanguageView(languageId, fixedCode) {
   `
 }
 
-function getWebviewContent(languageId, fixedCode, hasError) {
-  if (languageId === "html") {
-    return fixedCode
-  }
+function getMarkdownView(code) {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Markdown Preview</title>
+        <script src="https://unpkg.com/marked/marked.min.js"></script>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; max-width: 800px; margin: 0 auto; line-height: 1.7; color: #24292e; }
+          pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow-x: auto; }
+          code { background: #f6f8fa; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+          blockquote { border-left: 4px solid #dfe2e5; margin: 0; padding-left: 16px; color: #6a737d; }
+          img { max-width: 100%; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #dfe2e5; padding: 8px 12px; }
+          th { background: #f6f8fa; }
+        </style>
+      </head>
+      <body>
+        <div id="content"></div>
+        <script>
+          document.getElementById("content").innerHTML = marked.parse(${JSON.stringify(code)});
+        </script>
+      </body>
+    </html>
+  `
+}
 
-  if (languageId === "javascriptreact" || languageId === "typescriptreact") {
-    return getReactView(fixedCode, hasError)
-  }
+function getCssView(languageId, code, filePath) {
+  const label = languageId.toUpperCase();
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>${label} Preview</title>
+        <style>
+          body { font-family: "Segoe UI", sans-serif; padding: 20px; background: #f4f4f4; }
+          .preview-box { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
+          .preview-box h2 { margin: 0 0 16px; font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+          pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; }
+        </style>
+        <style id="user-styles"></style>
+      </head>
+      <body>
+        <div class="preview-box">
+          <h2>${label} Applied to Sample Elements</h2>
+          <h1>Heading 1</h1><h2>Heading 2</h2>
+          <p>Paragraph text with <a href="#">a link</a> and <strong>bold</strong> and <em>italic</em>.</p>
+          <button>Button</button>
+          <input type="text" placeholder="Input field" />
+          <ul><li>List item 1</li><li>List item 2</li><li>List item 3</li></ul>
+          <div class="box">A div.box element</div>
+          <div class="container"><div class="item">Container &gt; Item</div></div>
+        </div>
+        <div class="preview-box"><h2>Source</h2><pre>${code.replace(/</g, "&lt;")}</pre></div>
+        <script>
+          // Inject user CSS (plain CSS only — SCSS/LESS shown as source)
+          try { document.getElementById("user-styles").textContent = ${JSON.stringify(code)}; } catch(e) {}
+        </script>
+      </body>
+    </html>
+  `
+}
 
-  if (
-    languageId === "javascript" ||
-    languageId === "typescript" ||
-    languageId === "python"
-  ) {
-    return getExecutionView(languageId, fixedCode, hasError)
-  }
+function getJsonView(code) {
+  let formatted = code;
+  let parseError = null;
+  try { formatted = JSON.stringify(JSON.parse(code), null, 2); } catch(e) { parseError = e.message; }
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>JSON Preview</title>
+        <style>
+          body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; margin: 0; }
+          .error { color: #ff7b72; background: #2a0a0a; padding: 10px; border-radius: 4px; margin-bottom: 12px; }
+          pre { white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.6; }
+          .key { color: #7dd3fc; } .str { color: #86efac; } .num { color: #fbbf24; } .bool { color: #f87171; } .null { color: #94a3b8; }
+        </style>
+      </head>
+      <body>
+        ${parseError ? `<div class="error">JSON Parse Error: ${parseError}</div>` : ""}
+        <pre id="json"></pre>
+        <script>
+          const raw = ${JSON.stringify(formatted)};
+          document.getElementById("json").innerHTML = raw
+            .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+            .replace(/("[^"]+"):/g, '<span class="key">$1</span>:')
+            .replace(/: ("[^"]*")/g, ': <span class="str">$1</span>')
+            .replace(/: (-?\d+\.?\d*)/g, ': <span class="num">$1</span>')
+            .replace(/: (true|false)/g, ': <span class="bool">$1</span>')
+            .replace(/: (null)/g, ': <span class="null">$1</span>');
+        </script>
+      </body>
+    </html>
+  `
+}
 
-  if (languageId === "c" || languageId === "java") {
-    return getCompiledLanguageView(languageId, fixedCode)
-  }
+function getSvgView(code) {
+  return `<!DOCTYPE html><html><head><title>SVG Preview</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f4f4;}</style></head><body>${code}</body></html>`
+}
 
-  return `<pre class="code-display">${escapeHTML(fixedCode)}</pre>`
+function getWebviewContent(languageId, fixedCode, hasError, documentPath) {
+  if (languageId === "html") return fixedCode
+  if (languageId === "javascriptreact" || languageId === "typescriptreact") return getReactView(fixedCode, hasError)
+  if (languageId === "javascript" || languageId === "typescript" || languageId === "python") return getExecutionView(languageId, fixedCode, hasError)
+  if (languageId === "c" || languageId === "java") return getCompiledLanguageView(languageId, fixedCode)
+  if (languageId === "markdown") return getMarkdownView(fixedCode)
+  if (["css", "scss", "less", "sass"].includes(languageId)) return getCssView(languageId, fixedCode, documentPath)
+  if (languageId === "json" || languageId === "jsonc") return getJsonView(fixedCode)
+  if (languageId === "xml" || languageId === "svg") return getSvgView(fixedCode)
+  if (["vue", "svelte", "astro"].includes(languageId)) {
+    const templateMatch = fixedCode.match(/<template[^>]*>([\s\S]*?)<\/template>/i)
+    const styleMatch = fixedCode.match(/<style[^>]*>([\s\S]*?)<\/style>/i)
+    const html = templateMatch ? templateMatch[1] : fixedCode
+    const style = styleMatch ? `<style>${styleMatch[1]}</style>` : ""
+    return `<!DOCTYPE html><html><head><title>${languageId} Preview</title>${style}</head><body>${html}</body></html>`
+  }
+  return `<!DOCTYPE html><html><head><title>Preview</title><style>body{margin:0;background:#1e1e1e;}pre{padding:20px;color:#d4d4d4;font-family:monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;}</style></head><body><pre>${escapeHTML(fixedCode)}</pre></body></html>`
 }
 
 function getLocalResourceRoots(documentPath) {
@@ -384,14 +481,9 @@ function livePreviewer(context) {
   const document = editor.document
   const languageId = document.languageId
   const supportedLanguages = [
-    "html",
-    "javascript",
-    "typescript",
-    "javascriptreact",
-    "typescriptreact",
-    "python",
-    "c",
-    "java"
+    "html", "javascript", "typescript", "javascriptreact", "typescriptreact",
+    "python", "c", "java", "markdown", "css", "scss", "less", "sass",
+    "json", "jsonc", "xml", "svg", "vue", "svelte", "astro"
   ]
 
   if (!supportedLanguages.includes(languageId)) {
@@ -442,7 +534,7 @@ function livePreviewer(context) {
           )
         : fixedCode
 
-    panel.webview.html = getWebviewContent(languageId, processedCode, hasError)
+    panel.webview.html = getWebviewContent(languageId, processedCode, hasError, document.fileName)
   }
 
   updateWebview()

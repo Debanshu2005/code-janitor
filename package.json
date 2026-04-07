@@ -6,7 +6,12 @@
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
-  "homepage": "https://github.com/Debanshu2005/code-janitor",
+  "homepage": "https://code-janitor-web.vercel.app",
+  "qna": "https://code-janitor-web.vercel.app",
+  "galleryBanner": {
+    "color": "#0f1117",
+    "theme": "dark"
+  },
   "bugs": {
     "url": "https://github.com/Debanshu2005/code-janitor/issues"
   },
