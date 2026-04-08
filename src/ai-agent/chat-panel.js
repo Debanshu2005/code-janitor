@@ -92,7 +92,7 @@ class ChatPanel {
     try {
       const config = this.agent.getConfig();
       if (config.provider !== "ollama") return;
-      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(4000) });
+      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
         const data = await res.json();
         const models = (data.models || []).map(m => m.name).filter(Boolean);
@@ -102,7 +102,7 @@ class ChatPanel {
         }
       }
     } catch (_) {}
-    // Ollama unreachable or no models — show default so dropdown isn't stuck
+    // Ollama unreachable or no models — show defaults
     if (this.panel) {
       this.panel.webview.postMessage({
         type: "setModelOptions",
@@ -144,19 +144,25 @@ class ChatPanel {
         this.panel.webview.postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 
-        const response = await this.agent.chat(
-          trimmedText,
-          workspaceFolder,
-          (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
-          this.abortController.signal,
-          {
-            mode: this.chatMode,
-            onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
-          }
-        );
+        let response;
+        try {
+          response = await this.agent.chat(
+            trimmedText,
+            workspaceFolder,
+            (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
+            this.abortController.signal,
+            {
+              mode: this.chatMode,
+              onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
+            }
+          );
+        } finally {
+          this.abortController = null;
+        }
 
         if (response.error) {
           this.panel.webview.postMessage({ type: "error", text: response.error });
+          this.panel.webview.postMessage({ type: "done" });
           return;
         }
 
@@ -166,6 +172,11 @@ class ChatPanel {
           for (const warning of response.warnings) {
             this.panel.webview.postMessage({ type: "status", text: warning });
           }
+        }
+
+        // Debug: show what was parsed
+        if (response.actions && response.actions.length > 0) {
+          this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${response.actions.map(a => `${a.type}:${a.path || a.command}`).join(", ")}` });
         }
 
         if (response.actions && response.actions.length > 0) {
@@ -180,17 +191,27 @@ class ChatPanel {
               } else {
                 insideActions.push({ action, result: probe });
               }
-            } else {
+            } else if (action.type === "mkdir") {
+              // Skip MKDIR if a FILE: action already covers the same path
+              // applyChanges creates parent dirs automatically
+              const probe = await this.agent.createFolder(action.path);
+              if (probe.error === "outside_workspace") {
+                outsideFiles.push({ action, path: probe.path });
+              } else {
+                insideActions.push({ action, result: probe });
+              }
+            } else if (action.type === "cmd") {
               insideActions.push({ action, result: null });
             }
           }
 
-          // Ask permission for outside-workspace files
-          let allowOutside = false;
-          if (outsideFiles.length > 0) {
+          // Ask permission for outside-workspace files (once per session)
+          let allowOutside = this._outsideWorkspaceAllowed || false;
+          if (outsideFiles.length > 0 && !allowOutside) {
             const paths = outsideFiles.map(f => f.path).join("\n");
             this.panel.webview.postMessage({ type: "confirmOutsideEdit", path: paths });
             allowOutside = await new Promise((resolve) => { this._confirmResolve = resolve; });
+            if (allowOutside) this._outsideWorkspaceAllowed = true;
           }
 
           // Process all actions
@@ -211,12 +232,10 @@ class ChatPanel {
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success
-                  ? `Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
+                  ? `\u2705 Created ${result.relativePath || action.path}`
                   : result.error
               });
-              // Auto syntax-check the written file
               if (result.success && result.syntaxCheckCmd) {
-                this.panel.webview.postMessage({ type: "status", text: `Checking syntax: ${result.relativePath}` });
                 const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
                 const ok = checkResult.success && !(checkResult.output || "").trim();
                 this.panel.webview.postMessage({
@@ -227,10 +246,16 @@ class ChatPanel {
                 });
               }
             } else if (action.type === "mkdir") {
-              const result = await this.agent.createFolder(action.path);
+              if (outside && !allowOutside) {
+                this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              const result = outside
+                ? await this.agent.createFolder(action.path, true)
+                : preResult;
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
-                text: result.success ? `Created folder ${action.path}` : result.error
+                text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
             } else if (action.type === "cmd") {
               const validation = this.agent.validateCommand(action.command);
@@ -262,6 +287,7 @@ class ChatPanel {
       } else if (message.type === "stop") {
         if (this.abortController) {
           this.abortController.abort();
+          this.abortController = null;
           this.panel.webview.postMessage({ type: "done" });
         }
       } else if (message.type === "apply") {
@@ -274,6 +300,7 @@ class ChatPanel {
         });
       } else if (message.type === "clear") {
         this.agent.clearHistory();
+        this._outsideWorkspaceAllowed = false;
         this.panel.webview.postMessage({ type: "cleared" });
       } else if (message.type === "scanOverview") {
         this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
@@ -291,13 +318,26 @@ class ChatPanel {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
           const savedConfig = this.agent.getConfig();
+          const hasGroqKey = !!savedConfig.groqApiKey;
+          const hasOpenrouterKey = !!savedConfig.openrouterApiKey;
+          const hasAnthropicKey = !!savedConfig.anthropicApiKey;
+          const modelsByProvider = {
+            groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
+            openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
+            anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
+          };
+          const hasKey = (savedConfig.provider === "groq" && hasGroqKey) ||
+                         (savedConfig.provider === "openrouter" && hasOpenrouterKey) ||
+                         (savedConfig.provider === "anthropic" && hasAnthropicKey);
+          const models = hasKey ? (modelsByProvider[savedConfig.provider] || null) : null;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
             provider: savedConfig.provider,
             model: savedConfig.model,
-            hasGroqKey: !!savedConfig.groqApiKey,
-            hasOpenrouterKey: !!savedConfig.openrouterApiKey,
-            hasAnthropicKey: !!savedConfig.anthropicApiKey
+            hasGroqKey,
+            hasOpenrouterKey,
+            hasAnthropicKey,
+            models
           });
         }
         this._fetchAndSendModels();

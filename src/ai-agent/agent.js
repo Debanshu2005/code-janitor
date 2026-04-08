@@ -86,8 +86,16 @@ class AIAgent {
     };
   }
 
-  _buildRequestOptions(config, prompt, mode = "fast") {
-    const maxTokens = mode === "heavy" ? 8192 : 1024;
+  _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
+    const isUnlimited = mode === "heavy" && intent === "create";
+    const maxTokens = isUnlimited ? 16000 : (mode === "heavy" ? 8192 : 1024);
+
+    // Split prompt into system + user parts using unique markers
+    const SYS_END = "\n\n### USER_MESSAGE ###\n";
+    const sysIdx = prompt.indexOf(SYS_END);
+    const sysContent = sysIdx > 0 ? prompt.slice(0, sysIdx).trim() : "You are a coding assistant.";
+    const userContent = sysIdx > 0 ? prompt.slice(sysIdx + SYS_END.length).replace(/\nAssistant:$/, "").trim() : prompt;
+
     if (config.provider === "anthropic") {
       return {
         url: "https://api.anthropic.com/v1/messages",
@@ -100,7 +108,8 @@ class AIAgent {
           model: config.model,
           max_tokens: maxTokens,
           stream: true,
-          messages: [{ role: "user", content: prompt }]
+          system: sysContent,
+          messages: [{ role: "user", content: userContent }]
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ")) return null;
@@ -114,16 +123,11 @@ class AIAgent {
     if (config.provider === "groq") {
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${config.groqApiKey}`
-        },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.groqApiKey}` },
         body: JSON.stringify({
           model: config.model,
-          messages: [{ role: "user", content: prompt }],
-          stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          messages: [{ role: "system", content: sysContent }, { role: "user", content: userContent }],
+          stream: true, temperature: 0.05, max_tokens: maxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -142,10 +146,8 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
-          messages: [{ role: "user", content: prompt }],
-          stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          messages: [{ role: "system", content: sysContent }, { role: "user", content: userContent }],
+          stream: true, temperature: 0.05, max_tokens: maxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -153,18 +155,25 @@ class AIAgent {
         }
       };
     }
-    // Default: Ollama
+    // Ollama — use /api/chat for proper system/user role support
     return {
-      url: `${config.ollamaUrl}/api/generate`,
+      url: `${config.ollamaUrl}/api/chat`,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: config.model,
-        prompt,
+        messages: [
+          { role: "system", content: sysContent },
+          { role: "user", content: userContent }
+        ],
         stream: true,
         options: { temperature: 0.05, num_predict: mode === "heavy" ? -1 : 1024, top_k: 10, top_p: 0.7 }
       }),
       parseChunk: (line) => {
-        try { const d = JSON.parse(line); return d.response || null; } catch { return null; }
+        try {
+          const d = JSON.parse(line);
+          if (d.done) return null;
+          return d.message?.content || null;
+        } catch { return null; }
       }
     };
   }
@@ -402,8 +411,15 @@ class AIAgent {
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
-      prompt = `You are a coding assistant embedded in VS Code with access to the user's codebase.
-Answer greetings naturally. For code tasks, use the context below. Only emit CMD:/FILE:/MKDIR: directives when explicitly asked.${activeFileContext ? `\n\n${activeFileContext}` : ""}${fastContext ? `\n\n${fastContext}` : ""}${history ? `\n\n${history}` : ""}\n\nUser: ${resolvedMessage}\nAssistant:`;
+      const intent = this._detectIntent(userMessage);
+      const systemInstruction = this._buildSystemInstruction(intent, workspaceFolder);
+      const isCreateIntent = intent === "create";
+      const contextToUse = isCreateIntent ? "" : fastContext;
+      const activeCtx = isCreateIntent ? "" : activeFileContext;
+      prompt = `${systemInstruction}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+
+### USER_MESSAGE ###
+${resolvedMessage}`;
     } else {
       const editorState = this._getEditorState(workspaceFolder);
       const editableTargets = this._resolveEditableTargets(
@@ -416,8 +432,10 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0;
 
+      const intent = this._detectIntent(userMessage);
+
       reportStatus?.(isScopedActiveFileEdit ? "Scanning active files..." : "Scanning workspace...");
-      await this.ensureCodebaseScanned(workspaceFolder);
+      if (workspaceFolder) await this.ensureCodebaseScanned(workspaceFolder);
 
       // For full codebase scan requests, inject the overview + snippets directly
       const isFullScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project)\b/i.test(userMessage);
@@ -432,7 +450,7 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
             editorState.allOpenTabs,
             workspaceFolder
           );
-      this.currentEditableTargets = editableTargets.paths.length ? new Set(editableTargets.paths) : null;
+      this.currentEditableTargets = (intent !== "create" && intent !== "edit" && editableTargets.paths.length) ? new Set(editableTargets.paths) : null;
       prompt = this._buildPrompt(
         resolvedMessage, relevantFiles, activeFileContext,
         editorStateContext, openTabSnippetContext,
@@ -442,7 +460,8 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
-      const reqOpts = this._buildRequestOptions(config, prompt, mode);
+      const reqIntent = mode === "fast" ? this._detectIntent(userMessage) : this._detectIntent(userMessage);
+      const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent);
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
@@ -781,21 +800,62 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
     );
   }
 
-  _getFastLocalResponse(userMessage) {
-    const message = (userMessage || "").trim().toLowerCase();
-    if (!message) {
-      return null;
-    }
+  _detectIntent(message) {
+    const m = message.toLowerCase();
+    if (/\b(hi|hello|hey|thanks|thank you|thx|good morning|good evening|how are you|what's up|sup)\b/.test(m) &&
+        m.split(" ").length < 8) return "greeting";
+    if (/\b(make|create|build|develop|generate|scaffold|write me|code me)\b/.test(m) &&
+        /\b(app|website|site|portfolio|game|api|server|script|program|html|css|component|page|project|tool|extension|plugin|bot|dashboard|landing)\b/.test(m)) return "create";
+    if (/\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(m)) return "explain";
+    if (/\b(fix|debug|error|issue|bug|broken|not working|failing|wrong|problem|crash)\b/.test(m)) return "debug";
+    if (/\b(refactor|improve|optimize|clean up|rewrite|restructure|simplify)\b/.test(m)) return "refactor";
+    if (/\b(add|edit|update|modify|change|rename|patch|insert|remove|delete)\b/.test(m) &&
+        /\b(file|function|class|method|variable|line|code|import|export)\b/.test(m)) return "edit";
+    if (/\b(scan|review|analyze|audit|check|inspect|summarize|overview|readme)\b/.test(m) &&
+        /\b(codebase|repo|project|workspace|file|files)\b/.test(m)) return "scan";
+    return "general";
+  }
 
-    if (/^(hi|hello|hey|yo|sup|hola|hii+)[!. ]*$/.test(message)) {
-      return "Hello! How can I help?";
-    }
+  _buildSystemInstruction(intent, workspaceFolder) {
+    const base = "You are a coding assistant embedded in VS Code.";
+    switch (intent) {
+      case "greeting": return `${base} Reply naturally and briefly.`;
+      case "create": {
+        const loc = workspaceFolder
+          ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
+          : "Save files on the Desktop.";
+        return `${base} ${loc}
+You must respond ONLY with FILE: blocks. No explanations, no markdown, no shell commands.
+Format:
+FILE: folder/file.ext
+\`\`\`
+content here
+\`\`\`
 
-    if (/^(thanks|thank you|thx)[!. ]*$/.test(message)) {
-      return "You're welcome.";
-    }
+Example response for "create a hello world site":
+FILE: hello/index.html
+\`\`\`
+<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World</h1></body></html>
+\`\`\`
+FILE: hello/style.css
+\`\`\`
+body { font-family: sans-serif; }
+\`\`\`
 
-    return null;
+Now respond with FILE: blocks only for the user's request:`;
+      }
+      case "explain": return `${base} Give a clear, direct explanation. Do not output FILE: or CMD: directives unless asked.`;
+      case "debug": return `${base} Identify the issue and explain the fix. Use FILE: directives only if the user asks you to apply the fix.`;
+      case "refactor": return `${base} Suggest improvements. Use FILE: directives only if the user asks you to apply changes.`;
+      case "edit": return `${base} Apply the requested changes by outputting the complete updated file using this exact format:
+FILE: relative/path/filename.ext
+\`\`\`
+(complete updated file content)
+\`\`\`
+Output ONLY the FILE: block with the full updated content. No explanations.`;
+      case "scan": return `${base} Analyze the provided codebase context and give a detailed, accurate response.`;
+      default: return `${base} Answer helpfully. Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`;
+    }
   }
 
   _getEmptyResponseFallback(mode) {
@@ -1022,7 +1082,7 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
     const relevant = [];
 
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
-    const activeRelativePath = activeEditor
+    const activeRelativePath = activeEditor && workspaceFolder
       ? path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/").toLowerCase()
       : "";
 
@@ -1086,62 +1146,63 @@ Answer greetings naturally. For code tasks, use the context below. Only emit CMD
       )
       .join("\n\n");
 
-    const isWritingTask = /\b(readme|documentation|docs|write|generate|create)\b/i.test(userMessage);
-    const MAX_PROMPT_CHARS = isWritingTask ? 6_000 : 12_000;
-
-    const isCodbaseScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files)\b/i.test(userMessage);
-    const snippetSize = isWritingTask ? 200 : 500;
+    const intent = this._detectIntent(userMessage);
+    const systemInstruction = this._buildSystemInstruction(intent, this.workspaceRoot);
+    const isCreateIntent = intent === "create";
+    const MAX_PROMPT_CHARS = 12_000;
 
     let context = "";
-    for (const file of relevantFiles) {
-      const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
-      if ((context + block).length > MAX_PROMPT_CHARS) break;
-      context += block;
-    }
-
-    if (!context) {
-      const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
-      if (allFiles.length > 0) {
-        if (isCodbaseScan) {
-          let snippetContext = "";
-          for (const [relativePath, fileData] of this.codebaseContext.entries()) {
-            const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, snippetSize)}\n\`\`\`\n\n`;
-            if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
-            snippetContext += block;
+    if (!isCreateIntent) {
+      for (const file of relevantFiles) {
+        const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`;
+        if ((context + block).length > MAX_PROMPT_CHARS) break;
+        context += block;
+      }
+      if (!context) {
+        const allFiles = Array.from(this.codebaseContext.keys()).map(p => p.replace(/\\/g, "/")).sort();
+        if (allFiles.length > 0) {
+          if (intent === "scan") {
+            let snippetContext = "";
+            for (const [relativePath, fileData] of this.codebaseContext.entries()) {
+              const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`;
+              if ((snippetContext + block).length > MAX_PROMPT_CHARS) break;
+              snippetContext += block;
+            }
+            context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
+          } else {
+            context = `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
           }
-          context = snippetContext || `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
         } else {
-          context = `Workspace files:\n${allFiles.map(f => `- ${f}`).join("\n")}\n`;
+          context = "No indexed files found.\n";
         }
-      } else {
-        context = "No indexed files found.\n";
       }
     }
 
-    const editableTargetsContext = this._buildEditableTargetsContext(
-      editableTargets
-    );
-    const implicitActiveFileGuidance =
-      activeFileContext && this._isLikelyActiveFileFollowUp(userMessage)
-        ? "Treat short follow-up requests without an explicit file path, such as 'find issues if any' or 'explain this', as referring to the active file context attached below unless the user clearly asks for the whole workspace.\n"
-        : "";
+    const editableTargetsContext = this._buildEditableTargetsContext(editableTargets);
+    const effectiveEditorState = isCreateIntent ? "" : editorStateContext;
+    const effectiveActiveFile = isCreateIntent ? "" : activeFileContext;
+    const effectiveTabContext = isCreateIntent ? "" : openTabSnippetContext;
 
-    return `You are a coding assistant embedded in VS Code with access to the user's codebase.
-Answer greetings naturally. For code tasks, use the context below. Only emit CMD:/FILE:/MKDIR: directives when explicitly asked.
+    return `${systemInstruction}
 Indexed files: ${this.codebaseContext.size}
-${editorStateContext ? `${editorStateContext}\n` : ""}${editableTargetsContext}${activeFileContext ? `${activeFileContext}\n\n` : ""}${openTabSnippetContext}${context}
-${history ? `${history}\n\n` : ""}User: ${userMessage}
-Assistant:`;
+${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
+${history ? `${history}\n\n` : ""}
+### USER_MESSAGE ###
+${userMessage}`;
   }
 
   _parseResponse(response) {
     const actions = [];
     const warnings = [];
 
-    const fileRegex = /FILE:\s*([^\n]+)\n```(\w+)?\n([\s\S]*?)```/g;
+    // Match FILE: with flexible code block format
+    const fileRegex = /FILE:\s*([^\n`]+)\n```[\w]*\n?([\s\S]*?)```/g;
     let match;
     while ((match = fileRegex.exec(response)) !== null) {
       const normalizedPath = match[1].trim().replace(/\\/g, "/");
+      const content = match[2] || "";
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
 
       if (
         this.currentEditableTargets &&
@@ -1151,18 +1212,27 @@ Assistant:`;
         continue;
       }
 
-      actions.push({
-        type: "file",
-        path: normalizedPath,
-        language: match[2] || "text",
-        content: match[3]
-      });
+      actions.push({ type: "file", path: normalizedPath, language: "text", content });
     }
 
-    const cmdRegex = /(?:```\w*\s*)?CMD:\s*(.+?)(?:\s*```)?$/gm;
+    // Fallback: also try matching FILE: followed by content without code fences
+    if (actions.length === 0) {
+      const looseFIleRegex = /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\nFILE:|\nMKDIR:|\nCMD:|$)/g;
+      while ((match = looseFIleRegex.exec(response)) !== null) {
+        const normalizedPath = match[1].trim().replace(/\\/g, "/");
+        const content = match[2].replace(/^```[\w]*\n?|```$/gm, "").trim();
+        if (!normalizedPath || normalizedPath.includes("\n") || !content) continue;
+        if (this.currentEditableTargets && !this.currentEditableTargets.has(normalizedPath)) {
+          warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+          continue;
+        }
+        actions.push({ type: "file", path: normalizedPath, language: "text", content });
+      }
+    }
+
+    const cmdRegex = /^CMD:\s*(.+)$/gm;
     while ((match = cmdRegex.exec(response)) !== null) {
       const cmd = match[1].trim();
-      // Skip if it looks like the model confused directives
       if (cmd.startsWith("/") || cmd.startsWith("FILE:") || cmd.startsWith("MKDIR:")) continue;
       actions.push({ type: "cmd", command: cmd });
     }
@@ -1180,11 +1250,10 @@ Assistant:`;
     const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
 
     if (!workspaceRoot) {
-      // No workspace open — treat absolute paths as-is, relative paths throw
-      if (path.isAbsolute(inputPath)) {
-        return { workspaceRoot: null, fullPath: inputPath, outsideWorkspace: true };
-      }
-      throw new Error("No workspace open. Please open a folder first or provide an absolute path.");
+      // No workspace — resolve relative paths to Desktop
+      const base = path.join(require("os").homedir(), "Desktop");
+      const fullPath = path.isAbsolute(inputPath) ? inputPath : path.join(base, inputPath);
+      return { workspaceRoot: null, fullPath, outsideWorkspace: true };
     }
 
     const resolved = path.resolve(

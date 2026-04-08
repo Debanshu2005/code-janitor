@@ -339,35 +339,66 @@ function getCompiledLanguageView(languageId, fixedCode) {
 }
 
 function getMarkdownView(code) {
-  // Convert markdown to HTML in Node — no CDN needed, no CSP issues
-  const escaped = code
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  const html = escaped
-    .replace(/^#{6}\s+(.+)$/gm, "<h6>$1</h6>")
-    .replace(/^#{5}\s+(.+)$/gm, "<h5>$1</h5>")
-    .replace(/^#{4}\s+(.+)$/gm, "<h4>$1</h4>")
-    .replace(/^#{3}\s+(.+)$/gm, "<h3>$1</h3>")
-    .replace(/^#{2}\s+(.+)$/gm, "<h2>$1</h2>")
-    .replace(/^#{1}\s+(.+)$/gm, "<h1>$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/^```[\w]*\n([\s\S]*?)```$/gm, "<pre><code>$1</code></pre>")
-    .replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>")
-    .replace(/^-\s+(.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    .replace(/^(?!<[a-z]).+$/gm, (line) => line.trim() ? `<p>${line}</p>` : "")
+  function renderMd(src) {
+    return src
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      // Fenced code blocks first
+      .replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, c) =>
+        `<pre><code class="lang-${lang}">${c.trimEnd()}</code></pre>`)
+      // Inline code
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      // Images before links
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
+      // Links
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+      // Headings
+      .replace(/^#{6} (.+)$/gm, "<h6>$1</h6>").replace(/^#{5} (.+)$/gm, "<h5>$1</h5>")
+      .replace(/^#{4} (.+)$/gm, "<h4>$1</h4>").replace(/^#{3} (.+)$/gm, "<h3>$1</h3>")
+      .replace(/^#{2} (.+)$/gm, "<h2>$1</h2>").replace(/^# (.+)$/gm, "<h1>$1</h1>")
+      // Bold/italic/strikethrough
+      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/~~(.+?)~~/g, "<del>$1</del>")
+      // HR
+      .replace(/^[-*]{3,}$/gm, "<hr>")
+      // Blockquote
+      .replace(/^&gt; ?(.+)$/gm, "<blockquote>$1</blockquote>")
+      // Tables
+      .replace(/^(\|.+\|)\n\|[-|: ]+\|\n((?:\|.+\|\n?)+)/gm, (_, hdr, body) => {
+        const ths = hdr.split("|").slice(1,-1).map(c => `<th>${c.trim()}</th>`).join("");
+        const trs = body.trim().split("\n").map(r =>
+          `<tr>${r.split("|").slice(1,-1).map(c => `<td>${c.trim()}</td>`).join("")}</tr>`
+        ).join("");
+        return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+      })
+      // Lists
+      .replace(/^[ \t]*[-*+] (.+)$/gm, "<li>$1</li>")
+      .replace(/^[ \t]*\d+\. (.+)$/gm, "<li>$1</li>")
+      .replace(/(<li>[\s\S]+?<\/li>)/g, "<ul>$1</ul>")
+      // Paragraphs
+      .replace(/^(?!<[a-zA-Z\/]|\s*$)(.+)$/gm, "<p>$1</p>");
+  }
   return `<!DOCTYPE html><html><head><title>Markdown Preview</title><style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px;max-width:800px;margin:0 auto;line-height:1.7;color:#24292e;}
-    h1,h2,h3,h4,h5,h6{margin:20px 0 10px;}
-    h2{border-bottom:1px solid #eee;padding-bottom:6px;}
-    pre{background:#f6f8fa;padding:16px;border-radius:6px;overflow-x:auto;}
-    code{background:#f6f8fa;padding:2px 5px;border-radius:3px;font-size:.9em;font-family:monospace;}
-    blockquote{border-left:4px solid #dfe2e5;margin:0;padding-left:16px;color:#6a737d;}
-    a{color:#0366d6;}ul{padding-left:24px;}
-    table{border-collapse:collapse;width:100%;}th,td{border:1px solid #dfe2e5;padding:8px 12px;}th{background:#f6f8fa;}
-  </style></head><body>${html}</body></html>`
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#24292e;background:#fff;padding:32px;max-width:860px;margin:0 auto;}
+    h1,h2{border-bottom:1px solid #eaecef;padding-bottom:.3em;margin-top:24px;margin-bottom:16px;font-weight:600;}
+    h3,h4,h5,h6{margin-top:24px;margin-bottom:16px;font-weight:600;}
+    h1{font-size:2em;}h2{font-size:1.5em;}h3{font-size:1.25em;}
+    a{color:#0366d6;text-decoration:none;}a:hover{text-decoration:underline;}
+    img{max-width:100%;box-sizing:border-box;}
+    code{background:#f6f8fa;border-radius:3px;font-size:85%;padding:.2em .4em;font-family:"SFMono-Regular",Consolas,monospace;}
+    pre{background:#f6f8fa;border-radius:6px;font-size:85%;line-height:1.45;overflow:auto;padding:16px;margin:16px 0;}
+    pre code{background:transparent;padding:0;font-size:100%;}
+    blockquote{border-left:.25em solid #dfe2e5;color:#6a737d;margin:0 0 16px;padding:0 1em;}
+    table{border-collapse:collapse;width:100%;margin:16px 0;}
+    th,td{border:1px solid #dfe2e5;padding:6px 13px;}
+    th{background:#f6f8fa;font-weight:600;}
+    tr:nth-child(even){background:#f6f8fa;}
+    ul,ol{padding-left:2em;margin:0 0 16px;}
+    li{margin:.25em 0;}
+    hr{border:0;border-top:1px solid #eaecef;margin:24px 0;}
+    del{color:#6a737d;}strong{font-weight:600;}
+    p{margin:0 0 16px;}
+  </style></head><body>${renderMd(code)}</body></html>`;
 }
 
 function getCssView(languageId, code, filePath) {

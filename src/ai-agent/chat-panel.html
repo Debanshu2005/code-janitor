@@ -556,14 +556,6 @@
         modelSelect.appendChild(opt);
       }
 
-      function showNoModels(msg) {
-        modelSelect.innerHTML = "";
-        var opt = document.createElement("option");
-        opt.value = ""; opt.textContent = msg || "No models available";
-        opt.disabled = true; opt.selected = true;
-        modelSelect.appendChild(opt);
-      }
-
       // Track whether keys are saved
       var currentHasGroqKey = false;
       var currentHasOpenrouterKey = false;
@@ -961,18 +953,20 @@
                          (msg.provider === "anthropic" && currentHasAnthropicKey);
             if (hasKey) {
               showKeySaved();
-              if (modelsByProvider[msg.provider]) {
-                populateModels(modelsByProvider[msg.provider]);
-                // Re-select the previously saved model if it exists in the list
+              var modelsToShow = msg.models || modelsByProvider[msg.provider];
+              if (modelsToShow) {
+                populateModels(modelsToShow);
                 if (msg.model) {
                   for (var i = 0; i < modelSelect.options.length; i++) {
                     if (modelSelect.options[i].value === msg.model) {
-                      modelSelect.selectedIndex = i;
-                      break;
+                      modelSelect.selectedIndex = i; break;
                     }
                   }
                 }
               }
+            } else if (msg.provider === "ollama") {
+              // Ollama needs no key — show loading, backend will send setModelOptions
+              showNoModels("Loading models...");
             } else {
               showKeyInput();
               if (needsKey) showNoModels("Save an API key to see models");
