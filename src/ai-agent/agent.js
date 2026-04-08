@@ -1161,7 +1161,10 @@ Assistant:`;
 
     const cmdRegex = /(?:```\w*\s*)?CMD:\s*(.+?)(?:\s*```)?$/gm;
     while ((match = cmdRegex.exec(response)) !== null) {
-      actions.push({ type: "cmd", command: match[1].trim() });
+      const cmd = match[1].trim();
+      // Skip if it looks like the model confused directives
+      if (cmd.startsWith("/") || cmd.startsWith("FILE:") || cmd.startsWith("MKDIR:")) continue;
+      actions.push({ type: "cmd", command: cmd });
     }
 
     const mkdirRegex = /MKDIR:\s*(.+)/g;
@@ -1174,24 +1177,23 @@ Assistant:`;
 
   _resolveWorkspacePath(inputPath) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders) {
-      throw new Error("No workspace");
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
+
+    if (!workspaceRoot) {
+      // No workspace open — treat absolute paths as-is, relative paths throw
+      if (path.isAbsolute(inputPath)) {
+        return { workspaceRoot: null, fullPath: inputPath, outsideWorkspace: true };
+      }
+      throw new Error("No workspace open. Please open a folder first or provide an absolute path.");
     }
 
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const resolved = path.resolve(
       path.isAbsolute(inputPath) ? inputPath : path.join(workspaceRoot, inputPath)
     );
-
     const relative = path.relative(workspaceRoot, resolved);
-    const escapesWorkspace =
-      relative.startsWith("..") || path.isAbsolute(relative);
+    const outsideWorkspace = relative.startsWith("..") || path.isAbsolute(relative);
 
-    if (escapesWorkspace) {
-      throw new Error("Path must stay inside the workspace");
-    }
-
-    return { workspaceRoot, fullPath: resolved };
+    return { workspaceRoot, fullPath: resolved, outsideWorkspace };
   }
 
   validateCommand(command) {
@@ -1331,20 +1333,10 @@ Assistant:`;
 
   async applyChanges(filePath, newContent, allowOutsideWorkspace = false) {
     try {
-      let fullPath, workspaceRoot, relativePath;
+      const { workspaceRoot, fullPath, outsideWorkspace } = this._resolveWorkspacePath(filePath);
 
-      try {
-        const resolved = this._resolveWorkspacePath(filePath);
-        fullPath = resolved.fullPath;
-        workspaceRoot = resolved.workspaceRoot;
-        relativePath = path.relative(workspaceRoot, fullPath);
-      } catch (e) {
-        if (!allowOutsideWorkspace) {
-          return { success: false, error: "outside_workspace", path: filePath };
-        }
-        fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
-        relativePath = filePath;
-        workspaceRoot = null;
+      if (outsideWorkspace && !allowOutsideWorkspace) {
+        return { success: false, error: "outside_workspace", path: fullPath };
       }
 
       let oldContent = "";
@@ -1358,7 +1350,11 @@ Assistant:`;
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
       await fs.writeFile(fullPath, newContent, "utf8");
 
-      if (workspaceRoot) {
+      const relativePath = workspaceRoot
+        ? path.relative(workspaceRoot, fullPath)
+        : fullPath;
+
+      if (workspaceRoot && !outsideWorkspace) {
         this.codebaseContext.set(relativePath, {
           content: newContent,
           fullPath,
@@ -1380,9 +1376,12 @@ Assistant:`;
     }
   }
 
-  async createFolder(folderPath) {
+  async createFolder(folderPath, allowOutsideWorkspace = false) {
     try {
-      const { fullPath } = this._resolveWorkspacePath(folderPath);
+      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(folderPath);
+      if (outsideWorkspace && !allowOutsideWorkspace) {
+        return { success: false, error: "outside_workspace", path: fullPath };
+      }
       await fs.mkdir(fullPath, { recursive: true });
       return { success: true, path: fullPath };
     } catch (error) {

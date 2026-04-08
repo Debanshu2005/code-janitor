@@ -169,19 +169,45 @@ class ChatPanel {
         }
 
         if (response.actions && response.actions.length > 0) {
+          // Collect outside-workspace file actions and ask permission once
+          const outsideFiles = [];
+          const insideActions = [];
           for (const action of response.actions) {
             if (action.type === "file") {
-              let result = await this.agent.applyChanges(action.path, action.content);
-              if (result.error === "outside_workspace") {
-                this.panel.webview.postMessage({ type: "confirmOutsideEdit", path: action.path });
-                const allow = await new Promise((resolve) => { this._confirmResolve = resolve; });
-                if (allow) {
-                  result = await this.agent.applyChanges(action.path, action.content, true);
-                } else {
-                  this.panel.webview.postMessage({ type: "status", text: `\u274c Denied edit outside workspace: ${action.path}` });
-                  continue;
-                }
+              const probe = await this.agent.applyChanges(action.path, action.content);
+              if (probe.error === "outside_workspace") {
+                outsideFiles.push({ action, path: probe.path });
+              } else {
+                insideActions.push({ action, result: probe });
               }
+            } else {
+              insideActions.push({ action, result: null });
+            }
+          }
+
+          // Ask permission for outside-workspace files
+          let allowOutside = false;
+          if (outsideFiles.length > 0) {
+            const paths = outsideFiles.map(f => f.path).join("\n");
+            this.panel.webview.postMessage({ type: "confirmOutsideEdit", path: paths });
+            allowOutside = await new Promise((resolve) => { this._confirmResolve = resolve; });
+          }
+
+          // Process all actions
+          const allActions = [
+            ...insideActions,
+            ...outsideFiles.map(f => ({ action: f.action, result: null, outside: true }))
+          ];
+
+          for (const { action, result: preResult, outside } of allActions) {
+            if (action.type === "file") {
+              if (outside && !allowOutside) {
+                this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              const result = outside
+                ? await this.agent.applyChanges(action.path, action.content, true)
+                : preResult;
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success

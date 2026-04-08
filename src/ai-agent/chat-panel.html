@@ -961,14 +961,26 @@
                          (msg.provider === "anthropic" && currentHasAnthropicKey);
             if (hasKey) {
               showKeySaved();
-              if (modelsByProvider[msg.provider]) populateModels(modelsByProvider[msg.provider]);
+              if (modelsByProvider[msg.provider]) {
+                populateModels(modelsByProvider[msg.provider]);
+                // Re-select the previously saved model if it exists in the list
+                if (msg.model) {
+                  for (var i = 0; i < modelSelect.options.length; i++) {
+                    if (modelSelect.options[i].value === msg.model) {
+                      modelSelect.selectedIndex = i;
+                      break;
+                    }
+                  }
+                }
+              }
             } else {
               showKeyInput();
               if (needsKey) showNoModels("Save an API key to see models");
             }
           }
         } else if (msg.type === "setModelOptions") {
-          // Populate model list from Ollama
+          // Only update if this matches the currently selected provider
+          if (msg.provider && msg.provider !== providerSelect.value) return;
           var sel = modelSelect;
           var current = sel.value;
           sel.innerHTML = "";
@@ -979,12 +991,6 @@
             if (m === current) opt.selected = true;
             sel.appendChild(opt);
           });
-          if (msg.provider && providerSelect.value !== msg.provider) {
-            providerSelect.value = msg.provider;
-            var needsKey =
-              msg.provider === "groq" || msg.provider === "openrouter";
-            apiKeyRow.classList.toggle("visible", needsKey);
-          }
         }
       });
 
