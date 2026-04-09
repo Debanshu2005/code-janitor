@@ -87,6 +87,170 @@ class ChatPanel {
     return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
   }
 
+  _getApiKeyConfigKey(provider) {
+    if (provider === "groq") return "groqApiKey";
+    if (provider === "openrouter") return "openrouterApiKey";
+    if (provider === "anthropic") return "anthropicApiKey";
+    return null;
+  }
+
+  _getApiSecretKey(provider) {
+    return `codeJanitor.ai.${provider}.apiKey`;
+  }
+
+  async _persistApiKey(provider, apiKey) {
+    const configKey = this._getApiKeyConfigKey(provider);
+    if (!configKey || !apiKey) return;
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    await this.context.secrets.store(this._getApiSecretKey(provider), apiKey);
+    await cfg.update(configKey, apiKey, vscode.ConfigurationTarget.Global);
+  }
+
+  async _restoreApiKeys() {
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const providers = ["groq", "openrouter", "anthropic"];
+    const presence = {
+      groq: false,
+      openrouter: false,
+      anthropic: false
+    };
+
+    for (const provider of providers) {
+      const configKey = this._getApiKeyConfigKey(provider);
+      const configValue = cfg.get(configKey, "");
+      const secretValue = await this.context.secrets.get(this._getApiSecretKey(provider));
+      const effectiveValue = configValue || secretValue || "";
+
+      if (!configValue && secretValue) {
+        await cfg.update(configKey, secretValue, vscode.ConfigurationTarget.Global);
+      }
+
+      presence[provider] = !!effectiveValue;
+    }
+
+    return presence;
+  }
+
+  _getLanguageIdForPath(filePath) {
+    const ext = path.extname(filePath || "").toLowerCase();
+    const mapping = {
+      ".js": "javascript",
+      ".jsx": "javascriptreact",
+      ".ts": "typescript",
+      ".tsx": "typescriptreact",
+      ".json": "json",
+      ".html": "html",
+      ".css": "css",
+      ".md": "markdown",
+      ".py": "python",
+      ".java": "java",
+      ".c": "c",
+      ".h": "c",
+      ".cpp": "cpp",
+      ".hpp": "cpp",
+      ".sh": "shellscript",
+      ".yml": "yaml",
+      ".yaml": "yaml"
+    };
+    return mapping[ext] || "plaintext";
+  }
+
+  async _openDraftFile(filePath, content) {
+    const suggested = (filePath || "untitled.txt").replace(/\\/g, "/").replace(/^\/+/, "");
+    const uri = vscode.Uri.parse(`untitled:${encodeURI(suggested)}`);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    await editor.edit((editBuilder) => {
+      const fullRange = new vscode.Range(
+        document.positionAt(0),
+        document.positionAt(document.getText().length)
+      );
+      editBuilder.replace(fullRange, content);
+    });
+    await vscode.languages.setTextDocumentLanguage(
+      editor.document,
+      this._getLanguageIdForPath(filePath)
+    );
+    return { success: true, path: suggested };
+  }
+
+  async _revealWorkspaceFile(filePath) {
+    if (!filePath) return;
+    try {
+      const document = await vscode.workspace.openTextDocument(filePath);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (_) {
+      // Ignore reveal failures so edits still succeed.
+    }
+  }
+
+  async _applyToEditor(editor, content) {
+    if (!editor || editor.document.uri.scheme !== "file") {
+      return { success: false, error: "No editable file is currently open." };
+    }
+
+    const document = editor.document;
+    const fullRange = new vscode.Range(
+      document.positionAt(0),
+      document.positionAt(document.getText().length)
+    );
+
+    const applied = await editor.edit((editBuilder) => {
+      editBuilder.replace(fullRange, content);
+    });
+
+    if (!applied) {
+      return { success: false, error: "Failed to update the open file." };
+    }
+
+    return {
+      success: true,
+      path: document.fileName,
+      relativePath: path.basename(document.fileName)
+    };
+  }
+
+  _summarizeGitStatus(output) {
+    const lines = (output || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) {
+      return "Git status: working tree clean.";
+    }
+
+    const preview = lines
+      .slice(0, 5)
+      .map((line) => line.replace(/^\S+\s+/, ""))
+      .join(", ");
+    const suffix = lines.length > 5 ? ` +${lines.length - 5} more` : "";
+    return `Git status: ${lines.length} changed path(s) detected. ${preview}${suffix}`;
+  }
+
+  _summarizePlannedActions(actions, insideActions, outsideFiles) {
+    const fileSummaries = [];
+    for (const { action, result } of insideActions) {
+      if (action.type !== "file" || !result?.success) continue;
+      fileSummaries.push(`${result.created ? "add" : "edit"} ${action.path}`);
+    }
+    for (const { action } of outsideFiles) {
+      if (action.type === "file") fileSummaries.push(`edit ${action.path}`);
+      if (action.type === "mkdir") fileSummaries.push(`mkdir ${action.path}`);
+    }
+
+    const cmdCount = actions.filter((action) => action.type === "cmd").length;
+    const parts = [];
+    if (fileSummaries.length > 0) {
+      const preview = fileSummaries.slice(0, 5).join(", ");
+      parts.push(`Files: ${preview}${fileSummaries.length > 5 ? ` +${fileSummaries.length - 5} more` : ""}`);
+    }
+    if (cmdCount > 0) {
+      parts.push(`Commands: ${cmdCount}`);
+    }
+    return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
+  }
+
   async _fetchAndSendModels() {
     // Only needed for Ollama — other providers populate models client-side
     try {
@@ -118,6 +282,8 @@ class ChatPanel {
 
       if (message.type === "chat") {
         const trimmedText = (message.text || "").trim();
+        const intent = this.agent._detectIntent(trimmedText);
+        const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
 
         if (/^\/fast$/i.test(trimmedText)) {
           this.chatMode = "fast";
@@ -141,6 +307,36 @@ class ChatPanel {
         }
 
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
+        if (workspaceFolder && (this.chatMode === "heavy" || ["edit", "debug", "refactor", "scan"].includes(intent))) {
+          const forcePrep = this.chatMode === "heavy" || intent === "scan";
+          this.panel.webview.postMessage({ type: "status", text: "Studying workspace before responding..." });
+          const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
+          });
+          if (prep.activeFile) {
+            this.panel.webview.postMessage({
+              type: "status",
+              text: `Active file in focus: ${prep.activeFile}`
+            });
+          }
+          if (prep.relevantFiles.length > 0) {
+            this.panel.webview.postMessage({
+              type: "status",
+              text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
+            });
+          }
+          if (["edit", "debug", "refactor"].includes(intent)) {
+            const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
+            if (gitStatus.success) {
+              this.panel.webview.postMessage({
+                type: "status",
+                text: this._summarizeGitStatus(gitStatus.output)
+              });
+            }
+          }
+        }
         this.panel.webview.postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 
@@ -180,6 +376,52 @@ class ChatPanel {
         }
 
         if (response.actions && response.actions.length > 0) {
+          if (!workspaceFolder) {
+            this.panel.webview.postMessage({
+              type: "status",
+              text: "No workspace is open. Generated files will open as drafts and will not be auto-saved."
+            });
+
+            for (const action of response.actions) {
+              if (action.type === "file") {
+                const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+                const shouldApplyToOpenFile =
+                  wantsActiveFileEdit &&
+                  activeEditor &&
+                  activeEditor.document.uri.scheme === "file";
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: shouldApplyToOpenFile
+                    ? `Editing open file: ${path.basename(activeEditor.document.fileName)}`
+                    : `Opening draft: ${action.path}`
+                });
+                const result = shouldApplyToOpenFile
+                  ? await this._applyToEditor(activeEditor, action.content)
+                  : await this._openDraftFile(action.path, action.content);
+                this.panel.webview.postMessage({
+                  type: result.success ? "applied" : "error",
+                  filePath: result.success ? result.path : undefined,
+                  text: result.success
+                    ? shouldApplyToOpenFile
+                      ? `\u2705 Updated open file ${result.relativePath || result.path}`
+                      : `\u2705 Opened draft ${result.path}`
+                    : result.error
+                });
+              } else if (action.type === "mkdir") {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Skipped folder creation for ${action.path}. Save the draft files where you want them.`
+                });
+              } else if (action.type === "cmd") {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Skipped command without workspace: ${action.command}`
+                });
+              }
+            }
+            return;
+          }
+
           // Collect outside-workspace file actions and ask permission once
           const outsideFiles = [];
           const insideActions = [];
@@ -214,6 +456,15 @@ class ChatPanel {
             if (allowOutside) this._outsideWorkspaceAllowed = true;
           }
 
+          const planSummary = this._summarizePlannedActions(
+            response.actions,
+            insideActions,
+            outsideFiles
+          );
+          if (planSummary) {
+            this.panel.webview.postMessage({ type: "status", text: planSummary });
+          }
+
           // Process all actions
           const allActions = [
             ...insideActions,
@@ -229,12 +480,20 @@ class ChatPanel {
               const result = outside
                 ? await this.agent.applyChanges(action.path, action.content, true)
                 : preResult;
+              const operation = result.created ? "Adding file" : "Editing file";
+              this.panel.webview.postMessage({ type: "status", text: `${operation}: ${action.path}` });
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
+                filePath: result.success ? result.path : undefined,
                 text: result.success
-                  ? `\u2705 Created ${result.relativePath || action.path}`
+                  ? result.created
+                    ? `\u2705 Added ${result.relativePath || action.path}\n${result.changeSummary || ""}`
+                    : `\u2705 Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              if (result.success && !outside) {
+                await this._revealWorkspaceFile(result.path);
+              }
               if (result.success && result.syntaxCheckCmd) {
                 const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
                 const ok = checkResult.success && !(checkResult.output || "").trim();
@@ -294,14 +553,20 @@ class ChatPanel {
         const result = await this.agent.applyChanges(message.filePath, message.content);
         this.panel.webview.postMessage({
           type: result.success ? "applied" : "error",
+          filePath: result.success ? result.path : undefined,
           text: result.success
             ? `Updated ${result.relativePath || message.filePath}\n${result.changeSummary || ""}`
             : result.error
         });
+        if (result.success) {
+          await this._revealWorkspaceFile(result.path);
+        }
       } else if (message.type === "clear") {
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
         this.panel.webview.postMessage({ type: "cleared" });
+      } else if (message.type === "openFile") {
+        await this._revealWorkspaceFile(message.path);
       } else if (message.type === "scanOverview") {
         this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
         this.panel.webview.postMessage({ type: "thinking" });
@@ -317,10 +582,11 @@ class ChatPanel {
       } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
+          const restoredKeys = await this._restoreApiKeys();
           const savedConfig = this.agent.getConfig();
-          const hasGroqKey = !!savedConfig.groqApiKey;
-          const hasOpenrouterKey = !!savedConfig.openrouterApiKey;
-          const hasAnthropicKey = !!savedConfig.anthropicApiKey;
+          const hasGroqKey = restoredKeys.groq;
+          const hasOpenrouterKey = restoredKeys.openrouter;
+          const hasAnthropicKey = restoredKeys.anthropic;
           const modelsByProvider = {
             groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
             openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
@@ -350,13 +616,13 @@ class ChatPanel {
         const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
         await cfg.update("provider", message.provider, vscode.ConfigurationTarget.Global);
         if (message.apiKey && message.provider === "groq") {
-          await cfg.update("groqApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+          await this._persistApiKey("groq", message.apiKey);
         }
         if (message.apiKey && message.provider === "openrouter") {
-          await cfg.update("openrouterApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+          await this._persistApiKey("openrouter", message.apiKey);
         }
         if (message.apiKey && message.provider === "anthropic") {
-          await cfg.update("anthropicApiKey", message.apiKey, vscode.ConfigurationTarget.Global);
+          await this._persistApiKey("anthropic", message.apiKey);
         }
         // Wait for config to persist before fetching models
         await new Promise(r => setTimeout(r, 300));

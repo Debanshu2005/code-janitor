@@ -221,6 +221,34 @@ class AIAgent {
     return this.codebaseContext.size;
   }
 
+  async prepareWorkspaceContext(userMessage, workspaceFolder, options = {}) {
+    if (!workspaceFolder) {
+      return {
+        available: false,
+        indexedFiles: 0,
+        relevantFiles: [],
+        activeFile: null
+      };
+    }
+
+    const indexedFiles = await this.ensureCodebaseScanned(
+      workspaceFolder,
+      !!options.force
+    );
+    const relevantFiles = this._findRelevantFiles(
+      userMessage || "",
+      workspaceFolder
+    ).map((file) => file.path.replace(/\\/g, "/"));
+    const editorState = this._getEditorState(workspaceFolder);
+
+    return {
+      available: true,
+      indexedFiles,
+      relevantFiles,
+      activeFile: editorState.activeTabPath || null
+    };
+  }
+
   async getCodebaseOverview(workspaceFolder) {
     if (!workspaceFolder) {
       return "No workspace is open, so I can't scan the codebase yet.";
@@ -366,6 +394,22 @@ class AIAgent {
     this.conversationHistory.push({ role: "user", content: userMessage });
     const isTabQuestion = this._isTabQuestion(userMessage);
 
+    // Resolve effective workspace — use active file's directory if no workspace or file is outside
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
+    let effectiveWorkspace = workspaceFolder;
+    if (activeEditor && activeEditor.document.uri.scheme === "file") {
+      const activeDir = path.dirname(activeEditor.document.fileName);
+      if (!workspaceFolder) {
+        effectiveWorkspace = activeDir;
+      } else {
+        const rel = path.relative(workspaceFolder, activeEditor.document.fileName);
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          // Active file is outside workspace — use its directory as context root
+          effectiveWorkspace = activeDir;
+        }
+      }
+    }
+
     // Only intercept factual questions the model cannot answer
     const lowerMsg = userMessage.trim().toLowerCase();
     if (/\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(lowerMsg)) {
@@ -382,49 +426,62 @@ class AIAgent {
     }
 
     // Inject active file path so the model never needs to ask for it
-    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
     let resolvedMessage = userMessage;
     if (
       activeEditor &&
-      workspaceFolder &&
+      effectiveWorkspace &&
       /\b(active|current)\s*(file|tab)?\b/i.test(userMessage) &&
       !/[/\\]/.test(userMessage)
     ) {
-      const rel = path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/");
+      const rel = path.relative(effectiveWorkspace, activeEditor.document.fileName).replace(/\\/g, "/");
       resolvedMessage = userMessage.replace(/\b(active|current)\s*(file|tab)?\b/gi, `"${rel}"`);
     }
 
     let prompt;
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...");
-      const activeFileContext = this._getActiveFileContext(workspaceFolder);
+      const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
+      const editorState = this._getEditorState(effectiveWorkspace);
       let fastContext = "";
       if (
-        workspaceFolder &&
+        effectiveWorkspace &&
         this._shouldUseRepoContextInFastMode(userMessage)
       ) {
         reportStatus?.("Scanning relevant files for fast mode...");
-        await this.ensureCodebaseScanned(workspaceFolder);
-        const relevantFiles = this._findRelevantFiles(userMessage, workspaceFolder);
+        await this.ensureCodebaseScanned(effectiveWorkspace);
+        const relevantFiles = this._findRelevantFiles(userMessage, effectiveWorkspace);
         fastContext = this._buildRelevantFileContext(relevantFiles);
       }
       const history = this.conversationHistory.slice(-4, -1)
         .map(e => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n");
       const intent = this._detectIntent(userMessage);
-      const systemInstruction = this._buildSystemInstruction(intent, workspaceFolder);
+      const editableTargets = this._resolveEditableTargets(
+        userMessage,
+        effectiveWorkspace,
+        editorState
+      );
+      this.currentEditableTargets =
+        intent !== "create" && editableTargets.paths.length
+          ? new Set(editableTargets.paths)
+          : null;
+      const systemInstruction = this._buildSystemInstruction(intent, effectiveWorkspace);
       const isCreateIntent = intent === "create";
+      const isEditIntent = intent === "edit" || intent === "debug" || intent === "refactor";
       const contextToUse = isCreateIntent ? "" : fastContext;
       const activeCtx = isCreateIntent ? "" : activeFileContext;
-      prompt = `${systemInstruction}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      const editHint = isEditIntent && activeFileContext
+        ? "\nOutput the complete updated file using FILE: path then a code block."
+        : "";
+      prompt = `${systemInstruction}${editHint}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`;
     } else {
-      const editorState = this._getEditorState(workspaceFolder);
+      const editorState = this._getEditorState(effectiveWorkspace);
       const editableTargets = this._resolveEditableTargets(
         userMessage,
-        workspaceFolder,
+        effectiveWorkspace,
         editorState
       );
       const isScopedActiveFileEdit =
@@ -435,20 +492,20 @@ ${resolvedMessage}`;
       const intent = this._detectIntent(userMessage);
 
       reportStatus?.(isScopedActiveFileEdit ? "Scanning active files..." : "Scanning workspace...");
-      if (workspaceFolder) await this.ensureCodebaseScanned(workspaceFolder);
+      if (effectiveWorkspace) await this.ensureCodebaseScanned(effectiveWorkspace);
 
       // For full codebase scan requests, inject the overview + snippets directly
-      const isFullScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project)\b/i.test(userMessage);
+      const isFullScan = /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project|directory)\b/i.test(userMessage);
       const relevantFiles = isFullScan
         ? Array.from(this.codebaseContext.entries()).slice(0, MAX_RELEVANT_FILES).map(([p, d]) => ({ path: p.replace(/\\/g, "/"), score: 1, content: d.content.slice(0, MAX_FILE_SNIPPET) }))
-        : this._findRelevantFiles(userMessage, workspaceFolder);
-      const activeFileContext = this._getActiveFileContext(workspaceFolder);
+        : this._findRelevantFiles(userMessage, effectiveWorkspace);
+      const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
       const editorStateContext = this._buildEditorStateContext(editorState);
       const openTabSnippetContext = isScopedActiveFileEdit
-        ? this._getTargetSnippetContext(editableTargets.paths, workspaceFolder)
+        ? this._getTargetSnippetContext(editableTargets.paths, effectiveWorkspace)
         : this._getOpenTabSnippetContext(
             editorState.allOpenTabs,
-            workspaceFolder
+            effectiveWorkspace
           );
       this.currentEditableTargets = (intent !== "create" && intent !== "edit" && editableTargets.paths.length) ? new Set(editableTargets.paths) : null;
       prompt = this._buildPrompt(
@@ -512,6 +569,69 @@ ${resolvedMessage}`;
         }
       }
 
+      const finalText = repetitionDetected
+        ? `${fullResponse}\n\nStopped because the response started repeating.`
+        : fullResponse || this._getEmptyResponseFallback(mode);
+      let parsedResponse = this._parseResponse(finalText);
+      const finalIntent = this._detectIntent(userMessage);
+
+      if (
+        this._shouldForceStructuredEdit(finalIntent, userMessage) &&
+        parsedResponse.actions.length === 0 &&
+        !abortSignal?.aborted
+      ) {
+        reportStatus?.("Model replied with prose. Retrying with strict edit format...");
+        const retryPrompt = `${prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
+        const retryOpts = this._buildRequestOptions(config, retryPrompt, mode, "edit");
+        const retryResponse = await fetch(retryOpts.url, {
+          method: "POST",
+          headers: retryOpts.headers,
+          signal: abortSignal || AbortSignal.timeout(config.timeout),
+          body: retryOpts.body
+        });
+
+        if (!retryResponse.ok) {
+          throw new Error(`AI retry failed with status ${retryResponse.status}`);
+        }
+
+        let retryText = "";
+        const retryReader = retryResponse.body.getReader();
+        const retryDecoder = new TextDecoder();
+        let retryDone = false;
+
+        while (!retryDone) {
+          if (abortSignal?.aborted) {
+            break;
+          }
+
+          const { done, value } = await retryReader.read();
+          if (done) {
+            retryDone = true;
+            continue;
+          }
+
+          const chunk = retryDecoder.decode(value);
+          const lines = chunk.split("\n").filter((line) => line.trim());
+
+          for (const line of lines) {
+            try {
+              const token = retryOpts.parseChunk(line);
+              if (token === null) continue;
+              retryText += token;
+            } catch (_) {
+              // ignore partial chunks
+            }
+          }
+        }
+
+        parsedResponse = this._parseResponse(retryText || finalText);
+        this.conversationHistory.push({
+          role: "assistant",
+          content: retryText || finalText
+        });
+        return parsedResponse;
+      }
+
       this.conversationHistory.push({
         role: "assistant",
         content: repetitionDetected
@@ -519,11 +639,7 @@ ${resolvedMessage}`;
           : fullResponse || this._getEmptyResponseFallback(mode)
       });
 
-      return this._parseResponse(
-        repetitionDetected
-          ? `${fullResponse}\n\nStopped because the response started repeating.`
-          : fullResponse || this._getEmptyResponseFallback(mode)
-      );
+      return parsedResponse;
     } catch (error) {
       if (error.name === "AbortError") {
         return { text: "Generation stopped", actions: [] };
@@ -537,17 +653,22 @@ ${resolvedMessage}`;
 
   _getActiveFileContext(workspaceFolder) {
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
-    if (!activeEditor || !workspaceFolder) return "";
+    if (!activeEditor) return "";
 
     const doc = activeEditor.document;
-    const filePath = doc.fileName;
 
-    // Skip untitled, output panels, and anything that isn't a real file on disk
+    // Skip untitled and non-file documents
     if (doc.isUntitled) return "";
     if (doc.uri.scheme !== "file") return "";
 
-    const relative = path.relative(workspaceFolder, filePath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) return "";
+    // If workspace exists, skip files outside it
+    if (workspaceFolder) {
+      const relative = path.relative(workspaceFolder, doc.fileName);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        // Still include it but with full path label
+        return this._buildDocumentContext("Active file", doc, null, 4_000);
+      }
+    }
 
     return this._buildDocumentContext("Active file", doc, workspaceFolder, 4_000);
   }
@@ -616,25 +737,26 @@ ${resolvedMessage}`;
         for (const tab of group.tabs) {
           const input = tab.input;
           const filePath = input?.uri?.fsPath || input?.modified?.fsPath || null;
-          const relativePath = this._toWorkspaceRelativePath(
-            filePath,
-            workspaceFolder
-          );
-
-          if (relativePath) {
-            allOpenTabs.add(relativePath);
-          }
+          if (!filePath) continue;
+          // Skip VS Code internal paths
+          if (filePath.includes("extension-output") ||
+              filePath.includes("AppData\\Local\\Programs") ||
+              filePath.includes("AppData/Local/Programs") ||
+              !require("fs").existsSync(filePath)) continue;
+          const relativePath = this._toWorkspaceRelativePath(filePath, workspaceFolder);
+          if (relativePath) allOpenTabs.add(relativePath);
         }
       }
     }
 
     if (Array.isArray(vscode.window.visibleTextEditors)) {
       for (const editor of vscode.window.visibleTextEditors) {
-        const relativePath = this._toWorkspaceRelativePath(
-          editor?.document?.fileName,
-          workspaceFolder
-        );
-
+        if (editor.document.uri.scheme !== "file") continue;
+        const filePath = editor.document.fileName;
+        if (filePath.includes("extension-output") ||
+            filePath.includes("AppData\\Local\\Programs") ||
+            filePath.includes("AppData/Local/Programs")) continue;
+        const relativePath = this._toWorkspaceRelativePath(filePath, workspaceFolder);
         if (relativePath) {
           visibleTabs.add(relativePath);
           allOpenTabs.add(relativePath);
@@ -643,12 +765,7 @@ ${resolvedMessage}`;
     }
 
     if (!activeTabPath && allOpenTabs.size === 0 && visibleTabs.size === 0) {
-      return {
-        available: false,
-        activeTabPath: null,
-        visibleTabs: [],
-        allOpenTabs: []
-      };
+      return { available: false, activeTabPath: null, visibleTabs: [], allOpenTabs: [] };
     }
 
     return {
@@ -795,24 +912,47 @@ ${resolvedMessage}`;
   }
 
   _isEditRequest(message) {
-    return /\b(edit|update|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format)\b/i.test(
+    return /\b(edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/i.test(
       message || ""
-    );
+    ) || /\b(do|make)\s+(this|these|it)\s+for\s+me\b/i.test(message || "") ||
+      /\b(can you|could you|please)\s+(fix|change|update|edit|do|apply)\s+(this|these|it)\b/i.test(message || "") ||
+      /\b(please\s+)?do\s+it\b/i.test(message || "") ||
+      /\binstall\s+it\b/i.test(message || "") ||
+      /\b(set|wire)\s+it\s+up\b/i.test(message || "") ||
+      /\b(host|deploy)\s+it\b/i.test(message || "");
   }
 
   _detectIntent(message) {
     const m = message.toLowerCase();
+    const hasExplicitEditVerb = /\b(add|edit|update|upadet|modify|change|rename|patch|insert|remove|delete|make|set|turn|enable|disable|implement|include|put|give|write|fix)\b/.test(m);
+    const hasApplyChangePhrase =
+      /\b(apply|implement|make|do)\s+(this|these|it)\b/.test(m) ||
+      /\b(do|make)\s+(this|these|it)\s+for\s+me\b/.test(m) ||
+      /\b(can you|could you|please)\s+(fix|change|update|edit|do|apply)\s+(this|these|it)\b/.test(m) ||
+      /\b(use|follow)\s+(this|these)\b/.test(m) ||
+      /\b(please\s+)?do\s+it\b/.test(m) ||
+      /\binstall\s+it\b/.test(m) ||
+      /\b(set|wire)\s+it\s+up\b/.test(m) ||
+      /\b(host|deploy)\s+it\b/.test(m);
+    const hasImplementationContext =
+      /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
+      this._mentionsEditorFiles(m) ||
+      /\b(code|project|app|site|html|css|js|file|files)\b/.test(m);
     if (/\b(hi|hello|hey|thanks|thank you|thx|good morning|good evening|how are you|what's up|sup)\b/.test(m) &&
         m.split(" ").length < 8) return "greeting";
     if (/\b(make|create|build|develop|generate|scaffold|write me|code me)\b/.test(m) &&
         /\b(app|website|site|portfolio|game|api|server|script|program|html|css|component|page|project|tool|extension|plugin|bot|dashboard|landing)\b/.test(m)) return "create";
     if (/\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(m)) return "explain";
+    if (hasApplyChangePhrase && hasImplementationContext) return "edit";
+    if (hasExplicitEditVerb) return "edit";
     if (/\b(fix|debug|error|issue|bug|broken|not working|failing|wrong|problem|crash)\b/.test(m)) return "debug";
     if (/\b(refactor|improve|optimize|clean up|rewrite|restructure|simplify)\b/.test(m)) return "refactor";
-    if (/\b(add|edit|update|modify|change|rename|patch|insert|remove|delete)\b/.test(m) &&
-        /\b(file|function|class|method|variable|line|code|import|export)\b/.test(m)) return "edit";
     if (/\b(scan|review|analyze|audit|check|inspect|summarize|overview|readme)\b/.test(m) &&
-        /\b(codebase|repo|project|workspace|file|files)\b/.test(m)) return "scan";
+        /\b(codebase|repo|project|workspace|file|files)\b/.test(m)) {
+      // If also asking to update/write a file, treat as edit
+      if (hasExplicitEditVerb || /\b(rewrite|improve)\b/.test(m)) return "edit";
+      return "scan";
+    }
     return "general";
   }
 
@@ -823,7 +963,7 @@ ${resolvedMessage}`;
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
-          : "Save files on the Desktop.";
+          : "No workspace is open. Generate FILE blocks only; files will be opened as drafts for the user to save manually.";
         return `${base} ${loc}
 You must respond ONLY with FILE: blocks. No explanations, no markdown, no shell commands.
 Format:
@@ -847,15 +987,40 @@ Now respond with FILE: blocks only for the user's request:`;
       case "explain": return `${base} Give a clear, direct explanation. Do not output FILE: or CMD: directives unless asked.`;
       case "debug": return `${base} Identify the issue and explain the fix. Use FILE: directives only if the user asks you to apply the fix.`;
       case "refactor": return `${base} Suggest improvements. Use FILE: directives only if the user asks you to apply changes.`;
-      case "edit": return `${base} Apply the requested changes by outputting the complete updated file using this exact format:
-FILE: relative/path/filename.ext
+      case "edit": return `${base} The user wants to edit a file. Use the file context provided below to understand the codebase, then output the complete updated file using this exact format:
+FILE: <exact file path>
 \`\`\`
 (complete updated file content)
 \`\`\`
-Output ONLY the FILE: block with the full updated content. No explanations.`;
+Output ONLY the FILE: block with full content. No explanations, no markdown outside the block.`;
       case "scan": return `${base} Analyze the provided codebase context and give a detailed, accurate response.`;
       default: return `${base} Answer helpfully. Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`;
     }
+  }
+
+  _shouldForceStructuredEdit(intent, userMessage) {
+    if (intent === "create" || intent === "edit") return true;
+    if ((intent === "debug" || intent === "refactor") && this._isEditRequest(userMessage)) {
+      return true;
+    }
+    return false;
+  }
+
+  _buildStructuredRetryPrompt(rawResponse) {
+    return `Your previous reply was not executable because it did not use FILE: blocks.
+Return ONLY executable actions now.
+
+Rules:
+- If the user asked you to change files, respond ONLY with FILE: blocks.
+- Do not give explanations or tutorial steps.
+- Do not describe what to click in VS Code.
+- Use exact file paths.
+- If multiple files are needed, output multiple FILE: blocks.
+
+Previous invalid reply:
+\`\`\`
+${(rawResponse || "").slice(0, 4000)}
+\`\`\``;
   }
 
   _getEmptyResponseFallback(mode) {
@@ -956,21 +1121,23 @@ Output ONLY the FILE: block with the full updated content. No explanations.`;
     const explicitPaths = this._matchPathsFromHints(this._extractPathHints(message));
     const targetPaths = new Set(explicitPaths);
     const isEditRequest = this._isEditRequest(message);
+    const intent = this._detectIntent(message);
+
+    // For scan/create intent, don't auto-add active tab
+    if (intent === "scan" || intent === "create") {
+      return { scope: targetPaths.size > 0 ? "restricted" : "workspace", paths: Array.from(targetPaths).sort() };
+    }
 
     if (/\b(active|current)\s+(tab|file|editor)\b/i.test(message) && editorState.activeTabPath) {
       targetPaths.add(editorState.activeTabPath);
     }
 
     if (/\bvisible\s+tabs?\b/i.test(message)) {
-      for (const tabPath of editorState.visibleTabs) {
-        targetPaths.add(tabPath);
-      }
+      for (const tabPath of editorState.visibleTabs) targetPaths.add(tabPath);
     }
 
     if (/\b(all\s+)?open\s+tabs?\b/i.test(message) || /\bthese\s+tabs?\b/i.test(message)) {
-      for (const tabPath of editorState.allOpenTabs) {
-        targetPaths.add(tabPath);
-      }
+      for (const tabPath of editorState.allOpenTabs) targetPaths.add(tabPath);
     }
 
     if (
@@ -983,10 +1150,7 @@ Output ONLY the FILE: block with the full updated content. No explanations.`;
     }
 
     const paths = Array.from(targetPaths).sort();
-    return {
-      scope: paths.length > 0 ? "restricted" : "workspace",
-      paths
-    };
+    return { scope: paths.length > 0 ? "restricted" : "workspace", paths };
   }
 
   _buildEditableTargetsContext(editableTargets) {
@@ -1250,10 +1414,7 @@ ${userMessage}`;
     const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
 
     if (!workspaceRoot) {
-      // No workspace — resolve relative paths to Desktop
-      const base = path.join(require("os").homedir(), "Desktop");
-      const fullPath = path.isAbsolute(inputPath) ? inputPath : path.join(base, inputPath);
-      return { workspaceRoot: null, fullPath, outsideWorkspace: true };
+      return { workspaceRoot: null, fullPath: null, outsideWorkspace: true, noWorkspace: true };
     }
 
     const resolved = path.resolve(
@@ -1312,6 +1473,7 @@ ${userMessage}`;
       "git diff",
       "git log",
       "git rev-parse",
+      "git push",
       "python -m py_compile",
       "python -m flake8",
       "python -m pylint",
@@ -1409,10 +1571,12 @@ ${userMessage}`;
       }
 
       let oldContent = "";
+      let created = false;
       try {
         oldContent = await fs.readFile(fullPath, "utf8");
       } catch (e) {
         if (e.code !== "ENOENT") throw e;
+        created = true;
       }
 
       const changeSummary = this._summarizeLineChanges(oldContent, newContent);
@@ -1436,6 +1600,7 @@ ${userMessage}`;
         success: true,
         path: fullPath,
         relativePath,
+        created,
         changeSummary: changeSummary.summary,
         changed: changeSummary.changed,
         syntaxCheckCmd: this._getSyntaxCheckCommand(relativePath.replace(/\\/g, "/"))

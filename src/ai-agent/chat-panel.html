@@ -11,11 +11,29 @@
         box-sizing: border-box;
       }
 
+      :root {
+        --bg: #0b0f14;
+        --panel: #0f141b;
+        --panel-2: #121a23;
+        --panel-3: #182230;
+        --border: #223042;
+        --text: #e6edf3;
+        --muted: #8ba0b6;
+        --accent: #58a6ff;
+        --accent-soft: rgba(88, 166, 255, 0.12);
+        --green: #3fb950;
+        --green-soft: rgba(63, 185, 80, 0.12);
+        --red: #f85149;
+        --red-soft: rgba(248, 81, 73, 0.12);
+        --yellow: #d29922;
+      }
+
       body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: #0f1117;
-        color: #e2e8f0;
+        font-family: "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(88, 166, 255, 0.08), transparent 28%),
+          linear-gradient(180deg, #0b0f14 0%, #0d1117 100%);
+        color: var(--text);
         height: 100vh;
         display: flex;
         flex-direction: column;
@@ -25,13 +43,14 @@
       /* ── Header ── */
       #header {
         padding: 10px 14px;
-        background: #161b27;
-        border-bottom: 1px solid #1e2a3a;
+        background: rgba(15, 20, 27, 0.94);
+        border-bottom: 1px solid var(--border);
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
         flex-shrink: 0;
+        backdrop-filter: blur(10px);
       }
       #header-left {
         display: flex;
@@ -41,12 +60,12 @@
       #header-title {
         font-size: 14px;
         font-weight: 600;
-        color: #7dd3fc;
+        color: var(--text);
         letter-spacing: 0.3px;
       }
       #header-sub {
         font-size: 11px;
-        color: #475569;
+        color: var(--muted);
       }
 
       #header-controls {
@@ -58,10 +77,10 @@
 
       select,
       .pill-btn {
-        background: #1e2a3a;
-        color: #cbd5e1;
-        border: 1px solid #2d3f55;
-        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 999px;
         font-size: 11px;
         cursor: pointer;
       }
@@ -70,13 +89,13 @@
       }
       select:focus {
         outline: none;
-        border-color: #3b82f6;
+        border-color: var(--accent);
       }
 
       #api-key-row {
         padding: 6px 14px;
-        background: #0f1117;
-        border-bottom: 1px solid #1a2332;
+        background: rgba(15, 20, 27, 0.82);
+        border-bottom: 1px solid var(--border);
         display: none;
         gap: 6px;
         align-items: center;
@@ -87,19 +106,19 @@
       #api-key-input {
         flex: 1;
         padding: 4px 8px;
-        background: #1e2a3a;
-        border: 1px solid #2d3f55;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
         border-radius: 6px;
-        color: #e2e8f0;
+        color: var(--text);
         font-size: 11px;
       }
       #api-key-input:focus {
         outline: none;
-        border-color: #3b82f6;
+        border-color: var(--accent);
       }
       #api-key-save {
         padding: 4px 10px;
-        background: #1d4ed8;
+        background: var(--accent);
         color: #fff;
         border: none;
         border-radius: 6px;
@@ -113,19 +132,50 @@
         transition: background 0.15s;
       }
       .pill-btn:hover {
-        background: #263548;
+        background: var(--panel-3);
       }
       .pill-btn.active {
-        background: #1d4ed8;
+        background: var(--accent-soft);
         color: #fff;
-        border-color: #3b82f6;
+        border-color: var(--accent);
+      }
+
+      /* ── Progress bar ── */
+      #progress-bar-wrap {
+        display: none;
+        padding: 4px 14px;
+        background: transparent;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      #progress-bar-wrap.visible { display: block; }
+      #progress-label {
+        font-size: 10px;
+        color: var(--muted);
+        margin-bottom: 3px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #progress-track {
+        height: 3px;
+        background: var(--panel-2);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #1f6feb, #58a6ff);
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.2s ease;
       }
 
       /* ── Action bar ── */
       #action-bar {
         padding: 6px 14px;
-        background: #0f1117;
-        border-bottom: 1px solid #1a2332;
+        background: transparent;
+        border-bottom: 1px solid var(--border);
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
@@ -133,29 +183,144 @@
       }
       .action-chip {
         padding: 3px 10px;
-        background: #1e2a3a;
-        border: 1px solid #2d3f55;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
         border-radius: 12px;
         font-size: 11px;
-        color: #94a3b8;
+        color: var(--muted);
         cursor: pointer;
         transition: all 0.15s;
         white-space: nowrap;
       }
       .action-chip:hover {
-        background: #263548;
-        color: #e2e8f0;
-        border-color: #3b82f6;
+        background: var(--panel-3);
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      #activity-panel {
+        margin: 10px 14px 0;
+        background: linear-gradient(180deg, rgba(18, 24, 38, 0.96) 0%, rgba(15, 20, 27, 0.96) 100%);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      #activity-panel.collapsed #activity-list {
+        display: none;
+      }
+      #activity-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: rgba(24, 34, 48, 0.72);
+        border-bottom: 1px solid var(--border);
+      }
+      #activity-panel.collapsed #activity-header {
+        border-bottom: none;
+      }
+      #activity-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #activity-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+        letter-spacing: 0.02em;
+      }
+      #activity-toggle,
+      #activity-clear {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-size: 10px;
+        cursor: pointer;
+      }
+      #activity-toggle:hover,
+      #activity-clear:hover {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      #activity-list {
+        max-height: 160px;
+        overflow-y: auto;
+        padding: 8px 10px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+      #activity-list::-webkit-scrollbar {
+        width: 4px;
+      }
+      #activity-list::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+      }
+      .activity-empty {
+        font-size: 11px;
+        color: var(--muted);
+        padding: 4px 2px;
+      }
+      .activity-item {
+        display: grid;
+        grid-template-columns: 16px 1fr;
+        gap: 8px;
+        align-items: start;
+        font-size: 11px;
+        line-height: 1.45;
+        color: #c6d4e3;
+      }
+      .activity-icon {
+        width: 16px;
+        text-align: center;
+        color: var(--accent);
+      }
+      .activity-body {
+        min-width: 0;
+      }
+      .activity-label {
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .activity-meta {
+        margin-top: 2px;
+        font-size: 10px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .activity-item.success .activity-icon {
+        color: var(--green);
+      }
+      .activity-item.error .activity-icon {
+        color: var(--red);
+      }
+      .activity-item.warn .activity-icon {
+        color: var(--yellow);
+      }
+      .activity-item.command .activity-icon {
+        color: var(--green);
+      }
+      .activity-item.edit .activity-icon {
+        color: var(--accent);
+      }
+      .activity-item.scan .activity-icon {
+        color: #a371f7;
       }
 
       /* ── Chat area ── */
       #chat {
         flex: 1;
         overflow-y: auto;
-        padding: 16px 14px;
+        padding: 18px 18px 22px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
       }
       #chat::-webkit-scrollbar {
         width: 4px;
@@ -170,7 +335,7 @@
 
       .msg-row {
         display: flex;
-        gap: 8px;
+        gap: 10px;
         align-items: flex-start;
       }
       .msg-row.user {
@@ -178,41 +343,74 @@
       }
 
       .avatar {
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
+        width: 22px;
+        height: 22px;
+        border-radius: 7px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 700;
         flex-shrink: 0;
+        border: 1px solid var(--border);
       }
       .avatar.ai {
-        background: #1d4ed8;
-        color: #fff;
+        background: var(--panel-2);
+        color: var(--accent);
       }
       .avatar.user {
-        background: #0f766e;
-        color: #fff;
+        background: var(--accent-soft);
+        color: #9ecbff;
       }
 
       .bubble {
-        max-width: 85%;
-        padding: 10px 14px;
-        border-radius: 12px;
+        max-width: 92%;
+        padding: 12px 14px;
+        border-radius: 14px;
         line-height: 1.55;
         word-break: break-word;
       }
       .bubble.ai {
-        background: #161b27;
-        border: 1px solid #1e2a3a;
-        border-top-left-radius: 3px;
+        background: rgba(15, 20, 27, 0.92);
+        border: 1px solid var(--border);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
       }
       .bubble.user {
-        background: #1d4ed8;
-        border-top-right-radius: 3px;
+        background: rgba(24, 34, 48, 0.9);
+        border: 1px solid var(--border);
         white-space: pre-wrap;
+      }
+      .msg-content {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+        max-width: 92%;
+      }
+      .msg-row.user .msg-content {
+        align-items: flex-end;
+      }
+      .msg-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .msg-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--muted);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .msg-action-btn:hover {
+        color: var(--text);
+        border-color: var(--accent);
+        background: var(--panel-3);
       }
 
       /* status / system messages */
@@ -222,13 +420,98 @@
       }
       .status-pill {
         font-size: 11px;
-        color: #64748b;
-        background: #161b27;
-        border: 1px solid #1e2a3a;
-        border-radius: 10px;
-        padding: 3px 10px;
+        color: var(--muted);
+        background: rgba(15, 20, 27, 0.84);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 8px 12px;
         white-space: pre-wrap;
-        text-align: center;
+        text-align: left;
+        min-width: min(760px, 100%);
+      }
+      .status-body {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .status-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .status-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .status-action-btn:hover {
+        border-color: var(--accent);
+        background: var(--panel-3);
+      }
+      .status-text {
+        white-space: pre-wrap;
+      }
+      .diff-summary {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .diff-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .diff-pill.added {
+        color: #aff5b4;
+        background: var(--green-soft);
+        border: 1px solid rgba(63, 185, 80, 0.28);
+      }
+      .diff-pill.removed {
+        color: #ffd8d3;
+        background: var(--red-soft);
+        border: 1px solid rgba(248, 81, 73, 0.28);
+      }
+      .diff-block {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #0b1118;
+      }
+      .diff-line {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 10px;
+        padding: 4px 10px;
+        font-family: "Cascadia Code", "Fira Code", monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+      }
+      .diff-line.added {
+        background: var(--green-soft);
+        color: #aff5b4;
+      }
+      .diff-line.removed {
+        background: var(--red-soft);
+        color: #ffd8d3;
+      }
+      .diff-sign {
+        opacity: 0.95;
+        font-weight: 700;
+      }
+      .diff-meta {
+        color: #9fb3c8;
       }
 
       /* typing dots */
@@ -241,7 +524,7 @@
       .typing span {
         width: 6px;
         height: 6px;
-        background: #3b82f6;
+        background: var(--accent);
         border-radius: 50%;
         animation: bounce 1.2s infinite;
       }
@@ -276,10 +559,10 @@
         align-items: center;
         justify-content: space-between;
         padding: 4px 10px;
-        background: #0d1117;
+        background: #0b1118;
         border-bottom: 1px solid #1e2a3a;
         font-size: 11px;
-        color: #64748b;
+        color: var(--muted);
       }
       .cb-header.bash {
         border-left: 3px solid #22c55e;
@@ -289,19 +572,19 @@
       }
       .cb-copy {
         padding: 2px 8px;
-        background: #1e2a3a;
-        border: 1px solid #2d3f55;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
         border-radius: 4px;
-        color: #94a3b8;
+        color: var(--muted);
         font-size: 10px;
         cursor: pointer;
       }
       .cb-copy:hover {
-        background: #263548;
-        color: #e2e8f0;
+        background: var(--panel-3);
+        color: var(--text);
       }
       .cb-body {
-        background: #0d1117;
+        background: #0b1118;
         padding: 12px 14px;
         overflow-x: auto;
         font-family: "Fira Code", "Cascadia Code", "Courier New", monospace;
@@ -313,19 +596,19 @@
         color: #86efac;
       }
       .cb-body.code {
-        color: #e2e8f0;
+        color: var(--text);
       }
 
       /* confirm block */
       .confirm-wrap {
-        background: #161b27;
-        border: 1px solid #2d3f55;
+        background: rgba(15, 20, 27, 0.98);
+        border: 1px solid var(--border);
         border-radius: 10px;
         padding: 12px 14px;
       }
       .confirm-label {
         font-size: 12px;
-        color: #fbbf24;
+        color: var(--yellow);
         margin-bottom: 8px;
       }
       .confirm-btns {
@@ -355,8 +638,8 @@
       /* ── Input area ── */
       #input-area {
         padding: 10px 14px;
-        background: #161b27;
-        border-top: 1px solid #1e2a3a;
+        background: rgba(15, 20, 27, 0.96);
+        border-top: 1px solid var(--border);
         flex-shrink: 0;
       }
       #input-row {
@@ -367,10 +650,10 @@
       #input {
         flex: 1;
         padding: 9px 12px;
-        background: #0f1117;
-        border: 1px solid #2d3f55;
-        color: #e2e8f0;
-        border-radius: 8px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 12px;
         font-size: 13px;
         resize: none;
         min-height: 38px;
@@ -381,18 +664,18 @@
       }
       #input:focus {
         outline: none;
-        border-color: #3b82f6;
+        border-color: var(--accent);
       }
       #input::placeholder {
-        color: #475569;
+        color: var(--muted);
       }
 
       .send-btn {
         padding: 9px 14px;
-        background: #1d4ed8;
+        background: var(--accent);
         color: #fff;
         border: none;
-        border-radius: 8px;
+        border-radius: 12px;
         cursor: pointer;
         font-size: 13px;
         font-weight: 600;
@@ -400,11 +683,11 @@
         white-space: nowrap;
       }
       .send-btn:hover {
-        background: #2563eb;
+        filter: brightness(1.06);
       }
       .send-btn:disabled {
-        background: #1e2a3a;
-        color: #475569;
+        background: var(--panel-2);
+        color: var(--muted);
         cursor: not-allowed;
       }
 
@@ -413,7 +696,7 @@
         background: #7f1d1d;
         color: #fca5a5;
         border: none;
-        border-radius: 8px;
+        border-radius: 12px;
         cursor: pointer;
         font-size: 13px;
         font-weight: 600;
@@ -425,7 +708,7 @@
 
       #input-hint {
         font-size: 10px;
-        color: #334155;
+        color: var(--muted);
         margin-top: 5px;
         padding-left: 2px;
       }
@@ -466,6 +749,11 @@
       <a id="api-key-link" href="" style="font-size:10px;color:#3b82f6;white-space:nowrap;">Get key</a>
     </div>
 
+    <div id="progress-bar-wrap">
+      <div id="progress-label">Idle</div>
+      <div id="progress-track"><div id="progress-fill"></div></div>
+    </div>
+
     <div id="action-bar">
       <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
       <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
@@ -475,6 +763,19 @@
       <div class="action-chip" data-action="tests">🧪 Generate tests</div>
       <div class="action-chip" data-action="docs">📝 Add docs</div>
       <div class="action-chip" data-action="git">📋 Git status</div>
+    </div>
+
+    <div id="activity-panel" class="collapsed">
+      <div id="activity-header">
+        <div id="activity-title">Agent Activity</div>
+        <div id="activity-actions">
+          <button id="activity-toggle">Show</button>
+          <button id="activity-clear">Clear</button>
+        </div>
+      </div>
+      <div id="activity-list">
+        <div class="activity-empty">No activity yet. Start a task to see the agent workflow.</div>
+      </div>
     </div>
 
     <div id="chat"></div>
@@ -526,6 +827,27 @@
       }
       apiKeyChange.onclick = function() { showKeyInput(); apiKeyInput.focus(); };
       var modelSelect = document.getElementById("model-select");
+
+      var progressWrap = document.getElementById("progress-bar-wrap");
+      var progressLabel = document.getElementById("progress-label");
+      var progressFill = document.getElementById("progress-fill");
+      var activityPanel = document.getElementById("activity-panel");
+      var activityList = document.getElementById("activity-list");
+      var activityClear = document.getElementById("activity-clear");
+      var activityToggle = document.getElementById("activity-toggle");
+
+      function showProgress(label, pct) {
+        progressWrap.classList.add("visible");
+        progressLabel.textContent = label;
+        progressFill.style.width = Math.min(100, Math.max(0, pct)) + "%";
+      }
+      function hideProgress() {
+        progressFill.style.width = "100%";
+        setTimeout(function() {
+          progressWrap.classList.remove("visible");
+          progressFill.style.width = "0%";
+        }, 600);
+      }
 
       var providerLinks = {
         groq: "https://console.groq.com/keys",
@@ -597,6 +919,76 @@
       };
       var currentMessage = null;
       var chatMode = "fast";
+      var activityEmptyMessage = "No activity yet. Start a task to see the agent workflow.";
+
+      function resetActivity() {
+        activityList.innerHTML = "";
+        var empty = document.createElement("div");
+        empty.className = "activity-empty";
+        empty.textContent = activityEmptyMessage;
+        activityList.appendChild(empty);
+      }
+
+      function setActivityCollapsed(collapsed) {
+        activityPanel.classList.toggle("collapsed", collapsed);
+        activityToggle.textContent = collapsed ? "Show" : "Hide";
+      }
+
+      function classifyActivity(text, explicitType) {
+        if (explicitType) return explicitType;
+        if (/allow|denied|blocked|outside workspace/i.test(text)) return "warn";
+        if (/syntax|scan|stud(y|ied)|index|relevant files|active file/i.test(text)) return "scan";
+        if (/running:|git status|command/i.test(text)) return "command";
+        if (/edit|writing|adding file|updated|added|created folder|plan ready/i.test(text)) return "edit";
+        if (/\u2705|no syntax errors|working tree clean/i.test(text)) return "success";
+        if (/\u274c|error|failed/i.test(text)) return "error";
+        return "info";
+      }
+
+      function activityIcon(kind) {
+        if (kind === "success") return "✓";
+        if (kind === "error") return "!";
+        if (kind === "warn") return "!";
+        if (kind === "command") return ">";
+        if (kind === "edit") return "~";
+        if (kind === "scan") return "#";
+        return "·";
+      }
+
+      function addActivity(text, kind) {
+        if (!text) return;
+        var empty = activityList.querySelector(".activity-empty");
+        if (empty) empty.remove();
+        var type = classifyActivity(text, kind);
+        var item = document.createElement("div");
+        item.className = "activity-item " + type;
+        var icon = document.createElement("div");
+        icon.className = "activity-icon";
+        icon.textContent = activityIcon(type);
+        var body = document.createElement("div");
+        body.className = "activity-body";
+        var label = document.createElement("div");
+        label.className = "activity-label";
+        label.textContent = text;
+        var meta = document.createElement("div");
+        meta.className = "activity-meta";
+        meta.textContent = type;
+        body.appendChild(label);
+        body.appendChild(meta);
+        item.appendChild(icon);
+        item.appendChild(body);
+        activityList.appendChild(item);
+        activityList.scrollTop = activityList.scrollHeight;
+      }
+
+      resetActivity();
+      setActivityCollapsed(true);
+      activityToggle.onclick = function () {
+        setActivityCollapsed(!activityPanel.classList.contains("collapsed"));
+      };
+      activityClear.onclick = function () {
+        resetActivity();
+      };
 
       // ── Helpers ──────────────────────────────────────────────
 
@@ -640,6 +1032,105 @@
         wrap.appendChild(hdr);
         wrap.appendChild(body);
         return wrap;
+      }
+
+      function makeDiffBlock(lines) {
+        var wrap = document.createElement("div");
+        wrap.className = "diff-block";
+        lines.forEach(function (entry) {
+          var row = document.createElement("div");
+          row.className = "diff-line " + entry.kind;
+          var sign = document.createElement("div");
+          sign.className = "diff-sign";
+          sign.textContent = entry.kind === "added" ? "+" : "-";
+          var text = document.createElement("div");
+          text.textContent = entry.text;
+          row.appendChild(sign);
+          row.appendChild(text);
+          wrap.appendChild(row);
+        });
+        return wrap;
+      }
+
+      function renderStatusContent(text) {
+        var lines = String(text || "").split("\n");
+        var container = document.createElement("div");
+        container.className = "status-body";
+
+        var addCount = 0;
+        var removeCount = 0;
+        var diffLines = [];
+        var headerLines = [];
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (/^\+\s/.test(line)) {
+            addCount += 1;
+            diffLines.push({ kind: "added", text: line.replace(/^\+\s?/, "") });
+            continue;
+          }
+          if (/^-\s/.test(line)) {
+            removeCount += 1;
+            diffLines.push({ kind: "removed", text: line.replace(/^-\s?/, "") });
+            continue;
+          }
+          headerLines.push(line);
+        }
+
+        if (headerLines.filter(Boolean).length > 0) {
+          var header = document.createElement("div");
+          header.className = "status-text";
+          header.innerHTML = escapeHtml(headerLines.join("\n")).replace(
+            /(\bline(?:s)?\s+\d+(?:-\d+)?\b)/gi,
+            "<span class='diff-meta'>$1</span>"
+          );
+          container.appendChild(header);
+        }
+
+        if (addCount > 0 || removeCount > 0) {
+          var summary = document.createElement("div");
+          summary.className = "diff-summary";
+          if (addCount > 0) {
+            var addPill = document.createElement("div");
+            addPill.className = "diff-pill added";
+            addPill.textContent = "+" + addCount + " added";
+            summary.appendChild(addPill);
+          }
+          if (removeCount > 0) {
+            var removePill = document.createElement("div");
+            removePill.className = "diff-pill removed";
+            removePill.textContent = "-" + removeCount + " removed";
+            summary.appendChild(removePill);
+          }
+          container.appendChild(summary);
+          container.appendChild(makeDiffBlock(diffLines));
+        }
+
+        if (container.childNodes.length === 0) {
+          var fallback = document.createElement("div");
+          fallback.className = "status-text";
+          fallback.textContent = text;
+          container.appendChild(fallback);
+        }
+
+        return container;
+      }
+
+      function makeAppliedStatusContent(text, filePath) {
+        var container = renderStatusContent(text);
+        if (filePath) {
+          var actions = document.createElement("div");
+          actions.className = "status-actions";
+          var openBtn = document.createElement("button");
+          openBtn.className = "status-action-btn";
+          openBtn.textContent = "Open file";
+          openBtn.onclick = function () {
+            vscode.postMessage({ type: "openFile", path: filePath });
+          };
+          actions.appendChild(openBtn);
+          container.appendChild(actions);
+        }
+        return container;
       }
 
       function renderContent(text) {
@@ -712,7 +1203,11 @@
           row.className = "status-row";
           var pill = document.createElement("div");
           pill.className = "status-pill";
-          pill.textContent = content;
+          if (typeof content === "string") {
+            pill.appendChild(renderStatusContent(content));
+          } else {
+            pill.appendChild(content);
+          }
           row.appendChild(pill);
           chat.appendChild(row);
           chat.scrollTop = chat.scrollHeight;
@@ -723,8 +1218,11 @@
         var av = document.createElement("div");
         av.className = "avatar " + type;
         av.textContent = type === "user" ? "U" : "AI";
+        var contentWrap = document.createElement("div");
+        contentWrap.className = "msg-content";
         var bubble = document.createElement("div");
         bubble.className = "bubble " + type;
+        bubble._rawSource = typeof content === "string" ? content : "";
         if (typeof content === "string") {
           if (type === "user") {
             bubble.textContent = content;
@@ -734,8 +1232,29 @@
         } else {
           bubble.appendChild(content);
         }
+        var actions = document.createElement("div");
+        actions.className = "msg-actions";
+        var copyBtn = document.createElement("button");
+        copyBtn.className = "msg-action-btn";
+        copyBtn.textContent = "Copy";
+        copyBtn.onclick = function () {
+          copyText(bubble._rawSource || bubble.textContent || "", copyBtn);
+        };
+        var editBtn = document.createElement("button");
+        editBtn.className = "msg-action-btn";
+        editBtn.textContent = "Edit";
+        editBtn.onclick = function () {
+          input.value = bubble._rawSource || bubble.textContent || "";
+          input.style.height = "38px";
+          input.style.height = Math.min(input.scrollHeight, 120) + "px";
+          input.focus();
+        };
+        actions.appendChild(editBtn);
+        actions.appendChild(copyBtn);
+        contentWrap.appendChild(bubble);
+        contentWrap.appendChild(actions);
         row.appendChild(av);
-        row.appendChild(bubble);
+        row.appendChild(contentWrap);
         chat.appendChild(row);
         chat.scrollTop = chat.scrollHeight;
         return row;
@@ -806,6 +1325,7 @@
       btnClear.onclick = function () {
         chat.innerHTML = "";
         vscode.postMessage({ type: "clear" });
+        resetActivity();
         addRow("Conversation cleared.", "status");
       };
 
@@ -860,8 +1380,17 @@
         var msg = event.data;
 
         if (msg.type === "status") {
+          addActivity(msg.text);
           addRow(msg.text, "status");
+          if (/scanning/i.test(msg.text)) showProgress(msg.text, 20);
+          else if (/contacting/i.test(msg.text)) showProgress(msg.text, 40);
+          else if (/reading|indexing/i.test(msg.text)) showProgress(msg.text, 30);
+          else if (/checking syntax/i.test(msg.text)) showProgress(msg.text, 85);
+          else if (/parsed|writing|updated|created/i.test(msg.text)) showProgress(msg.text, 90);
+          else showProgress(msg.text, 60);
         } else if (msg.type === "thinking") {
+          addActivity("Generating response...", "info");
+          showProgress("Thinking...", 50);
           var row = document.createElement("div");
           row.className = "msg-row ai";
           var av = document.createElement("div");
@@ -890,9 +1419,12 @@
           bubble._streamNode.textContent = bubble._rawText;
           chat.scrollTop = chat.scrollHeight;
         } else if (msg.type === "done") {
+          addActivity("Run finished.", "success");
+          hideProgress();
           if (currentMessage) {
             var bubble = currentMessage.querySelector(".bubble");
             if (bubble && bubble._rawText) {
+              bubble._rawSource = bubble._rawText;
               bubble.innerHTML = "";
               bubble.appendChild(renderContent(bubble._rawText));
             }
@@ -901,13 +1433,22 @@
           setInputState(false);
           chat.scrollTop = chat.scrollHeight;
         } else if (msg.type === "confirm" || msg.type === "confirmOutsideEdit") {
+          addActivity(
+            msg.type === "confirmOutsideEdit"
+              ? "Waiting for approval to edit outside the workspace."
+              : "Waiting for approval to run a command.",
+            "warn"
+          );
           var wrap = document.createElement("div");
           wrap.className = "confirm-wrap";
           var lbl = document.createElement("div");
           lbl.className = "confirm-label";
+          var isGitPush = msg.type === "confirm" && /^git\s+push\b/i.test(msg.command || "");
           lbl.textContent = msg.type === "confirmOutsideEdit"
             ? "\u26a0\ufe0f Allow edit outside workspace?"
-            : "\u26a1 Allow this command to run?";
+            : isGitPush
+              ? "\u26a1 Allow push to GitHub?"
+              : "\u26a1 Allow this command to run?";
           var cb = makeCodeBlock(msg.type === "confirmOutsideEdit" ? "path" : "bash", msg.type === "confirmOutsideEdit" ? msg.path : msg.command);
           var btns = document.createElement("div");
           btns.className = "confirm-btns";
@@ -932,10 +1473,13 @@
           wrap.appendChild(btns);
           addRow(wrap, "ai");
         } else if (msg.type === "error") {
+          addActivity(msg.text, "error");
+          hideProgress();
           setInputState(false);
           addRow("\u274c " + msg.text, "status");
         } else if (msg.type === "applied") {
-          addRow(msg.text, "status");
+          addActivity(msg.text, "success");
+          addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
         } else if (msg.type === "setCurrentProvider") {
           if (msg.provider) {
             providerSelect.value = msg.provider;
