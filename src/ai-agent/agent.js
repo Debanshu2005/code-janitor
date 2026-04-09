@@ -577,7 +577,7 @@ ${resolvedMessage}`;
 
       if (
         this._shouldForceStructuredEdit(finalIntent, userMessage) &&
-        parsedResponse.actions.length === 0 &&
+        !this._hasMeaningfulActions(parsedResponse.actions) &&
         !abortSignal?.aborted
       ) {
         reportStatus?.("Model replied with prose. Retrying with strict edit format...");
@@ -1023,6 +1023,20 @@ ${(rawResponse || "").slice(0, 4000)}
 \`\`\``;
   }
 
+  _hasMeaningfulActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return false;
+    }
+
+    return actions.some((action) => {
+      if (!action) return false;
+      if (action.type === "file") {
+        return typeof action.content === "string" && action.content.trim().length > 0;
+      }
+      return action.type === "mkdir" || action.type === "cmd";
+    });
+  }
+
   _getEmptyResponseFallback(mode) {
     return mode === "heavy"
       ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
@@ -1116,9 +1130,45 @@ ${(rawResponse || "").slice(0, 4000)}
     return Array.from(matches).sort();
   }
 
+  _preferActivePathMatches(paths, activePath) {
+    if (!Array.isArray(paths) || paths.length <= 1 || !activePath) {
+      return Array.isArray(paths) ? paths : [];
+    }
+
+    const normalizedActivePath = activePath.replace(/\\/g, "/").toLowerCase();
+    const activeBaseName = path.basename(normalizedActivePath);
+    const sameBaseMatches = paths.filter(
+      (candidate) => path.basename(candidate.replace(/\\/g, "/").toLowerCase()) === activeBaseName
+    );
+
+    if (sameBaseMatches.length <= 1) {
+      return paths;
+    }
+
+    const exactActiveMatch = sameBaseMatches.find(
+      (candidate) => candidate.replace(/\\/g, "/").toLowerCase() === normalizedActivePath
+    );
+    if (exactActiveMatch) {
+      return [exactActiveMatch];
+    }
+
+    const activeTopLevel = normalizedActivePath.split("/")[0];
+    const sameTopLevelMatches = sameBaseMatches.filter(
+      (candidate) => candidate.replace(/\\/g, "/").toLowerCase().startsWith(`${activeTopLevel}/`)
+    );
+    if (sameTopLevelMatches.length > 0) {
+      return sameTopLevelMatches;
+    }
+
+    return sameBaseMatches;
+  }
+
   _resolveEditableTargets(userMessage, workspaceFolder, editorState) {
     const message = userMessage || "";
-    const explicitPaths = this._matchPathsFromHints(this._extractPathHints(message));
+    const explicitPaths = this._preferActivePathMatches(
+      this._matchPathsFromHints(this._extractPathHints(message)),
+      editorState.activeTabPath
+    );
     const targetPaths = new Set(explicitPaths);
     const isEditRequest = this._isEditRequest(message);
     const intent = this._detectIntent(message);
@@ -1249,6 +1299,12 @@ ${(rawResponse || "").slice(0, 4000)}
     const activeRelativePath = activeEditor && workspaceFolder
       ? path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/").toLowerCase()
       : "";
+    const preferredHintMatches = new Set(
+      this._preferActivePathMatches(
+        this._matchPathsFromHints(pathHints),
+        activeRelativePath
+      ).map((candidate) => candidate.replace(/\\/g, "/").toLowerCase())
+    );
 
     for (const [relativePath, fileData] of this.codebaseContext.entries()) {
       const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();
@@ -1260,6 +1316,10 @@ ${(rawResponse || "").slice(0, 4000)}
 
       if (activeRelativePath && normalizedPath === activeRelativePath) {
         score += 40;
+      }
+
+      if (preferredHintMatches.has(normalizedPath)) {
+        score += 120;
       }
 
       for (const hint of pathHints) {
@@ -1287,7 +1347,15 @@ ${(rawResponse || "").slice(0, 4000)}
     }
 
     return relevant
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (activeRelativePath) {
+          const aActive = a.path.replace(/\\/g, "/").toLowerCase() === activeRelativePath ? 1 : 0;
+          const bActive = b.path.replace(/\\/g, "/").toLowerCase() === activeRelativePath ? 1 : 0;
+          if (bActive !== aActive) return bActive - aActive;
+        }
+        return a.path.localeCompare(b.path);
+      })
       .slice(0, MAX_RELEVANT_FILES);
   }
 
