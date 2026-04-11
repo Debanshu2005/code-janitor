@@ -340,43 +340,73 @@ function getCompiledLanguageView(languageId, fixedCode) {
 
 function getMarkdownView(code) {
   function renderMd(src) {
-    return src
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      // Fenced code blocks first
-      .replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, c) =>
-        `<pre><code class="lang-${lang}">${c.trimEnd()}</code></pre>`)
-      // Inline code
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      // Images before links
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-      // Headings
-      .replace(/^#{6} (.+)$/gm, "<h6>$1</h6>").replace(/^#{5} (.+)$/gm, "<h5>$1</h5>")
-      .replace(/^#{4} (.+)$/gm, "<h4>$1</h4>").replace(/^#{3} (.+)$/gm, "<h3>$1</h3>")
-      .replace(/^#{2} (.+)$/gm, "<h2>$1</h2>").replace(/^# (.+)$/gm, "<h1>$1</h1>")
-      // Bold/italic/strikethrough
-      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\*(.+?)\*/g, "<em>$1</em>")
-      .replace(/~~(.+?)~~/g, "<del>$1</del>")
-      // HR
-      .replace(/^[-*]{3,}$/gm, "<hr>")
-      // Blockquote
-      .replace(/^&gt; ?(.+)$/gm, "<blockquote>$1</blockquote>")
-      // Tables
-      .replace(/^(\|.+\|)\n\|[-|: ]+\|\n((?:\|.+\|\n?)+)/gm, (_, hdr, body) => {
-        const ths = hdr.split("|").slice(1,-1).map(c => `<th>${c.trim()}</th>`).join("");
-        const trs = body.trim().split("\n").map(r =>
-          `<tr>${r.split("|").slice(1,-1).map(c => `<td>${c.trim()}</td>`).join("")}</tr>`
-        ).join("");
-        return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
-      })
-      // Lists
-      .replace(/^[ \t]*[-*+] (.+)$/gm, "<li>$1</li>")
-      .replace(/^[ \t]*\d+\. (.+)$/gm, "<li>$1</li>")
-      .replace(/(<li>[\s\S]+?<\/li>)/g, "<ul>$1</ul>")
-      // Paragraphs
-      .replace(/^(?!<[a-zA-Z\/]|\s*$)(.+)$/gm, "<p>$1</p>");
+    return (
+      src
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        // Fenced code blocks first
+        .replace(
+          /```([\w-]*)\n([\s\S]*?)```/g,
+          (_, lang, c) =>
+            `<pre><code class="lang-${lang}">${c.trimEnd()}</code></pre>`
+        )
+        // Inline code
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        // Images before links
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
+        // Links
+        .replace(
+          /\[([^\]]+)\]\(([^)]+)\)/g,
+          '<a href="$2" target="_blank">$1</a>'
+        )
+        // Headings
+        .replace(/^#{6} (.+)$/gm, "<h6>$1</h6>")
+        .replace(/^#{5} (.+)$/gm, "<h5>$1</h5>")
+        .replace(/^#{4} (.+)$/gm, "<h4>$1</h4>")
+        .replace(/^#{3} (.+)$/gm, "<h3>$1</h3>")
+        .replace(/^#{2} (.+)$/gm, "<h2>$1</h2>")
+        .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+        // Bold/italic/strikethrough
+        .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*(.+?)\*/g, "<em>$1</em>")
+        .replace(/~~(.+?)~~/g, "<del>$1</del>")
+        // HR
+        .replace(/^[-*]{3,}$/gm, "<hr>")
+        // Blockquote
+        .replace(/^&gt; ?(.+)$/gm, "<blockquote>$1</blockquote>")
+        // Tables
+        .replace(
+          /^(\|.+\|)\n\|[-|: ]+\|\n((?:\|.+\|\n?)+)/gm,
+          (_, hdr, body) => {
+            const ths = hdr
+              .split("|")
+              .slice(1, -1)
+              .map((c) => `<th>${c.trim()}</th>`)
+              .join("")
+            const trs = body
+              .trim()
+              .split("\n")
+              .map(
+                (r) =>
+                  `<tr>${r
+                    .split("|")
+                    .slice(1, -1)
+                    .map((c) => `<td>${c.trim()}</td>`)
+                    .join("")}</tr>`
+              )
+              .join("")
+            return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`
+          }
+        )
+        // Lists
+        .replace(/^[ \t]*[-*+] (.+)$/gm, "<li>$1</li>")
+        .replace(/^[ \t]*\d+\. (.+)$/gm, "<li>$1</li>")
+        .replace(/(<li>[\s\S]+?<\/li>)/g, "<ul>$1</ul>")
+        // Paragraphs
+        .replace(/^(?!<[a-zA-Z\/]|\s*$)(.+)$/gm, "<p>$1</p>")
+    )
   }
   return `<!DOCTYPE html><html><head><title>Markdown Preview</title><style>
     body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#24292e;background:#fff;padding:32px;max-width:860px;margin:0 auto;}
@@ -398,11 +428,11 @@ function getMarkdownView(code) {
     hr{border:0;border-top:1px solid #eaecef;margin:24px 0;}
     del{color:#6a737d;}strong{font-weight:600;}
     p{margin:0 0 16px;}
-  </style></head><body>${renderMd(code)}</body></html>`;
+  </style></head><body>${renderMd(code)}</body></html>`
 }
 
 function getCssView(languageId, code, filePath) {
-  const label = languageId.toUpperCase();
+  const label = languageId.toUpperCase()
   return `
     <!DOCTYPE html>
     <html>
@@ -440,9 +470,15 @@ function getCssView(languageId, code, filePath) {
 function getJsonView(code) {
   let formatted = code
   let parseError = null
-  try { formatted = JSON.stringify(JSON.parse(code), null, 2) } catch(e) { parseError = e.message }
+  try {
+    formatted = JSON.stringify(JSON.parse(code), null, 2)
+  } catch (e) {
+    parseError = e.message
+  }
   const highlighted = formatted
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
     .replace(/("[^"]+"):/g, '<span class="key">$1</span>:')
     .replace(/: ("[^"]*")/g, ': <span class="str">$1</span>')
     .replace(/: (-?\d+\.?\d*)/g, ': <span class="num">$1</span>')
@@ -465,15 +501,26 @@ function getSvgView(code) {
 
 function getWebviewContent(languageId, fixedCode, hasError, documentPath) {
   if (languageId === "html") return fixedCode
-  if (languageId === "javascriptreact" || languageId === "typescriptreact") return getReactView(fixedCode, hasError)
-  if (languageId === "javascript" || languageId === "typescript" || languageId === "python") return getExecutionView(languageId, fixedCode, hasError)
-  if (languageId === "c" || languageId === "java") return getCompiledLanguageView(languageId, fixedCode)
+  if (languageId === "javascriptreact" || languageId === "typescriptreact")
+    return getReactView(fixedCode, hasError)
+  if (
+    languageId === "javascript" ||
+    languageId === "typescript" ||
+    languageId === "python"
+  )
+    return getExecutionView(languageId, fixedCode, hasError)
+  if (languageId === "c" || languageId === "java")
+    return getCompiledLanguageView(languageId, fixedCode)
   if (languageId === "markdown") return getMarkdownView(fixedCode)
-  if (["css", "scss", "less", "sass"].includes(languageId)) return getCssView(languageId, fixedCode, documentPath)
-  if (languageId === "json" || languageId === "jsonc") return getJsonView(fixedCode)
+  if (["css", "scss", "less", "sass"].includes(languageId))
+    return getCssView(languageId, fixedCode, documentPath)
+  if (languageId === "json" || languageId === "jsonc")
+    return getJsonView(fixedCode)
   if (languageId === "xml" || languageId === "svg") return getSvgView(fixedCode)
   if (["vue", "svelte", "astro"].includes(languageId)) {
-    const templateMatch = fixedCode.match(/<template[^>]*>([\s\S]*?)<\/template>/i)
+    const templateMatch = fixedCode.match(
+      /<template[^>]*>([\s\S]*?)<\/template>/i
+    )
     const styleMatch = fixedCode.match(/<style[^>]*>([\s\S]*?)<\/style>/i)
     const html = templateMatch ? templateMatch[1] : fixedCode
     const style = styleMatch ? `<style>${styleMatch[1]}</style>` : ""
@@ -504,9 +551,26 @@ function livePreviewer(context) {
   const document = editor.document
   const languageId = document.languageId
   const supportedLanguages = [
-    "html", "javascript", "typescript", "javascriptreact", "typescriptreact",
-    "python", "c", "java", "markdown", "css", "scss", "less", "sass",
-    "json", "jsonc", "xml", "svg", "vue", "svelte", "astro"
+    "html",
+    "javascript",
+    "typescript",
+    "javascriptreact",
+    "typescriptreact",
+    "python",
+    "c",
+    "java",
+    "markdown",
+    "css",
+    "scss",
+    "less",
+    "sass",
+    "json",
+    "jsonc",
+    "xml",
+    "svg",
+    "vue",
+    "svelte",
+    "astro"
   ]
 
   if (!supportedLanguages.includes(languageId)) {
@@ -557,7 +621,12 @@ function livePreviewer(context) {
           )
         : fixedCode
 
-    panel.webview.html = getWebviewContent(languageId, processedCode, hasError, document.fileName)
+    panel.webview.html = getWebviewContent(
+      languageId,
+      processedCode,
+      hasError,
+      document.fileName
+    )
   }
 
   updateWebview()

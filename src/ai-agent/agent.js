@@ -76,10 +76,12 @@ class AIAgent {
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai")
     const provider = config.get("provider", "ollama")
+    const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
+    const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl)
     return {
       enabled: config.get("enabled", true),
       provider,
-      ollamaUrl: config.get("ollamaUrl", "http://localhost:11434"),
+      ollamaUrl,
       model: config.get(
         "model",
         provider === "groq"
@@ -95,6 +97,18 @@ class AIAgent {
       anthropicApiKey: config.get("anthropicApiKey", ""),
       timeout: config.get("timeout", 90_000)
     }
+  }
+
+  _normalizeOllamaUrl(url) {
+    let normalized =
+      typeof url === "string" && url.trim()
+        ? url.trim()
+        : "http://localhost:11434"
+    normalized = normalized.replace(/\/+$/, "")
+    if (/\/api$/i.test(normalized)) {
+      normalized = normalized.replace(/\/api$/i, "")
+    }
+    return normalized || "http://localhost:11434"
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
@@ -690,6 +704,10 @@ ${resolvedMessage}`
         mode === "fast"
           ? this._detectIntent(userMessage)
           : this._detectIntent(userMessage)
+      const shouldCheckRepetition = !this._shouldForceStructuredEdit(
+        reqIntent,
+        userMessage
+      )
       const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent)
       const response = await fetch(reqOpts.url, {
         method: "POST",
@@ -727,7 +745,10 @@ ${resolvedMessage}`
             const token = reqOpts.parseChunk(line)
             if (token === null) continue
             const nextResponse = fullResponse + token
-            if (this._isRepeatingResponse(nextResponse, mode)) {
+            if (
+              shouldCheckRepetition &&
+              this._isRepeatingResponse(nextResponse, mode)
+            ) {
               repetitionDetected = true
               streamDone = true
               if (!abortSignal?.aborted) {
@@ -2006,7 +2027,7 @@ ${userMessage}`
     // Fallback: also try matching FILE: followed by content without code fences
     if (actions.length === 0) {
       const looseFIleRegex =
-        /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\nFILE:|\nMKDIR:|\nCMD:|$)/g
+        /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\n(?:FILE|File|MKDIR|CMD):|$)/g
       while ((match = looseFIleRegex.exec(response)) !== null) {
         const pathInfo = normalizeActionPath(match[1])
         const normalizedPath = pathInfo.path

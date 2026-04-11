@@ -449,6 +449,42 @@ ${trimmedText}`;
       : "qwen2.5-coder:1.5b";
   }
 
+  _getProviderModelStateKey(provider) {
+    return `codeJanitor.ai.lastModel.${provider || "unknown"}`;
+  }
+
+  _saveProviderModel(provider, model) {
+    if (!provider || !model) return;
+    this.context.globalState.update(this._getProviderModelStateKey(provider), model);
+  }
+
+  _getSavedProviderModel(provider) {
+    if (!provider) return "";
+    return this.context.globalState.get(this._getProviderModelStateKey(provider), "");
+  }
+
+  _getConfigTargetForKey(key) {
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const inspected = cfg.inspect(key);
+    const hasWorkspaceOverride =
+      inspected &&
+      (inspected.workspaceValue !== undefined ||
+        inspected.workspaceFolderValue !== undefined);
+
+    if (hasWorkspaceOverride && vscode.workspace.workspaceFolders?.length) {
+      return vscode.ConfigurationTarget.Workspace;
+    }
+
+    return vscode.ConfigurationTarget.Global;
+  }
+
+  async _updateAiConfig(key, value) {
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const target = this._getConfigTargetForKey(key);
+    await cfg.update(key, value, target);
+    return cfg;
+  }
+
   _setupMessageHandler() {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -900,13 +936,15 @@ ${trimmedText}`;
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
-        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-        await cfg.update("model", message.model, vscode.ConfigurationTarget.Global);
+        const cfg = await this._updateAiConfig("model", message.model);
+        const provider = cfg.get("provider", "ollama");
+        this._saveProviderModel(provider, message.model);
       } else if (message.type === "setProvider") {
-        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-        await cfg.update("provider", message.provider, vscode.ConfigurationTarget.Global);
+        await this._updateAiConfig("provider", message.provider);
         const defaultModel = this._getDefaultModelForProvider(message.provider);
-        await cfg.update("model", defaultModel, vscode.ConfigurationTarget.Global);
+        const savedModel = this._getSavedProviderModel(message.provider);
+        const nextModel = savedModel || defaultModel;
+        await this._updateAiConfig("model", nextModel);
         if (message.apiKey && message.provider === "groq") {
           await this._persistApiKey("groq", message.apiKey);
         }
@@ -921,7 +959,7 @@ ${trimmedText}`;
         if (this.panel) {
           this.panel.webview.postMessage({
             type: "status",
-            text: `Provider switched to ${message.provider}. Model set to ${defaultModel}.`
+            text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
           });
         }
         await this._fetchAndSendModels();

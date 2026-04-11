@@ -1,38 +1,29 @@
 # Code Janitor Arduino AI Agent
 
-This directory is a standalone AI-agent extension package for Arduino IDE 2.x (Theia/VS Code extension compatible builds).
+`Code Janitor Arduino AI Agent` is a standalone VSIX package that brings the Code Janitor chat assistant into Arduino IDE 2.x and other compatible Theia / VS Code extension hosts.
 
-## What this package does
+This package is focused on AI chat and guided edits. It does not include the full command set from the main `Code Janitor` VS Code extension.
 
-- Adds the command `Code Janitor Arduino: Open Arduino AI Chat`.
-- Reuses the Code Janitor AI chat engine in a separate extension package.
-- Keeps this Arduino-targeted package isolated from the main Code Janitor extension.
+## Features
 
-## Directory layout
+- Opens a dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
+- Supports `ollama`, `groq`, `openrouter`, and `anthropic`
+- Scans the workspace for relevant context before answering
+- Can generate structured `FILE`, `MKDIR`, and `CMD` actions with safety checks
+- Preserves the last selected model per provider
+- Includes quick actions such as explain, review, fix, refactor, tests, and syntax scan
 
-- `package.json`: Extension manifest for Arduino-targeted package.
-- `src/extension.js`: Entry point that registers the chat command.
-- `src/ai-agent/*`: AI panel + agent logic copied from Code Janitor.
+## Package Layout
 
-## Build VSIX
+- `src/extension.js`: Arduino extension activation entry
+- `src/ai-agent/chat-panel.js`: webview bridge, command handling, and settings sync
+- `src/ai-agent/agent.js`: prompt building, provider requests, parsing, and action safety
+- `src/ai-agent/chat-panel.html`: chat UI
 
-From repository root:
+## Commands
 
-```powershell
-cd arduino-ide-agent
-npm run package
-```
+- `Code Janitor Arduino: Open Arduino AI Chat`
 
-This generates a `.vsix` file in `arduino-ide-agent`.
+Default keybinding:
 
-## Install in Arduino IDE 2.x
-
-1. Close Arduino IDE.
-2. Copy the generated `.vsix` into your Arduino IDE plugins directory (`%USERPROFILE%\.arduinoIDE\plugins` on Windows, `~/.arduinoIDE/plugins` on Linux/macOS).
-3. Reopen Arduino IDE.
-4. Open Command Palette and run `Code Janitor Arduino: Open Arduino AI Chat`.
-
-## Notes
-
-- Arduino IDE plugin support varies by version/build. If your build does not load third-party VSIX plugins, use this package in VS Code or a Theia-based build that supports plugins.
-- AI provider settings are under `codeJanitor.ai.*` in settings.
+- `Ctrl+Alt+A` on Windows/Linux
