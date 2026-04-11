@@ -3,6 +3,12 @@ const fs = require("fs");
 const path = require("path");
 const AIAgent = require("./agent");
 
+const MODELS_BY_PROVIDER = {
+  groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
+  openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
+  anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
+};
+
 class ChatPanel {
   constructor(context) {
     this.context = context;
@@ -251,6 +257,165 @@ class ChatPanel {
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
   }
 
+  _readWorkspaceScripts(workspaceFolder) {
+    if (!workspaceFolder) return {};
+    const packageJsonPath = path.join(workspaceFolder, "package.json");
+    if (!fs.existsSync(packageJsonPath)) return {};
+    try {
+      const raw = fs.readFileSync(packageJsonPath, "utf8");
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed.scripts === "object" && parsed.scripts
+        ? parsed.scripts
+        : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  _getPostEditVerificationCommands(workspaceFolder) {
+    const scripts = this._readWorkspaceScripts(workspaceFolder);
+    const ordered = [
+      { script: "lint", command: "npm run lint" },
+      { script: "typecheck", command: "npm run typecheck" },
+      { script: "build", command: "npm run build" },
+      { script: "test", command: "npm test" }
+    ];
+
+    return ordered
+      .filter((item) => !!scripts[item.script])
+      .map((item) => item.command)
+      .slice(0, 2);
+  }
+
+  _summarizeCommandOutput(output) {
+    const text = (output || "").trim();
+    if (!text) return "";
+    const lines = text.split(/\r?\n/).slice(0, 8);
+    return lines.join("\n");
+  }
+
+  _isEditLikeIntent(intent, message) {
+    if (intent === "edit" || intent === "create") return true;
+    if ((intent === "debug" || intent === "refactor") && this.agent._isEditRequest(message || "")) {
+      return true;
+    }
+    return false;
+  }
+
+  _hasExplicitCommandRequest(message) {
+    return /\b(run|execute|exec|terminal|shell|command|cmd|powershell|bash)\b/i.test(
+      message || ""
+    );
+  }
+
+  _isReadmePath(filePath) {
+    return path.basename((filePath || "").toLowerCase()) === "readme.md";
+  }
+
+  _isDocTruncateGuardError(errorText) {
+    return /Refusing to heavily truncate documentation/i.test(errorText || "");
+  }
+
+  async _retryReadmeRewrite(trimmedText, workspaceFolder, writeOptions) {
+    const retryPrompt = `The previous README.md update was rejected because it would heavily truncate documentation.
+Return exactly one FILE action for README.md with complete file content that preserves existing sections while applying the requested update.
+Do not output CMD or MKDIR.
+
+Original request:
+${trimmedText}`;
+
+    const response = await this.agent.chat(
+      retryPrompt,
+      workspaceFolder,
+      null,
+      null,
+      {
+        mode: this.chatMode,
+        onStatus: (text) => {
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `README retry: ${text}`
+          });
+        }
+      }
+    );
+
+    if (response.error) {
+      return { success: false, error: response.error };
+    }
+
+    const readmeAction = (response.actions || []).find(
+      (action) =>
+        action.type === "file" &&
+        this._isReadmePath(action.path) &&
+        typeof action.content === "string" &&
+        action.content.trim().length > 0
+    );
+
+    if (!readmeAction) {
+      return {
+        success: false,
+        error: "README retry did not produce a valid FILE: README.md action."
+      };
+    }
+
+    return this.agent.applyChanges(
+      readmeAction.path,
+      readmeAction.content,
+      false,
+      writeOptions
+    );
+  }
+
+  async _runPostEditVerification(workspaceFolder, changedFiles) {
+    if (!workspaceFolder || !Array.isArray(changedFiles) || changedFiles.length === 0) {
+      return;
+    }
+
+    const commands = this._getPostEditVerificationCommands(workspaceFolder);
+    if (commands.length === 0) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: "Post-edit checks: no lint/typecheck/build/test scripts found."
+      });
+      return;
+    }
+
+    this.panel.webview.postMessage({
+      type: "status",
+      text: `Post-edit checks: ${commands.join(", ")}`
+    });
+
+    for (const command of commands) {
+      const validation = this.agent.validateCommand(command);
+      if (!validation.allowed) {
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `Skipped check (${command}): ${validation.reason}`
+        });
+        continue;
+      }
+
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `Running verification: ${command}`
+      });
+      const result = await this.agent.executeCommand(command, workspaceFolder);
+      if (result.success) {
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `✅ Verification passed: ${command}`
+        });
+      } else {
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `❌ Verification failed: ${command}\n${this._summarizeCommandOutput(result.error || result.output)}`
+        });
+        break;
+      }
+    }
+  }
+
   async _fetchAndSendModels() {
     // Only needed for Ollama — other providers populate models client-side
     try {
@@ -276,6 +441,14 @@ class ChatPanel {
     }
   }
 
+  _getDefaultModelForProvider(provider) {
+    if (provider === "ollama") return "qwen2.5-coder:1.5b";
+    const providerModels = MODELS_BY_PROVIDER[provider];
+    return Array.isArray(providerModels) && providerModels.length > 0
+      ? providerModels[0]
+      : "qwen2.5-coder:1.5b";
+  }
+
   _setupMessageHandler() {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -283,7 +456,15 @@ class ChatPanel {
       if (message.type === "chat") {
         const trimmedText = (message.text || "").trim();
         const intent = this.agent._detectIntent(trimmedText);
+        const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
+        const hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
         const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
+        const hasExplicitDestructiveWriteIntent =
+          /\b(delete|remove|clear|empty|truncate|wipe|blank\s*out)\b/i.test(trimmedText);
+        const writeOptions = {
+          allowEmpty: hasExplicitDestructiveWriteIntent,
+          allowDocTruncate: hasExplicitDestructiveWriteIntent
+        };
 
         if (/^\/fast$/i.test(trimmedText)) {
           this.chatMode = "fast";
@@ -376,6 +557,24 @@ class ChatPanel {
         }
 
         if (response.actions && response.actions.length > 0) {
+          const hasFileAction = response.actions.some(
+            (action) =>
+              action.type === "file" &&
+              typeof action.content === "string" &&
+              action.content.trim().length > 0
+          );
+          if (isEditLikeIntent && !hasFileAction) {
+            this.panel.webview.postMessage({
+              type: "status",
+              text: "Blocked execution: edit requests must include at least one FILE action."
+            });
+            this.panel.webview.postMessage({
+              type: "error",
+              text: "No executable file edits were generated. Please retry with the target file path and expected change."
+            });
+            return;
+          }
+
           if (!workspaceFolder) {
             this.panel.webview.postMessage({
               type: "status",
@@ -413,6 +612,13 @@ class ChatPanel {
                   text: `Skipped folder creation for ${action.path}. Save the draft files where you want them.`
                 });
               } else if (action.type === "cmd") {
+                if (isEditLikeIntent && !hasExplicitCommandRequest) {
+                  this.panel.webview.postMessage({
+                    type: "status",
+                    text: `Suppressed command during edit request: ${action.command}`
+                  });
+                  continue;
+                }
                 this.panel.webview.postMessage({
                   type: "status",
                   text: `Skipped command without workspace: ${action.command}`
@@ -425,17 +631,36 @@ class ChatPanel {
           // Collect outside-workspace file actions and ask permission once
           const outsideFiles = [];
           const insideActions = [];
+          const fileActionPaths = new Set(
+            response.actions
+              .filter((a) => a.type === "file" && a.path)
+              .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
+          );
           for (const action of response.actions) {
             if (action.type === "file") {
-              const probe = await this.agent.applyChanges(action.path, action.content);
+              const probe = await this.agent.applyChanges(
+                action.path,
+                action.content,
+                false,
+                writeOptions
+              );
               if (probe.error === "outside_workspace") {
                 outsideFiles.push({ action, path: probe.path });
               } else {
                 insideActions.push({ action, result: probe });
               }
             } else if (action.type === "mkdir") {
-              // Skip MKDIR if a FILE: action already covers the same path
-              // applyChanges creates parent dirs automatically
+              const mkdirPath = (action.path || "").replace(/\\/g, "/").toLowerCase();
+              const mkdirParent = path.dirname(mkdirPath);
+              if (fileActionPaths.has(mkdirPath) || fileActionPaths.has(mkdirParent)) {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Skipped redundant MKDIR: ${action.path}`
+                });
+                continue;
+              }
+
+              // applyChanges creates parent dirs automatically.
               const probe = await this.agent.createFolder(action.path);
               if (probe.error === "outside_workspace") {
                 outsideFiles.push({ action, path: probe.path });
@@ -443,6 +668,13 @@ class ChatPanel {
                 insideActions.push({ action, result: probe });
               }
             } else if (action.type === "cmd") {
+              if (isEditLikeIntent && !hasExplicitCommandRequest) {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Suppressed command during edit request: ${action.command}`
+                });
+                continue;
+              }
               insideActions.push({ action, result: null });
             }
           }
@@ -470,16 +702,59 @@ class ChatPanel {
             ...insideActions,
             ...outsideFiles.map(f => ({ action: f.action, result: null, outside: true }))
           ];
+          const changedFiles = [];
+          let stopFurtherActions = false;
 
           for (const { action, result: preResult, outside } of allActions) {
+            if (stopFurtherActions) {
+              break;
+            }
             if (action.type === "file") {
               if (outside && !allowOutside) {
                 this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
-              const result = outside
-                ? await this.agent.applyChanges(action.path, action.content, true)
+              let result = outside
+                ? await this.agent.applyChanges(
+                    action.path,
+                    action.content,
+                    true,
+                    writeOptions
+                  )
                 : preResult;
+
+              if (
+                !result.success &&
+                isEditLikeIntent &&
+                this._isReadmePath(action.path) &&
+                this._isDocTruncateGuardError(result.error)
+              ) {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: "README guard blocked truncation. Retrying with strict full-file README rewrite..."
+                });
+                result = await this._retryReadmeRewrite(
+                  trimmedText,
+                  workspaceFolder,
+                  writeOptions
+                );
+                if (!result.success) {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text: `README retry failed: ${result.error}`
+                  });
+                  stopFurtherActions = true;
+                } else {
+                  this.panel.webview.postMessage({
+                    type: "status",
+                    text: "README retry succeeded with a full-file rewrite."
+                  });
+                }
+              }
+
+              if (stopFurtherActions) {
+                break;
+              }
               const operation = result.created ? "Adding file" : "Editing file";
               this.panel.webview.postMessage({ type: "status", text: `${operation}: ${action.path}` });
               this.panel.webview.postMessage({
@@ -492,6 +767,7 @@ class ChatPanel {
                   : result.error
               });
               if (result.success && !outside) {
+                changedFiles.push(result.relativePath || action.path);
                 await this._revealWorkspaceFile(result.path);
               }
               if (result.success && result.syntaxCheckCmd) {
@@ -517,6 +793,13 @@ class ChatPanel {
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
             } else if (action.type === "cmd") {
+              if (isEditLikeIntent && !hasExplicitCommandRequest) {
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Suppressed command during edit request: ${action.command}`
+                });
+                continue;
+              }
               const validation = this.agent.validateCommand(action.command);
               if (!validation.allowed) {
                 this.panel.webview.postMessage({ type: "status", text: `Blocked: ${validation.reason}` });
@@ -530,12 +813,24 @@ class ChatPanel {
               }
               this.panel.webview.postMessage({ type: "status", text: `Running: ${action.command}` });
               const result = await this.agent.executeCommand(action.command, workspaceFolder);
+              const resultText = result.success
+                ? (result.output || "Done.")
+                : `${result.error}${result.output ? `\n${result.output}` : ""}`;
+              const suffix = result.outputTruncated
+                ? "\n[Command output was truncated for safety.]"
+                : "";
               this.panel.webview.postMessage({
                 type: result.success ? "applied" : "error",
-                text: result.success ? (result.output || "Done.") : result.error
+                text: `${resultText}${suffix}`
               });
             }
           }
+
+          if (stopFurtherActions) {
+            return;
+          }
+
+          await this._runPostEditVerification(workspaceFolder, changedFiles);
         }
 
       } else if (message.type === "confirmResponse") {
@@ -587,15 +882,10 @@ class ChatPanel {
           const hasGroqKey = restoredKeys.groq;
           const hasOpenrouterKey = restoredKeys.openrouter;
           const hasAnthropicKey = restoredKeys.anthropic;
-          const modelsByProvider = {
-            groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
-            openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
-            anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
-          };
           const hasKey = (savedConfig.provider === "groq" && hasGroqKey) ||
                          (savedConfig.provider === "openrouter" && hasOpenrouterKey) ||
                          (savedConfig.provider === "anthropic" && hasAnthropicKey);
-          const models = hasKey ? (modelsByProvider[savedConfig.provider] || null) : null;
+          const models = hasKey ? (MODELS_BY_PROVIDER[savedConfig.provider] || null) : null;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
             provider: savedConfig.provider,
@@ -615,6 +905,8 @@ class ChatPanel {
       } else if (message.type === "setProvider") {
         const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
         await cfg.update("provider", message.provider, vscode.ConfigurationTarget.Global);
+        const defaultModel = this._getDefaultModelForProvider(message.provider);
+        await cfg.update("model", defaultModel, vscode.ConfigurationTarget.Global);
         if (message.apiKey && message.provider === "groq") {
           await this._persistApiKey("groq", message.apiKey);
         }
@@ -626,6 +918,12 @@ class ChatPanel {
         }
         // Wait for config to persist before fetching models
         await new Promise(r => setTimeout(r, 300));
+        if (this.panel) {
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `Provider switched to ${message.provider}. Model set to ${defaultModel}.`
+          });
+        }
         await this._fetchAndSendModels();
       }
     });

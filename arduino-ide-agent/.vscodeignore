@@ -1,0 +1,6 @@
+**/*
+!.vscodeignore
+!README.md
+!LICENSE
+!package.json
+!src/**
