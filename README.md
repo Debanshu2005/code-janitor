@@ -1,6 +1,6 @@
 # Code Janitor
 
-![VS Code](https://img.shields.io/badge/VS Code-%3E%3D1.80-blue?logo=visual-studio-code)
+![VS Code](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
 ![Node](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
