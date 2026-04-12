@@ -37,7 +37,6 @@
         overflow: hidden;
       }
 
-      /* Header */
       #header {
         padding: 11px 20px;
         background: var(--sidebar-bg);
@@ -80,7 +79,6 @@
         background: var(--hover-bg);
       }
 
-      /* Branch info */
       #branch-info {
         padding: 8px 20px;
         background: var(--sidebar-bg);
@@ -121,7 +119,14 @@
         background: var(--hover-bg);
       }
 
-      /* Commit section */
+      #merge-banner {
+        padding: 12px 20px;
+        background: rgba(244, 135, 113, 0.15);
+        border-bottom: 1px solid var(--deleted);
+        color: var(--deleted);
+        display: none;
+      }
+
       #commit-section {
         padding: 8px 20px 12px;
         background: var(--sidebar-bg);
@@ -181,7 +186,6 @@
         cursor: not-allowed;
       }
 
-      /* Changes list */
       #changes-container {
         flex: 1;
         overflow-y: auto;
@@ -269,9 +273,9 @@
         background: var(--hover-bg);
       }
 
-      .file-item.selected {
-        background: var(--hover-bg);
-        border-left-color: var(--accent);
+      .file-item.conflict {
+        background: rgba(244, 135, 113, 0.1);
+        border-left-color: var(--deleted);
       }
 
       .file-status {
@@ -338,7 +342,6 @@
         background: var(--input-bg);
       }
 
-      /* Empty state */
       .empty-state {
         padding: 40px 20px;
         text-align: center;
@@ -380,7 +383,6 @@
         background: var(--accent-hover);
       }
 
-      /* Status message */
       #status-bar {
         padding: 6px 20px;
         background: var(--sidebar-bg);
@@ -403,16 +405,141 @@
         color: var(--added);
         background: rgba(115, 201, 145, 0.1);
       }
+
+      #commit-graph {
+        border-top: 1px solid var(--border);
+        background: var(--sidebar-bg);
+        display: none;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      #commit-graph::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      #commit-graph::-webkit-scrollbar-thumb {
+        background: #424242;
+      }
+
+      .graph-header {
+        padding: 8px 20px;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .commit-item {
+        padding: 8px 20px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        cursor: pointer;
+        transition: background 0.1s;
+      }
+
+      .commit-item:hover {
+        background: var(--hover-bg);
+      }
+
+      .commit-graph-line {
+        width: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding-top: 4px;
+        flex-shrink: 0;
+      }
+
+      .commit-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid var(--sidebar-bg);
+        box-shadow: 0 0 0 1px var(--accent);
+      }
+
+      .commit-dot.branch {
+        background: var(--added);
+        box-shadow: 0 0 0 1px var(--added);
+      }
+
+      .commit-line {
+        width: 2px;
+        flex: 1;
+        background: var(--border);
+        min-height: 20px;
+      }
+
+      .commit-content {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .commit-message {
+        font-size: 13px;
+        color: var(--text);
+        margin-bottom: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .commit-meta {
+        font-size: 11px;
+        color: var(--text-secondary);
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .commit-author {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .commit-hash {
+        font-family: monospace;
+        background: var(--input-bg);
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+      }
+
+      .commit-branch {
+        background: var(--added);
+        color: #000;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+
+      .commit-time {
+        margin-left: auto;
+      }
     </style>
   </head>
   <body>
     <div id="header">
       <div id="header-title">Source Control</div>
       <div id="header-actions">
-        <button class="icon-btn" id="btn-refresh" title="Refresh">🔄</button>
-        <button class="icon-btn" id="btn-pull" title="Pull">⬇️</button>
-        <button class="icon-btn" id="btn-push" title="Push">⬆️</button>
-        <button class="icon-btn" id="btn-fetch" title="Fetch">📥</button>
+        <button class="icon-btn" id="btn-sync" title="Sync Changes">🔄</button>
+        <button class="icon-btn" id="btn-refresh" title="Refresh">↻</button>
+        <button class="icon-btn" id="btn-more" title="More">⋯</button>
       </div>
     </div>
 
@@ -427,18 +554,64 @@
       </div>
     </div>
 
+    <div id="merge-banner">
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+        "
+      >
+        <div
+          style="display: flex; align-items: center; gap: 8px; font-weight: 600"
+        >
+          <span>⚠️</span>
+          <span>Merge Conflicts</span>
+        </div>
+        <button
+          class="small-btn"
+          id="btn-abort-merge"
+          style="border-color: var(--deleted); color: var(--deleted)"
+        >
+          Abort Merge
+        </button>
+      </div>
+      <div style="font-size: 12px; margin-bottom: 8px" id="conflict-msg">
+        Resolve conflicts before committing
+      </div>
+      <div style="display: flex; gap: 8px">
+        <button
+          class="small-btn"
+          id="btn-accept-incoming"
+          style="background: var(--input-bg)"
+        >
+          Accept Incoming
+        </button>
+        <button
+          class="small-btn"
+          id="btn-accept-current"
+          style="background: var(--input-bg)"
+        >
+          Accept Current
+        </button>
+        <button
+          class="small-btn"
+          id="btn-accept-both"
+          style="background: var(--input-bg)"
+        >
+          Accept Both
+        </button>
+      </div>
+    </div>
+
     <div id="commit-section" style="display: none">
       <textarea
         id="commit-input"
-        placeholder="Message (Ctrl+Enter to commit)"
+        placeholder="Message (Ctrl+Enter to commit all)"
       ></textarea>
       <div id="commit-actions">
-        <button class="commit-btn" id="btn-commit">Commit</button>
-        <span
-          id="commit-hint"
-          style="font-size: 11px; color: var(--text-secondary); display: none"
-          >Stage changes first</span
-        >
+        <button class="commit-btn" id="btn-commit">Commit All</button>
       </div>
     </div>
 
@@ -450,8 +623,25 @@
           <button class="empty-btn" id="btn-open-folder">Open Folder</button>
           <button class="empty-btn" id="btn-clone">Clone Repository</button>
           <button class="empty-btn" id="btn-init">Initialize Repository</button>
-          <button class="empty-btn" id="btn-refresh-manual">🔄 Refresh</button>
         </div>
+      </div>
+
+      <div id="conflict-section" class="changes-section" style="display: none">
+        <div
+          class="section-header"
+          style="background: rgba(244, 135, 113, 0.1)"
+        >
+          <div>
+            <span style="color: var(--deleted)">⚠️ Conflicts</span>
+            <span
+              class="section-count"
+              id="conflict-count"
+              style="background: var(--deleted); color: #fff"
+              >0</span
+            >
+          </div>
+        </div>
+        <div id="conflict-list"></div>
       </div>
 
       <div id="staged-section" class="changes-section" style="display: none">
@@ -496,146 +686,186 @@
 
     <div id="status-bar"></div>
 
+    <div id="commit-graph">
+    <div class="graph-header" id="graph-toggle">
+    <span>📊 Commits</span>
+    <span id="graph-arrow">▼</span>
+    </div>
+    <div id="commit-list"></div>
+    </div>
+
     <script>
-      const vscode = acquireVsCodeApi();
+    const vscode = acquireVsCodeApi();
 
-      const branchInfo = document.getElementById("branch-info");
-      const branchText = document.getElementById("branch-text");
-      const commitSection = document.getElementById("commit-section");
-      const commitInput = document.getElementById("commit-input");
-      const btnCommit = document.getElementById("btn-commit");
-      const commitHint = document.getElementById("commit-hint");
-      const stagedSection = document.getElementById("staged-section");
-      const unstagedSection = document.getElementById("unstaged-section");
-      const stagedList = document.getElementById("staged-list");
-      const unstagedList = document.getElementById("unstaged-list");
-      const stagedCount = document.getElementById("staged-count");
-      const unstagedCount = document.getElementById("unstaged-count");
-      const noRepo = document.getElementById("no-repo");
-      const noChanges = document.getElementById("no-changes");
-      const statusBar = document.getElementById("status-bar");
+    function showStatus(text, type = "info") {
+    const statusBar = document.getElementById("status-bar");
+    statusBar.textContent = text;
+    statusBar.className = "visible " + type;
+    setTimeout(() => statusBar.classList.remove("visible"), 5000);
+    }
 
-      function showStatus(text, type = "info") {
-        statusBar.textContent = text;
-        statusBar.className = "visible " + type;
-        setTimeout(() => {
-          statusBar.classList.remove("visible");
-        }, 5000);
-      }
+    function getStatusIcon(status) {
+    if (status === "M") return { icon: "M", class: "modified" };
+    if (status === "A") return { icon: "A", class: "added" };
+    if (status === "D") return { icon: "D", class: "deleted" };
+    if (status === "?") return { icon: "U", class: "untracked" };
+    return { icon: "M", class: "modified" };
+    }
 
-      function getStatusIcon(status) {
-        if (status === "M") return { icon: "M", class: "modified" };
-        if (status === "A") return { icon: "A", class: "added" };
-        if (status === "D") return { icon: "D", class: "deleted" };
-        if (status === "?") return { icon: "U", class: "untracked" };
-        return { icon: "M", class: "modified" };
-      }
+    function createFileItem(file, status, isStaged, isConflict = false) {
+    const item = document.createElement("div");
+    item.className = "file-item" + (isConflict ? " conflict" : "");
 
-      function createFileItem(file, status, isStaged) {
-        const item = document.createElement("div");
-        item.className = "file-item";
+    const statusInfo = isConflict
+    ? { icon: "!", class: "deleted" }
+    : getStatusIcon(status);
+    const statusEl = document.createElement("div");
+    statusEl.className = `file-status ${statusInfo.class}`;
+    statusEl.textContent = statusInfo.icon;
 
-        const statusInfo = getStatusIcon(status);
-        const statusEl = document.createElement("div");
-        statusEl.className = `file-status ${statusInfo.class}`;
-        statusEl.textContent = statusInfo.icon;
+    const nameEl = document.createElement("div");
+    nameEl.className = "file-name";
+    nameEl.textContent = file;
+    nameEl.title = file;
 
-        const nameEl = document.createElement("div");
-        nameEl.className = "file-name";
-        nameEl.textContent = file;
-        nameEl.title = file;
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "file-actions";
 
-        const actionsEl = document.createElement("div");
-        actionsEl.className = "file-actions";
+    if (isConflict) {
+    const resolveBtn = document.createElement("button");
+    resolveBtn.className = "file-action";
+    resolveBtn.textContent = "✓";
+    resolveBtn.title = "Mark Resolved";
+    resolveBtn.onclick = (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ type: "resolveConflict", file });
+    };
+    actionsEl.appendChild(resolveBtn);
+    } else {
+    const stageBtn = document.createElement("button");
+    stageBtn.className = "file-action";
+    stageBtn.textContent = isStaged ? "−" : "+";
+    stageBtn.title = isStaged ? "Unstage" : "Stage";
+    stageBtn.onclick = (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ type: isStaged ? "unstage" : "stage", file });
+    };
 
-        const stageBtn = document.createElement("button");
-        stageBtn.className = "file-action";
-        stageBtn.textContent = isStaged ? "−" : "+";
-        stageBtn.title = isStaged ? "Unstage" : "Stage";
-        stageBtn.onclick = (e) => {
-          e.stopPropagation();
-          vscode.postMessage({ type: isStaged ? "unstage" : "stage", file });
-        };
+    if (!isStaged && status !== "?") {
+    const discardBtn = document.createElement("button");
+    discardBtn.className = "file-action";
+    discardBtn.textContent = "↶";
+    discardBtn.title = "Discard";
+    discardBtn.onclick = (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ type: "discardChanges", file });
+    };
+    actionsEl.appendChild(discardBtn);
+    }
 
-        if (!isStaged && status !== "?") {
-          const discardBtn = document.createElement("button");
-          discardBtn.className = "file-action";
-          discardBtn.textContent = "↶";
-          discardBtn.title = "Discard Changes";
-          discardBtn.onclick = (e) => {
-            e.stopPropagation();
-            vscode.postMessage({ type: "discardChanges", file });
-          };
-          actionsEl.appendChild(discardBtn);
-        }
+    actionsEl.appendChild(stageBtn);
+    }
 
-        actionsEl.appendChild(stageBtn);
+    item.appendChild(statusEl);
+    item.appendChild(nameEl);
+    item.appendChild(actionsEl);
 
-        item.appendChild(statusEl);
-        item.appendChild(nameEl);
-        item.appendChild(actionsEl);
+    item.onclick = () => vscode.postMessage({ type: "openFile", file });
 
-        item.onclick = () => {
-          vscode.postMessage({ type: "openFile", file });
-        };
+    return item;
+    }
 
-        return item;
-      }
+    window.addEventListener("message", (event) => {
+    const msg = event.data;
 
-      window.addEventListener("message", (event) => {
-        const msg = event.data;
+    if (msg.type === "updateStatus") {
+    document.getElementById("no-repo").style.display = "none";
+    document.getElementById("branch-info").style.display = "flex";
+    document.getElementById("commit-section").style.display = "block";
+    document.getElementById("commit-graph").style.display = "block";
+    document.getElementById("branch-text").textContent = msg.branch;
 
-        if (msg.type === "updateStatus") {
-          noRepo.style.display = "none";
-          branchInfo.style.display = "flex";
-          commitSection.style.display = "block";
-          branchText.textContent = msg.branch;
+    document.getElementById("staged-list").innerHTML = "";
+    document.getElementById("unstaged-list").innerHTML = "";
+    document.getElementById("conflict-list").innerHTML = "";
 
-          stagedList.innerHTML = "";
-          unstagedList.innerHTML = "";
+    const hasConflicts = msg.conflicts && msg.conflicts.length > 0;
+    document.getElementById("merge-banner").style.display = hasConflicts
+    ? "block"
+    : "none";
 
-          if (msg.staged.length === 0 && msg.unstaged.length === 0) {
-            stagedSection.style.display = "none";
-            unstagedSection.style.display = "none";
-            noChanges.style.display = "block";
-          } else {
-            noChanges.style.display = "none";
+    if (hasConflicts) {
+    document.getElementById("conflict-msg").textContent =
+    `${msg.conflicts.length} file(s) with conflicts`;
+    document.getElementById("conflict-section").style.display = "block";
+    document.getElementById("conflict-count").textContent =
+    msg.conflicts.length;
+    msg.conflicts.forEach((file) => {
+    document
+    .getElementById("conflict-list")
+    .appendChild(createFileItem(file, "U", false, true));
+    });
+    } else {
+    document.getElementById("conflict-section").style.display = "none";
+    }
 
-            if (msg.staged.length > 0) {
-              stagedSection.style.display = "block";
-              stagedCount.textContent = msg.staged.length;
-              msg.staged.forEach((item) => {
-                stagedList.appendChild(
-                  createFileItem(item.file, item.status, true),
-                );
-              });
-            } else {
-              stagedSection.style.display = "none";
-            }
+    if (
+    msg.staged.length === 0 &&
+    msg.unstaged.length === 0 &&
+    !hasConflicts
+    ) {
+    document.getElementById("staged-section").style.display = "none";
+    document.getElementById("unstaged-section").style.display = "none";
+    document.getElementById("no-changes").style.display = "block";
+    } else {
+    document.getElementById("no-changes").style.display = "none";
 
-            if (msg.unstaged.length > 0) {
-              unstagedSection.style.display = "block";
-              unstagedCount.textContent = msg.unstaged.length;
-              msg.unstaged.forEach((item) => {
-                unstagedList.appendChild(
-                  createFileItem(item.file, item.status, false),
-                );
-              });
-            } else {
-              unstagedSection.style.display = "none";
-            }
-          }
+    if (msg.staged.length > 0) {
+    document.getElementById("staged-section").style.display = "block";
+    document.getElementById("staged-count").textContent =
+    msg.staged.length;
+    msg.staged.forEach((item) => {
+    document
+    .getElementById("staged-list")
+    .appendChild(createFileItem(item.file, item.status, true));
+    });
+    } else {
+    document.getElementById("staged-section").style.display = "none";
+    }
 
-          btnCommit.disabled = msg.staged.length === 0;
-          commitHint.style.display =
-            msg.staged.length === 0 ? "inline" : "none";
-        } else if (msg.type === "noRepo") {
-          noRepo.style.display = "block";
-          branchInfo.style.display = "none";
-          commitSection.style.display = "none";
-          stagedSection.style.display = "none";
-          unstagedSection.style.display = "none";
-          noChanges.style.display = "none";
+    if (msg.unstaged.length > 0) {
+    document.getElementById("unstaged-section").style.display =
+    "block";
+    document.getElementById("unstaged-count").textContent =
+    msg.unstaged.length;
+    msg.unstaged.forEach((item) => {
+    document
+    .getElementById("unstaged-list")
+    .appendChild(createFileItem(item.file, item.status, false));
+    });
+    } else {
+    document.getElementById("unstaged-section").style.display =
+    "none";
+    }
+    }
+
+    document.getElementById("btn-commit").disabled =
+    (msg.staged.length === 0 && msg.unstaged.length === 0) ||
+    hasConflicts;
+
+    if (msg.commits) {
+    renderCommits(msg.commits);
+    }
+    } else if (msg.type === "noRepo") {
+    document.getElementById("no-repo").style.display = "block";
+    document.getElementById("branch-info").style.display = "none";
+    document.getElementById("commit-section").style.display = "none";
+          document.getElementById("staged-section").style.display = "none";
+          document.getElementById("unstaged-section").style.display = "none";
+          document.getElementById("conflict-section").style.display = "none";
+          document.getElementById("merge-banner").style.display = "none";
+          document.getElementById("no-changes").style.display = "none";
+          document.getElementById("commit-graph").style.display = "none";
         } else if (msg.type === "status") {
           showStatus(msg.text, "info");
         } else if (msg.type === "error") {
@@ -643,67 +873,130 @@
         }
       });
 
-      document.getElementById("btn-refresh").onclick = () => {
+      function renderCommits(commits) {
+        const commitList = document.getElementById("commit-list");
+        commitList.innerHTML = "";
+
+        commits.forEach((commit, index) => {
+          const item = document.createElement("div");
+          item.className = "commit-item";
+
+          const graphLine = document.createElement("div");
+          graphLine.className = "commit-graph-line";
+
+          const dot = document.createElement("div");
+          dot.className = "commit-dot" + (commit.branches && commit.branches.length > 0 ? " branch" : "");
+          graphLine.appendChild(dot);
+
+          if (index < commits.length - 1) {
+            const line = document.createElement("div");
+            line.className = "commit-line";
+            graphLine.appendChild(line);
+          }
+
+          const content = document.createElement("div");
+          content.className = "commit-content";
+
+          const message = document.createElement("div");
+          message.className = "commit-message";
+          message.textContent = commit.message;
+
+          const meta = document.createElement("div");
+          meta.className = "commit-meta";
+
+          const author = document.createElement("div");
+          author.className = "commit-author";
+          author.innerHTML = `<span>👤</span><span>${commit.author}</span>`;
+
+          const hash = document.createElement("span");
+          hash.className = "commit-hash";
+          hash.textContent = commit.hash;
+
+          const time = document.createElement("span");
+          time.className = "commit-time";
+          time.textContent = commit.time;
+
+          meta.appendChild(author);
+          meta.appendChild(hash);
+
+          if (commit.branches && commit.branches.length > 0) {
+            commit.branches.forEach(branch => {
+              const branchTag = document.createElement("span");
+              branchTag.className = "commit-branch";
+              branchTag.textContent = branch;
+              meta.appendChild(branchTag);
+            });
+          }
+
+          meta.appendChild(time);
+
+          content.appendChild(message);
+          content.appendChild(meta);
+
+          item.appendChild(graphLine);
+          item.appendChild(content);
+
+          item.onclick = () => vscode.postMessage({ type: "viewCommit", hash: commit.hash });
+
+          commitList.appendChild(item);
+        });
+      }
+
+      document.getElementById("graph-toggle").onclick = () => {
+        const commitList = document.getElementById("commit-list");
+        const arrow = document.getElementById("graph-arrow");
+        if (commitList.style.display === "none") {
+          commitList.style.display = "block";
+          arrow.textContent = "▼";
+        } else {
+          commitList.style.display = "none";
+          arrow.textContent = "▶";
+        }
+      };
+
+      document.getElementById("btn-sync").onclick = () =>
+        vscode.postMessage({ type: "sync" });
+      document.getElementById("btn-refresh").onclick = () =>
         vscode.postMessage({ type: "refresh" });
-      };
-
-      document.getElementById("btn-pull").onclick = () => {
-        vscode.postMessage({ type: "pull" });
-      };
-
-      document.getElementById("btn-push").onclick = () => {
-        vscode.postMessage({ type: "push" });
-      };
-
-      document.getElementById("btn-fetch").onclick = () => {
-        vscode.postMessage({ type: "fetch" });
-      };
-
-      document.getElementById("btn-checkout").onclick = () => {
+      document.getElementById("btn-more").onclick = () =>
+        vscode.postMessage({ type: "more" });
+      document.getElementById("btn-checkout").onclick = () =>
         vscode.postMessage({ type: "checkout" });
-      };
-
-      document.getElementById("btn-new-branch").onclick = () => {
+      document.getElementById("btn-new-branch").onclick = () =>
         vscode.postMessage({ type: "createBranch" });
-      };
-
-      btnCommit.onclick = () => {
-        const message = commitInput.value.trim();
+      document.getElementById("btn-commit").onclick = () => {
+        const message = document.getElementById("commit-input").value.trim();
         if (message) {
           vscode.postMessage({ type: "commit", message });
-          commitInput.value = "";
+          document.getElementById("commit-input").value = "";
         }
       };
-
-      document.getElementById("btn-stage-all").onclick = () => {
+      document.getElementById("btn-stage-all").onclick = () =>
         vscode.postMessage({ type: "stageAll" });
-      };
-
-      document.getElementById("btn-unstage-all").onclick = () => {
+      document.getElementById("btn-unstage-all").onclick = () =>
         vscode.postMessage({ type: "unstageAll" });
-      };
-
-      document.getElementById("btn-open-folder").onclick = () => {
+      document.getElementById("btn-open-folder").onclick = () =>
         vscode.postMessage({ type: "openFolder" });
-      };
-
-      document.getElementById("btn-clone").onclick = () => {
+      document.getElementById("btn-clone").onclick = () =>
         vscode.postMessage({ type: "clone" });
-      };
-
-      document.getElementById("btn-init").onclick = () => {
+      document.getElementById("btn-init").onclick = () =>
         vscode.postMessage({ type: "init" });
-      };
+      document.getElementById("btn-abort-merge").onclick = () =>
+        vscode.postMessage({ type: "abortMerge" });
+      document.getElementById("btn-accept-incoming").onclick = () =>
+        vscode.postMessage({ type: "acceptIncoming" });
+      document.getElementById("btn-accept-current").onclick = () =>
+        vscode.postMessage({ type: "acceptCurrent" });
+      document.getElementById("btn-accept-both").onclick = () =>
+        vscode.postMessage({ type: "acceptBoth" });
 
-      document.getElementById("btn-refresh-manual").onclick = () => {
-        vscode.postMessage({ type: "refresh" });
-      };
-
-      commitInput.addEventListener("keydown", (e) => {
-        if (e.ctrlKey && e.key === "Enter") {
-          btnCommit.click();
-        }
-      });
+      document
+        .getElementById("commit-input")
+        .addEventListener("keydown", (e) => {
+          if (e.ctrlKey && e.key === "Enter") {
+            document.getElementById("btn-commit").click();
+          }
+        });
 
       vscode.postMessage({ type: "ready" });
     </script>

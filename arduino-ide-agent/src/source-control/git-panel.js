@@ -50,6 +50,10 @@ class GitPanel {
     try {
       if (type === "ready") {
         await this.refreshStatus();
+      } else if (type === "sync") {
+        await this.gitSync();
+      } else if (type === "more") {
+        await this.showMoreMenu();
       } else if (type === "clone") {
         await this.cloneRepository();
       } else if (type === "init") {
@@ -84,6 +88,20 @@ class GitPanel {
         await this.createBranch();
       } else if (type === "gitConfig") {
         await this.configureGit();
+      } else if (type === "abortMerge") {
+        await this.abortMerge();
+      } else if (type === "resolveConflict") {
+        await this.resolveConflict(msg.file);
+      } else if (type === "acceptIncoming") {
+        await this.acceptIncoming();
+      } else if (type === "acceptCurrent") {
+        await this.acceptCurrent();
+      } else if (type === "acceptBoth") {
+        await this.acceptBoth();
+      } else if (type === "viewCommit") {
+        await this.viewCommit(msg.hash);
+      } else if (type === "openFolder") {
+        await this.openFolder();
       }
     } catch (error) {
       this.sendMessage({
@@ -172,6 +190,200 @@ class GitPanel {
       await this.refreshStatus();
     } catch (error) {
       this.sendMessage({ type: "error", text: `Init failed: ${error.message}` });
+    }
+  }
+
+  async gitSync() {
+    this.sendMessage({ type: "status", text: "Syncing changes..." });
+
+    try {
+      await this.gitPull();
+      await this.gitPush();
+      this.sendMessage({ type: "status", text: "✓ Sync complete" });
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Sync failed: ${error.message}` });
+    }
+  }
+
+  async showMoreMenu() {
+    const options = [
+      "Pull",
+      "Push",
+      "Fetch",
+      "Sync",
+      "---",
+      "Open Folder",
+      "Stash Changes",
+      "Pop Stash",
+      "---",
+      "View History",
+      "Configure Git"
+    ];
+
+    const selected = await vscode.window.showQuickPick(options.filter(o => o !== "---"), {
+      placeHolder: "Select Git action"
+    });
+
+    if (!selected) return;
+
+    switch (selected) {
+      case "Pull": await this.gitPull(); break;
+      case "Push": await this.gitPush(); break;
+      case "Fetch": await this.gitFetch(); break;
+      case "Sync": await this.gitSync(); break;
+      case "Open Folder": await this.openFolder(); break;
+      case "Stash Changes": await this.stashChanges(); break;
+      case "Pop Stash": await this.popStash(); break;
+      case "View History": await this.viewHistory(); break;
+      case "Configure Git": await this.configureGit(); break;
+    }
+  }
+
+  async openFolder() {
+    const folderUri = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: "Open Folder",
+    });
+
+    if (folderUri && folderUri.length > 0) {
+      await vscode.commands.executeCommand("vscode.openFolder", folderUri[0]);
+    }
+  }
+
+  async stashChanges() {
+    try {
+      await this.executeGit("stash");
+      this.sendMessage({ type: "status", text: "✓ Changes stashed" });
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Stash failed: ${error.message}` });
+    }
+  }
+
+  async popStash() {
+    try {
+      await this.executeGit("stash pop");
+      this.sendMessage({ type: "status", text: "✓ Stash applied" });
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Pop stash failed: ${error.message}` });
+    }
+  }
+
+  async viewHistory() {
+    try {
+      const log = await this.executeGit("log --oneline -20");
+      vscode.window.showInformationMessage("Recent commits:", { modal: true, detail: log });
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `View history failed: ${error.message}` });
+    }
+  }
+
+  async abortMerge() {
+    try {
+      await this.executeGit("merge --abort");
+      this.sendMessage({ type: "status", text: "✓ Merge aborted" });
+      vscode.window.showInformationMessage("Merge aborted successfully");
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Abort merge failed: ${error.message}` });
+    }
+  }
+
+  async resolveConflict(file) {
+    try {
+      await this.executeGit(`add "${file}"`);
+      this.sendMessage({ type: "status", text: `✓ Marked ${file} as resolved` });
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Resolve failed: ${error.message}` });
+    }
+  }
+
+  async acceptIncoming() {
+    try {
+      const conflicts = await this.executeGit("diff --name-only --diff-filter=U");
+      if (!conflicts.trim()) {
+        vscode.window.showWarningMessage("No conflicts to resolve");
+        return;
+      }
+
+      const files = conflicts.split("\n").filter(f => f.trim());
+      for (const file of files) {
+        await this.executeGit(`checkout --theirs "${file}"`);
+        await this.executeGit(`add "${file}"`);
+      }
+
+      this.sendMessage({ type: "status", text: "✓ Accepted incoming changes" });
+      vscode.window.showInformationMessage("Accepted all incoming changes");
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Accept incoming failed: ${error.message}` });
+    }
+  }
+
+  async acceptCurrent() {
+    try {
+      const conflicts = await this.executeGit("diff --name-only --diff-filter=U");
+      if (!conflicts.trim()) {
+        vscode.window.showWarningMessage("No conflicts to resolve");
+        return;
+      }
+
+      const files = conflicts.split("\n").filter(f => f.trim());
+      for (const file of files) {
+        await this.executeGit(`checkout --ours "${file}"`);
+        await this.executeGit(`add "${file}"`);
+      }
+
+      this.sendMessage({ type: "status", text: "✓ Accepted current changes" });
+      vscode.window.showInformationMessage("Accepted all current changes");
+      await this.refreshStatus();
+    } catch (error) {
+      this.sendMessage({ type: "error", text: `Accept current failed: ${error.message}` });
+    }
+  }
+
+  async acceptBoth() {
+    vscode.window.showInformationMessage(
+      "Accept Both requires manual editing. Open conflicted files and resolve manually.",
+      "OK"
+    );
+  }
+
+  async viewCommit(hash) {
+    try {
+      const details = await this.executeGit(`show ${hash} --stat`);
+      const panel = vscode.window.createWebviewPanel(
+        "commitDetails",
+        `Commit ${hash}`,
+        vscode.ViewColumn.Two,
+        {}
+      );
+      panel.webview.html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { 
+              font-family: monospace; 
+              padding: 20px; 
+              background: #1e1e1e; 
+              color: #cccccc; 
+            }
+            pre { 
+              white-space: pre-wrap; 
+              word-wrap: break-word; 
+            }
+          </style>
+        </head>
+        <body><pre>${details.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre></body>
+        </html>
+      `;
+    } catch (error) {
+      vscode.window.showErrorMessage(`View commit failed: ${error.message}`);
     }
   }
 
@@ -425,16 +637,39 @@ class GitPanel {
     console.log("[Git Panel] Starting commit process...");
 
     try {
-      // First, stage all changes
-      console.log("[Git Panel] Staging all changes...");
-      await this.executeGit("add -A");
+      // Check if we're in the middle of a merge
+      const fs = require("fs");
+      const gitRoot = this.gitRoot || this.getWorkspaceFolder();
+      const mergeHeadPath = require("path").join(gitRoot, ".git", "MERGE_HEAD");
+      const isMerging = fs.existsSync(mergeHeadPath);
+      
+      if (isMerging) {
+        console.log("[Git Panel] In merge state, checking for conflicts...");
+        // Check for unresolved conflicts
+        const conflicts = await this.executeGit("diff --name-only --diff-filter=U");
+        if (conflicts.trim()) {
+          console.log("[Git Panel] Unresolved conflicts found:", conflicts);
+          this.sendMessage({ type: "error", text: "Resolve conflicts before committing" });
+          vscode.window.showErrorMessage(
+            `Cannot commit: You have unresolved conflicts in:\n${conflicts}\n\nResolve conflicts, then stage and commit.`
+          );
+          return;
+        }
+        // If no conflicts, stage all and commit to complete the merge
+        console.log("[Git Panel] No conflicts, completing merge commit...");
+        await this.executeGit("add -A");
+      } else {
+        // Normal commit - stage all changes
+        console.log("[Git Panel] Staging all changes...");
+        await this.executeGit("add -A");
+      }
       
       // Check if there are any changes to commit
       console.log("[Git Panel] Checking for changes...");
       const status = await this.executeGit("status --porcelain");
       console.log("[Git Panel] Status:", status);
       
-      if (!status.trim()) {
+      if (!status.trim() && !isMerging) {
         console.log("[Git Panel] No changes to commit");
         this.sendMessage({ type: "error", text: "No changes to commit" });
         vscode.window.showWarningMessage("No changes to commit. Modify files first.");
@@ -466,7 +701,8 @@ class GitPanel {
       const result = await this.executeGit(`commit -m "${message.replace(/"/g, '\\"')}"`);
       console.log("[Git Panel] Commit result:", result);
       
-      this.sendMessage({ type: "status", text: "✓ Changes committed" });
+      const commitMsg = isMerging ? "✓ Merge commit completed" : "✓ Changes committed";
+      this.sendMessage({ type: "status", text: commitMsg });
       vscode.window.showInformationMessage(`Committed: ${message}`);
       
       console.log("[Git Panel] Refreshing status...");
@@ -732,7 +968,19 @@ class GitPanel {
       const status = await this.executeGit("status --porcelain", gitRoot);
       const branch = await this.executeGit("rev-parse --abbrev-ref HEAD", gitRoot);
       
+      // Check for conflicts
+      let conflicts = [];
+      try {
+        const conflictFiles = await this.executeGit("diff --name-only --diff-filter=U", gitRoot);
+        if (conflictFiles.trim()) {
+          conflicts = conflictFiles.split("\n").filter(f => f.trim());
+        }
+      } catch (e) {
+        // No conflicts
+      }
+      
       console.log("[Git Panel] Git status successful. Branch:", branch);
+      console.log("[Git Panel] Conflicts:", conflicts.length);
       
       const staged = [];
       const unstaged = [];
@@ -752,6 +1000,36 @@ class GitPanel {
 
       console.log("[Git Panel] Staged:", staged.length, "Unstaged:", unstaged.length);
 
+      // Get commit history
+      let commits = [];
+      try {
+        const logOutput = await this.executeGit(
+          'log --all --pretty=format:"%H|%an|%ar|%s|%D" -20',
+          gitRoot
+        );
+        
+        if (logOutput.trim()) {
+          commits = logOutput.split("\n").map(line => {
+            const [hash, author, time, message, refs] = line.split("|");
+            const branches = refs ? refs.split(", ").filter(r => 
+              r.includes("HEAD") || r.startsWith("origin/") || (!r.includes("tag:") && !r.includes("HEAD"))
+            ).map(r => r.replace("HEAD -> ", "").replace("origin/", "").trim()) : [];
+            
+            return {
+              hash: hash.substring(0, 7),
+              author,
+              time,
+              message,
+              branches: branches.filter(b => b)
+            };
+          });
+        }
+      } catch (e) {
+        console.log("[Git Panel] Could not fetch commit history:", e.message);
+      }
+
+      console.log("[Git Panel] Commits:", commits.length);
+
       // Store the git root for future operations
       this.gitRoot = gitRoot;
 
@@ -760,6 +1038,8 @@ class GitPanel {
         branch,
         staged,
         unstaged,
+        conflicts,
+        commits,
         gitRoot: gitRoot,
       });
     } catch (error) {
