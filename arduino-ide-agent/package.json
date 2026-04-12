@@ -2,7 +2,7 @@
   "name": "code-janitor-arduino-ai-agent",
   "displayName": "Code Janitor Arduino AI Agent",
   "description": "Arduino-focused AI coding assistant from Code Janitor for Arduino IDE 2.x (VSIX plugin).",
-  "version": "1.0.2",
+  "version": "1.1.9",
   "publisher": "Debanshu2005",
   "repository": {
     "type": "git",
@@ -20,6 +20,7 @@
   "main": "./src/extension.js",
   "activationEvents": [
     "onCommand:codeJanitorArduino.openChat",
+    "onCommand:codeJanitorArduino.openSourceControl",
     "onStartupFinished"
   ],
   "contributes": {
@@ -79,12 +80,20 @@
         "command": "codeJanitorArduino.openChat",
         "title": "Open Arduino AI Chat",
         "category": "Code Janitor Arduino"
+      },
+      {
+        "command": "codeJanitorArduino.openSourceControl",
+        "title": "Open Source Control",
+        "category": "Code Janitor Arduino"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "codeJanitorArduino.openChat"
+        },
+        {
+          "command": "codeJanitorArduino.openSourceControl"
         }
       ]
     },
@@ -93,6 +102,11 @@
         "command": "codeJanitorArduino.openChat",
         "key": "ctrl+alt+a",
         "mac": "cmd+alt+a"
+      },
+      {
+        "command": "codeJanitorArduino.openSourceControl",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g"
       }
     ]
   },

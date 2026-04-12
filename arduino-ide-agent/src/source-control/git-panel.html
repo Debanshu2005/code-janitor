@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #1e1e1e;
+        --sidebar-bg: #252526;
+        --input-bg: #3c3c3c;
+        --hover-bg: #2a2d2e;
+        --border: #3e3e42;
+        --text: #cccccc;
+        --text-secondary: #858585;
+        --accent: #007acc;
+        --accent-hover: #1c97ea;
+        --modified: #e2c08d;
+        --added: #73c991;
+        --deleted: #f48771;
+        --untracked: #73c991;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--sidebar-bg);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        overflow: hidden;
+      }
+
+      /* Header */
+      #header {
+        padding: 11px 20px;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+      }
+
+      #header-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      #header-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .icon-btn {
+        width: 28px;
+        height: 28px;
+        background: transparent;
+        color: var(--text);
+        border: none;
+        border-radius: 5px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background 0.1s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .icon-btn:hover {
+        background: var(--hover-bg);
+      }
+
+      /* Branch info */
+      #branch-info {
+        padding: 8px 20px;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      #branch-name {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--text);
+        font-weight: 400;
+      }
+
+      #branch-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .small-btn {
+        padding: 3px 8px;
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.1s;
+        font-weight: 400;
+      }
+
+      .small-btn:hover {
+        background: var(--hover-bg);
+      }
+
+      /* Commit section */
+      #commit-section {
+        padding: 8px 20px 12px;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+
+      #commit-input {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--input-bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 2px;
+        font-size: 13px;
+        resize: vertical;
+        min-height: 50px;
+        font-family: inherit;
+        transition: border-color 0.1s;
+      }
+
+      #commit-input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      #commit-input::placeholder {
+        color: var(--text-secondary);
+      }
+
+      #commit-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        align-items: center;
+      }
+
+      .commit-btn {
+        padding: 6px 14px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 2px;
+        font-size: 13px;
+        font-weight: 400;
+        cursor: pointer;
+        transition: background 0.1s;
+      }
+
+      .commit-btn:hover {
+        background: var(--accent-hover);
+      }
+
+      .commit-btn:disabled {
+        background: var(--input-bg);
+        color: var(--text-secondary);
+        cursor: not-allowed;
+      }
+
+      /* Changes list */
+      #changes-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0;
+      }
+
+      #changes-container::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      #changes-container::-webkit-scrollbar-thumb {
+        background: #424242;
+        border-radius: 0;
+      }
+
+      #changes-container::-webkit-scrollbar-thumb:hover {
+        background: #4e4e4e;
+      }
+
+      .changes-section {
+        margin-bottom: 0;
+      }
+
+      .section-header {
+        padding: 4px 20px;
+        background: var(--sidebar-bg);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .section-header:hover {
+        background: var(--hover-bg);
+      }
+
+      .section-count {
+        background: var(--input-bg);
+        padding: 2px 6px;
+        border-radius: 11px;
+        font-size: 11px;
+        margin-left: 6px;
+        font-weight: 400;
+      }
+
+      .section-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .section-action {
+        padding: 2px 6px;
+        background: transparent;
+        color: var(--text);
+        border: none;
+        border-radius: 2px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background 0.1s;
+        line-height: 1;
+      }
+
+      .section-action:hover {
+        background: var(--hover-bg);
+      }
+
+      .file-item {
+        padding: 3px 20px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        transition: background 0.1s;
+        border-left: 3px solid transparent;
+        min-height: 22px;
+      }
+
+      .file-item:hover {
+        background: var(--hover-bg);
+      }
+
+      .file-item.selected {
+        background: var(--hover-bg);
+        border-left-color: var(--accent);
+      }
+
+      .file-status {
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 2px;
+        flex-shrink: 0;
+      }
+
+      .file-status.modified {
+        color: var(--modified);
+      }
+
+      .file-status.added {
+        color: var(--added);
+      }
+
+      .file-status.deleted {
+        color: var(--deleted);
+      }
+
+      .file-status.untracked {
+        color: var(--untracked);
+      }
+
+      .file-name {
+        flex: 1;
+        font-size: 13px;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 400;
+      }
+
+      .file-actions {
+        display: flex;
+        gap: 4px;
+        opacity: 0.7;
+      }
+
+      .file-item:hover .file-actions {
+        opacity: 1;
+      }
+
+      .file-action {
+        padding: 2px 6px;
+        background: transparent;
+        color: var(--text);
+        border: none;
+        border-radius: 2px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background 0.1s;
+        line-height: 1;
+      }
+
+      .file-action:hover {
+        background: var(--input-bg);
+      }
+
+      /* Empty state */
+      .empty-state {
+        padding: 40px 20px;
+        text-align: center;
+        color: var(--text-secondary);
+      }
+
+      .empty-state-icon {
+        font-size: 48px;
+        margin-bottom: 12px;
+        opacity: 0.4;
+      }
+
+      .empty-state-text {
+        font-size: 13px;
+        margin-bottom: 16px;
+      }
+
+      .empty-state-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-width: 200px;
+        margin: 0 auto;
+      }
+
+      .empty-btn {
+        padding: 6px 14px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 2px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.1s;
+        font-weight: 400;
+      }
+
+      .empty-btn:hover {
+        background: var(--accent-hover);
+      }
+
+      /* Status message */
+      #status-bar {
+        padding: 6px 20px;
+        background: var(--sidebar-bg);
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--text-secondary);
+        display: none;
+      }
+
+      #status-bar.visible {
+        display: block;
+      }
+
+      #status-bar.error {
+        color: var(--deleted);
+        background: rgba(244, 135, 113, 0.1);
+      }
+
+      #status-bar.success {
+        color: var(--added);
+        background: rgba(115, 201, 145, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="header">
+      <div id="header-title">Source Control</div>
+      <div id="header-actions">
+        <button class="icon-btn" id="btn-refresh" title="Refresh">🔄</button>
+        <button class="icon-btn" id="btn-pull" title="Pull">⬇️</button>
+        <button class="icon-btn" id="btn-push" title="Push">⬆️</button>
+        <button class="icon-btn" id="btn-fetch" title="Fetch">📥</button>
+      </div>
+    </div>
+
+    <div id="branch-info" style="display: none">
+      <div id="branch-name">
+        <span>🌿</span>
+        <span id="branch-text">main</span>
+      </div>
+      <div id="branch-actions">
+        <button class="small-btn" id="btn-checkout">Switch</button>
+        <button class="small-btn" id="btn-new-branch">New</button>
+      </div>
+    </div>
+
+    <div id="commit-section" style="display: none">
+      <textarea
+        id="commit-input"
+        placeholder="Message (Ctrl+Enter to commit)"
+      ></textarea>
+      <div id="commit-actions">
+        <button class="commit-btn" id="btn-commit">Commit</button>
+        <span
+          id="commit-hint"
+          style="font-size: 11px; color: var(--text-secondary); display: none"
+          >Stage changes first</span
+        >
+      </div>
+    </div>
+
+    <div id="changes-container">
+      <div id="no-repo" class="empty-state">
+        <div class="empty-state-icon">📁</div>
+        <div class="empty-state-text">No repository found</div>
+        <div class="empty-state-actions">
+          <button class="empty-btn" id="btn-open-folder">Open Folder</button>
+          <button class="empty-btn" id="btn-clone">Clone Repository</button>
+          <button class="empty-btn" id="btn-init">Initialize Repository</button>
+          <button class="empty-btn" id="btn-refresh-manual">🔄 Refresh</button>
+        </div>
+      </div>
+
+      <div id="staged-section" class="changes-section" style="display: none">
+        <div class="section-header">
+          <div>
+            <span>Staged Changes</span>
+            <span class="section-count" id="staged-count">0</span>
+          </div>
+          <div class="section-actions">
+            <button
+              class="section-action"
+              id="btn-unstage-all"
+              title="Unstage All"
+            >
+              −
+            </button>
+          </div>
+        </div>
+        <div id="staged-list"></div>
+      </div>
+
+      <div id="unstaged-section" class="changes-section" style="display: none">
+        <div class="section-header">
+          <div>
+            <span>Changes</span>
+            <span class="section-count" id="unstaged-count">0</span>
+          </div>
+          <div class="section-actions">
+            <button class="section-action" id="btn-stage-all" title="Stage All">
+              +
+            </button>
+          </div>
+        </div>
+        <div id="unstaged-list"></div>
+      </div>
+
+      <div id="no-changes" class="empty-state" style="display: none">
+        <div class="empty-state-icon">✓</div>
+        <div class="empty-state-text">No changes</div>
+      </div>
+    </div>
+
+    <div id="status-bar"></div>
+
+    <script>
+      const vscode = acquireVsCodeApi();
+
+      const branchInfo = document.getElementById("branch-info");
+      const branchText = document.getElementById("branch-text");
+      const commitSection = document.getElementById("commit-section");
+      const commitInput = document.getElementById("commit-input");
+      const btnCommit = document.getElementById("btn-commit");
+      const commitHint = document.getElementById("commit-hint");
+      const stagedSection = document.getElementById("staged-section");
+      const unstagedSection = document.getElementById("unstaged-section");
+      const stagedList = document.getElementById("staged-list");
+      const unstagedList = document.getElementById("unstaged-list");
+      const stagedCount = document.getElementById("staged-count");
+      const unstagedCount = document.getElementById("unstaged-count");
+      const noRepo = document.getElementById("no-repo");
+      const noChanges = document.getElementById("no-changes");
+      const statusBar = document.getElementById("status-bar");
+
+      function showStatus(text, type = "info") {
+        statusBar.textContent = text;
+        statusBar.className = "visible " + type;
+        setTimeout(() => {
+          statusBar.classList.remove("visible");
+        }, 5000);
+      }
+
+      function getStatusIcon(status) {
+        if (status === "M") return { icon: "M", class: "modified" };
+        if (status === "A") return { icon: "A", class: "added" };
+        if (status === "D") return { icon: "D", class: "deleted" };
+        if (status === "?") return { icon: "U", class: "untracked" };
+        return { icon: "M", class: "modified" };
+      }
+
+      function createFileItem(file, status, isStaged) {
+        const item = document.createElement("div");
+        item.className = "file-item";
+
+        const statusInfo = getStatusIcon(status);
+        const statusEl = document.createElement("div");
+        statusEl.className = `file-status ${statusInfo.class}`;
+        statusEl.textContent = statusInfo.icon;
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "file-name";
+        nameEl.textContent = file;
+        nameEl.title = file;
+
+        const actionsEl = document.createElement("div");
+        actionsEl.className = "file-actions";
+
+        const stageBtn = document.createElement("button");
+        stageBtn.className = "file-action";
+        stageBtn.textContent = isStaged ? "−" : "+";
+        stageBtn.title = isStaged ? "Unstage" : "Stage";
+        stageBtn.onclick = (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: isStaged ? "unstage" : "stage", file });
+        };
+
+        if (!isStaged && status !== "?") {
+          const discardBtn = document.createElement("button");
+          discardBtn.className = "file-action";
+          discardBtn.textContent = "↶";
+          discardBtn.title = "Discard Changes";
+          discardBtn.onclick = (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: "discardChanges", file });
+          };
+          actionsEl.appendChild(discardBtn);
+        }
+
+        actionsEl.appendChild(stageBtn);
+
+        item.appendChild(statusEl);
+        item.appendChild(nameEl);
+        item.appendChild(actionsEl);
+
+        item.onclick = () => {
+          vscode.postMessage({ type: "openFile", file });
+        };
+
+        return item;
+      }
+
+      window.addEventListener("message", (event) => {
+        const msg = event.data;
+
+        if (msg.type === "updateStatus") {
+          noRepo.style.display = "none";
+          branchInfo.style.display = "flex";
+          commitSection.style.display = "block";
+          branchText.textContent = msg.branch;
+
+          stagedList.innerHTML = "";
+          unstagedList.innerHTML = "";
+
+          if (msg.staged.length === 0 && msg.unstaged.length === 0) {
+            stagedSection.style.display = "none";
+            unstagedSection.style.display = "none";
+            noChanges.style.display = "block";
+          } else {
+            noChanges.style.display = "none";
+
+            if (msg.staged.length > 0) {
+              stagedSection.style.display = "block";
+              stagedCount.textContent = msg.staged.length;
+              msg.staged.forEach((item) => {
+                stagedList.appendChild(
+                  createFileItem(item.file, item.status, true),
+                );
+              });
+            } else {
+              stagedSection.style.display = "none";
+            }
+
+            if (msg.unstaged.length > 0) {
+              unstagedSection.style.display = "block";
+              unstagedCount.textContent = msg.unstaged.length;
+              msg.unstaged.forEach((item) => {
+                unstagedList.appendChild(
+                  createFileItem(item.file, item.status, false),
+                );
+              });
+            } else {
+              unstagedSection.style.display = "none";
+            }
+          }
+
+          btnCommit.disabled = msg.staged.length === 0;
+          commitHint.style.display =
+            msg.staged.length === 0 ? "inline" : "none";
+        } else if (msg.type === "noRepo") {
+          noRepo.style.display = "block";
+          branchInfo.style.display = "none";
+          commitSection.style.display = "none";
+          stagedSection.style.display = "none";
+          unstagedSection.style.display = "none";
+          noChanges.style.display = "none";
+        } else if (msg.type === "status") {
+          showStatus(msg.text, "info");
+        } else if (msg.type === "error") {
+          showStatus(msg.text, "error");
+        }
+      });
+
+      document.getElementById("btn-refresh").onclick = () => {
+        vscode.postMessage({ type: "refresh" });
+      };
+
+      document.getElementById("btn-pull").onclick = () => {
+        vscode.postMessage({ type: "pull" });
+      };
+
+      document.getElementById("btn-push").onclick = () => {
+        vscode.postMessage({ type: "push" });
+      };
+
+      document.getElementById("btn-fetch").onclick = () => {
+        vscode.postMessage({ type: "fetch" });
+      };
+
+      document.getElementById("btn-checkout").onclick = () => {
+        vscode.postMessage({ type: "checkout" });
+      };
+
+      document.getElementById("btn-new-branch").onclick = () => {
+        vscode.postMessage({ type: "createBranch" });
+      };
+
+      btnCommit.onclick = () => {
+        const message = commitInput.value.trim();
+        if (message) {
+          vscode.postMessage({ type: "commit", message });
+          commitInput.value = "";
+        }
+      };
+
+      document.getElementById("btn-stage-all").onclick = () => {
+        vscode.postMessage({ type: "stageAll" });
+      };
+
+      document.getElementById("btn-unstage-all").onclick = () => {
+        vscode.postMessage({ type: "unstageAll" });
+      };
+
+      document.getElementById("btn-open-folder").onclick = () => {
+        vscode.postMessage({ type: "openFolder" });
+      };
+
+      document.getElementById("btn-clone").onclick = () => {
+        vscode.postMessage({ type: "clone" });
+      };
+
+      document.getElementById("btn-init").onclick = () => {
+        vscode.postMessage({ type: "init" });
+      };
+
+      document.getElementById("btn-refresh-manual").onclick = () => {
+        vscode.postMessage({ type: "refresh" });
+      };
+
+      commitInput.addEventListener("keydown", (e) => {
+        if (e.ctrlKey && e.key === "Enter") {
+          btnCommit.click();
+        }
+      });
+
+      vscode.postMessage({ type: "ready" });
+    </script>
+  </body>
+</html>

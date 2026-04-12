@@ -111,9 +111,62 @@ class AIAgent {
     return normalized || "http://localhost:11434"
   }
 
+  async _fetchOllamaModelNames(ollamaUrl, timeoutMs = 8_000) {
+    try {
+      const response = await fetch(`${ollamaUrl}/api/tags`, {
+        signal: this._createRequestSignal(null, timeoutMs)
+      })
+      if (!response.ok) return []
+      const data = await response.json()
+      return (data.models || []).map((entry) => entry.name).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  _pickOllamaModel(models, currentModel) {
+    if (!Array.isArray(models) || models.length === 0) return currentModel
+    if (currentModel && models.includes(currentModel)) return currentModel
+
+    const preferredModels = [
+      "codellama:latest",
+      "qwen2.5-coder:1.5b",
+      "llama3:latest"
+    ]
+    for (const candidate of preferredModels) {
+      if (models.includes(candidate)) return candidate
+    }
+
+    return models[0]
+  }
+
+  async _prepareRuntimeConfig(config, reportStatus) {
+    if (!config || config.provider !== "ollama") {
+      return config
+    }
+
+    const models = await this._fetchOllamaModelNames(config.ollamaUrl)
+    if (models.length === 0) {
+      return config
+    }
+
+    const resolvedModel = this._pickOllamaModel(models, config.model)
+    if (resolvedModel !== config.model) {
+      reportStatus?.(
+        `Ollama model ${config.model} was unavailable. Using ${resolvedModel} instead.`
+      )
+    }
+
+    return {
+      ...config,
+      model: resolvedModel
+    }
+  }
+
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const maxTokens = isUnlimited ? 16000 : mode === "heavy" ? 8192 : 1024
+    // Conservative token limits to avoid exhaustion errors
+    const maxTokens = isUnlimited ? 4096 : mode === "heavy" ? 2048 : 1024
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -515,13 +568,13 @@ class AIAgent {
     options = {}
   ) {
     const config = this.getConfig()
-    if (!config.enabled) {
-      return { error: "AI is disabled in Code Janitor settings." }
-    }
-
     const mode = options.mode === "heavy" ? "heavy" : "fast"
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null
+    const runtimeConfig = await this._prepareRuntimeConfig(config, reportStatus)
+    if (!runtimeConfig.enabled) {
+      return { error: "AI is disabled in Code Janitor settings." }
+    }
 
     this.conversationHistory.push({ role: "user", content: userMessage })
     const isTabQuestion = this._isTabQuestion(userMessage)
@@ -699,25 +752,29 @@ ${resolvedMessage}`
     }
 
     try {
-      reportStatus?.(`Contacting ${config.provider}...`)
-      const reqIntent =
-        mode === "fast"
-          ? this._detectIntent(userMessage)
-          : this._detectIntent(userMessage)
+      reportStatus?.(`Contacting ${runtimeConfig.provider}...`)
+      const reqIntent = this._detectIntent(userMessage)
       const shouldCheckRepetition = !this._shouldForceStructuredEdit(
         reqIntent,
         userMessage
       )
-      const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent)
+      const reqOpts = this._buildRequestOptions(
+        runtimeConfig,
+        prompt,
+        mode,
+        reqIntent
+      )
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
-        signal: this._createRequestSignal(abortSignal, config.timeout),
+        signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
         body: reqOpts.body
       })
 
       if (!response.ok) {
-        throw new Error(await this._buildHttpError(response, "AI request failed with status"))
+        throw new Error(
+          await this._buildHttpError(response, "AI request failed with status")
+        )
       }
 
       let fullResponse = ""
@@ -792,7 +849,7 @@ ${resolvedMessage}`
         )
         const retryPrompt = `${prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`
         const retryOpts = this._buildRequestOptions(
-          config,
+          runtimeConfig,
           retryPrompt,
           mode,
           "edit"
@@ -800,7 +857,7 @@ ${resolvedMessage}`
         const retryResponse = await fetch(retryOpts.url, {
           method: "POST",
           headers: retryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, config.timeout),
+          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
           body: retryOpts.body
         })
 
@@ -858,7 +915,7 @@ ${resolvedMessage}`
           assistantText
         )}`
         const fileOnlyRetryOpts = this._buildRequestOptions(
-          config,
+          runtimeConfig,
           fileOnlyRetryPrompt,
           mode,
           "edit"
@@ -866,7 +923,7 @@ ${resolvedMessage}`
         const fileOnlyRetryResponse = await fetch(fileOnlyRetryOpts.url, {
           method: "POST",
           headers: fileOnlyRetryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, config.timeout),
+          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
           body: fileOnlyRetryOpts.body
         })
 
@@ -913,7 +970,10 @@ ${resolvedMessage}`
         parsedResponse = this._parseResponse(assistantText)
       }
 
-      if (requiresFileActions && !this._hasFileActions(parsedResponse.actions)) {
+      if (
+        requiresFileActions &&
+        !this._hasFileActions(parsedResponse.actions)
+      ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change."
         this.conversationHistory.push({
@@ -1324,7 +1384,7 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder) {
     const base =
-      "You are a coding assistant embedded in VS Code,named Code Janitor."
+      "You are a coding assistant embedded in Arduino IDE ,named Code Janitor."
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
@@ -1480,7 +1540,9 @@ ${(rawResponse || "").slice(0, 4000)}
     if (!Array.isArray(actions) || actions.length === 0) return false
     return actions.some((action) => {
       if (!action || action.type !== "file") return false
-      return typeof action.content === "string" && action.content.trim().length > 0
+      return (
+        typeof action.content === "string" && action.content.trim().length > 0
+      )
     })
   }
 
@@ -1987,7 +2049,9 @@ ${userMessage}`
     }
     const isAllowedMkdirTarget = (dirPath) => {
       if (!this.currentEditableTargets) return true
-      const normalizedDir = (dirPath || "").replace(/\\/g, "/").replace(/\/+$/, "")
+      const normalizedDir = (dirPath || "")
+        .replace(/\\/g, "/")
+        .replace(/\/+$/, "")
       if (!normalizedDir) return false
       for (const targetPath of this.currentEditableTargets) {
         const normalizedTarget = targetPath.replace(/\\/g, "/")
@@ -2070,7 +2134,9 @@ ${userMessage}`
       const normalizedPath = pathInfo.path
       if (!normalizedPath) continue
       if (!isAllowedMkdirTarget(normalizedPath)) {
-        warnings.push(`Blocked folder outside allowed targets: ${normalizedPath}`)
+        warnings.push(
+          `Blocked folder outside allowed targets: ${normalizedPath}`
+        )
         continue
       }
       actions.push({ type: "mkdir", path: normalizedPath })
@@ -2309,14 +2375,16 @@ ${userMessage}`
       if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
         return {
           success: false,
-          error: "Refusing to empty an existing file without explicit user request."
+          error:
+            "Refusing to empty an existing file without explicit user request."
         }
       }
 
       if (isReadme && trimmedNewContent.length === 0) {
         return {
           success: false,
-          error: "Refusing to delete or empty README.md without explicit user request."
+          error:
+            "Refusing to delete or empty README.md without explicit user request."
         }
       }
 
@@ -2379,7 +2447,8 @@ ${userMessage}`
         targetPath = path.dirname(normalizedFolderPath)
       }
 
-      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(targetPath)
+      const { fullPath, outsideWorkspace } =
+        this._resolveWorkspacePath(targetPath)
       if (outsideWorkspace && !allowOutsideWorkspace) {
         return { success: false, error: "outside_workspace", path: fullPath }
       }
@@ -2419,7 +2488,8 @@ ${userMessage}`
           const outputInfo = this._truncateCommandOutput(rawOutput)
           const hitMaxBuffer =
             !!error &&
-            ((error.code || "").toString() === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
+            ((error.code || "").toString() ===
+              "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
               /maxbuffer/i.test(error.message || ""))
 
           if (hitMaxBuffer) {

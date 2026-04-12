@@ -111,6 +111,58 @@ class AIAgent {
     return normalized || "http://localhost:11434"
   }
 
+  async _fetchOllamaModelNames(ollamaUrl, timeoutMs = 8_000) {
+    try {
+      const response = await fetch(`${ollamaUrl}/api/tags`, {
+        signal: this._createRequestSignal(null, timeoutMs)
+      })
+      if (!response.ok) return []
+      const data = await response.json()
+      return (data.models || []).map((entry) => entry.name).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  _pickOllamaModel(models, currentModel) {
+    if (!Array.isArray(models) || models.length === 0) return currentModel
+    if (currentModel && models.includes(currentModel)) return currentModel
+
+    const preferredModels = [
+      "codellama:latest",
+      "qwen2.5-coder:1.5b",
+      "llama3:latest"
+    ]
+    for (const candidate of preferredModels) {
+      if (models.includes(candidate)) return candidate
+    }
+
+    return models[0]
+  }
+
+  async _prepareRuntimeConfig(config, reportStatus) {
+    if (!config || config.provider !== "ollama") {
+      return config
+    }
+
+    const models = await this._fetchOllamaModelNames(config.ollamaUrl)
+    if (models.length === 0) {
+      return config
+    }
+
+    const resolvedModel = this._pickOllamaModel(models, config.model)
+    if (resolvedModel !== config.model) {
+      reportStatus?.(
+        `Ollama model ${config.model} was unavailable. Using ${resolvedModel} instead.`
+      )
+    }
+
+    return {
+      ...config,
+      model: resolvedModel
+    }
+  }
+
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
     const maxTokens = isUnlimited ? 16000 : mode === "heavy" ? 8192 : 1024
@@ -514,7 +566,10 @@ class AIAgent {
     abortSignal,
     options = {}
   ) {
-    const config = this.getConfig()
+    const config = await this._prepareRuntimeConfig(
+      this.getConfig(),
+      reportStatus
+    )
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
     }

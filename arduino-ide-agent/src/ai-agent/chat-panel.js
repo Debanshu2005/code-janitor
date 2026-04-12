@@ -70,22 +70,91 @@ class ChatPanel {
     this.panel.webview.postMessage({ type: "thinking" });
     await this.agent.ensureCodebaseScanned(workspaceFolder);
     const files = specificFiles || Array.from(this.agent.codebaseContext.keys()).filter(f =>
-      /\.(js|jsx|ts|tsx|py|java)$/i.test(f)
+      /\.(js|jsx|ts|tsx|py|java|c|cpp|h|ino)$/i.test(f)
     );
-    let reply = `Scanning ${files.length} file(s) for syntax errors...\n`;
+    let reply = `Compiling ${files.length} file(s) for errors...\n`;
     this.panel.webview.postMessage({ type: "stream", text: reply });
-    let found = false;
+    
+    const errorsFound = [];
     for (const f of files) {
-      const result = await this.agent._runSyntaxCheck(f.replace(/\\/g, "/"), workspaceFolder, null);
-      if (result && !result.skipped && (!result.success || (result.output || "").trim())) {
-        const msg = `\n\u274c ${f}:\n${result.error || result.output}`;
+      const fullPath = require("path").join(workspaceFolder, f);
+      const result = await this.agent.executeCommand(
+        this.agent._getSyntaxCheckCommand(f.replace(/\\/g, "/")),
+        workspaceFolder
+      );
+      
+      if (result && !result.success) {
+        const errorText = result.error || result.output || "Unknown error";
+        const isLibraryError = /library|import|include|module|package|cannot find|no such file/i.test(errorText);
+        
+        errorsFound.push({
+          file: f,
+          error: errorText,
+          isLibraryError
+        });
+        
+        const msg = `\n❌ ${f}:\n${errorText}`;
         this.panel.webview.postMessage({ type: "stream", text: msg });
         reply += msg;
-        found = true;
       }
     }
-    const summary = found ? "\n\nScan complete. Issues found above." : "\n\n\u2705 No syntax errors found.";
+    
+    if (errorsFound.length === 0) {
+      const summary = "\n\n✅ No syntax errors found.";
+      this.panel.webview.postMessage({ type: "stream", text: summary });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+    
+    // AI will fix non-library errors
+    const summary = `\n\nFound ${errorsFound.length} error(s). AI will now fix them...`;
     this.panel.webview.postMessage({ type: "stream", text: summary });
+    
+    for (const { file, error, isLibraryError } of errorsFound) {
+      if (isLibraryError) {
+        const libraryMsg = `\n\n📚 ${file}: Missing library detected. Please install the required library manually.`;
+        this.panel.webview.postMessage({ type: "stream", text: libraryMsg });
+        continue;
+      }
+      
+      // AI fixes the error
+      this.panel.webview.postMessage({ type: "stream", text: `\n\n🔧 Fixing ${file}...` });
+      
+      const fixPrompt = `Fix the syntax error in ${file}:\n\nError:\n${error}\n\nReturn the complete corrected file using FILE: ${file} format.`;
+      
+      try {
+        const fixResponse = await this.agent.chat(
+          fixPrompt,
+          workspaceFolder,
+          null,
+          null,
+          { mode: "fast", onStatus: (text) => {
+            this.panel.webview.postMessage({ type: "status", text });
+          }}
+        );
+        
+        if (fixResponse.error) {
+          this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to fix: ${fixResponse.error}` });
+          continue;
+        }
+        
+        if (fixResponse.actions && fixResponse.actions.length > 0) {
+          const fileAction = fixResponse.actions.find(a => a.type === "file" && a.path === file);
+          if (fileAction) {
+            const applyResult = await this.agent.applyChanges(file, fileAction.content, false, {});
+            if (applyResult.success) {
+              this.panel.webview.postMessage({ type: "stream", text: `\n✅ Fixed ${file}` });
+            } else {
+              this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to apply fix: ${applyResult.error}` });
+            }
+          }
+        }
+      } catch (err) {
+        this.panel.webview.postMessage({ type: "stream", text: `\n❌ Error fixing ${file}: ${err.message}` });
+      }
+    }
+    
+    this.panel.webview.postMessage({ type: "stream", text: "\n\n✅ Syntax check and fix complete." });
     this.panel.webview.postMessage({ type: "done" });
   }
 
@@ -569,6 +638,10 @@ ${trimmedText}`;
               onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
             }
           );
+        } catch (err) {
+          this.panel.webview.postMessage({ type: "error", text: `AI error: ${err.message}` });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
         } finally {
           this.abortController = null;
         }
@@ -963,6 +1036,8 @@ ${trimmedText}`;
           });
         }
         await this._fetchAndSendModels();
+      } else if (message.type === "openGit") {
+        vscode.commands.executeCommand("codeJanitorArduino.openSourceControl");
       }
     });
   }
