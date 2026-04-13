@@ -51,7 +51,7 @@ const STOP_WORDS = new Set([
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
 
 class AIAgent {
-  constructor() {
+  constructor(context) {
     this.codebaseContext = new Map()
     this.conversationHistory = []
     this.scanVersion = 0
@@ -59,6 +59,7 @@ class AIAgent {
     this.workspaceRoot = null
     this.currentEditableTargets = null
     this._lastActiveEditor = vscode.window.activeTextEditor || null
+    this.context = context // Store context for globalState access
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
@@ -75,28 +76,63 @@ class AIAgent {
 
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai")
-    const provider = config.get("provider", "ollama")
+
+    const configProvider = config.get("provider", "ollama")
+    const stateProvider = this.context
+      ? this.context.globalState.get("codeJanitor.ai.provider", "")
+      : ""
+    const normalizedConfigProvider =
+      typeof configProvider === "string" ? configProvider.trim() : ""
+    const normalizedStateProvider =
+      typeof stateProvider === "string" ? stateProvider.trim() : ""
+    const provider =
+      normalizedStateProvider &&
+      normalizedConfigProvider &&
+      normalizedStateProvider !== normalizedConfigProvider
+        ? normalizedStateProvider
+        : normalizedConfigProvider || normalizedStateProvider || "ollama"
+
+    const configModel = config.get(
+      "model",
+      this._getDefaultModelForProvider(provider)
+    )
+    const stateModel = this.context
+      ? this.context.globalState.get("codeJanitor.ai.model", "")
+      : ""
+    const normalizedConfigModel =
+      typeof configModel === "string" ? configModel.trim() : ""
+    const normalizedStateModel =
+      typeof stateModel === "string" ? stateModel.trim() : ""
+    const model =
+      normalizedStateProvider &&
+      normalizedConfigProvider &&
+      normalizedStateProvider !== normalizedConfigProvider &&
+      normalizedStateModel
+        ? normalizedStateModel
+        : normalizedConfigModel ||
+          normalizedStateModel ||
+          this._getDefaultModelForProvider(provider)
+
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
     const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl)
+
     return {
       enabled: config.get("enabled", true),
       provider,
       ollamaUrl,
-      model: config.get(
-        "model",
-        provider === "groq"
-          ? "llama-3.1-8b-instant"
-          : provider === "openrouter"
-            ? "meta-llama/llama-3.1-8b-instruct:free"
-            : provider === "anthropic"
-              ? "claude-3-5-haiku-20241022"
-              : "codellama:latest"
-      ),
+      model,
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       timeout: config.get("timeout", 90_000)
     }
+  }
+  
+  _getDefaultModelForProvider(provider) {
+    if (provider === "groq") return "llama-3.1-8b-instant"
+    if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
+    if (provider === "anthropic") return "claude-3-5-haiku-20241022"
+    return "qwen2.5-coder:1.5b"
   }
 
   _normalizeOllamaUrl(url) {
@@ -129,8 +165,8 @@ class AIAgent {
     if (currentModel && models.includes(currentModel)) return currentModel
 
     const preferredModels = [
-      "codellama:latest",
       "qwen2.5-coder:1.5b",
+      "codellama:latest",
       "llama3:latest"
     ]
     for (const candidate of preferredModels) {
@@ -159,14 +195,42 @@ class AIAgent {
 
     return {
       ...config,
-      model: resolvedModel
+      model: resolvedModel,
+      timeout: Math.max(config.timeout || 0, 180_000)
     }
+  }
+
+  _formatProviderError(config, errorMessage) {
+    const message = errorMessage || "Unknown provider error"
+
+    if (config?.provider === "groq") {
+      if (/model.*decommission|not found|unsupported|does not exist/i.test(message)) {
+        return `Groq error: ${message}. Try switching back to llama-3.1-8b-instant.`
+      }
+    }
+
+    if (config?.provider === "openrouter") {
+      if (/\b429\b|rate limit|quota|credits|capacity/i.test(message)) {
+        return `OpenRouter error: ${message}. The selected endpoint is rate-limited or unavailable right now. Try a different free model or wait and retry.`
+      }
+      if (/\b404\b|no endpoints found|not found/i.test(message)) {
+        return `OpenRouter error: ${message}. That model currently has no available endpoint. Try another listed model.`
+      }
+    }
+
+    if (config?.provider === "ollama") {
+      if (/abort|timed out|timeout/i.test(message)) {
+        return `Ollama error: ${message}. Local models can be slow to load; prefer qwen2.5-coder:1.5b or increase the timeout.`
+      }
+    }
+
+    return `AI error: ${message}`
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    // Conservative token limits to avoid exhaustion errors
-    const maxTokens = isUnlimited ? 4096 : mode === "heavy" ? 2048 : 1024
+    // Very conservative token limits for speed, especially for Ollama
+    const maxTokens = isUnlimited ? 2048 : mode === "heavy" ? 1024 : 512
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -354,6 +418,95 @@ class AIAgent {
         ? `: ${details.slice(0, 280)}`
         : ""
     return `${prefix} ${response.status}${shortDetails}`
+  }
+
+  async _readResponseText(response, parseChunk, options = {}) {
+    const streamCallback =
+      typeof options.streamCallback === "function"
+        ? options.streamCallback
+        : null
+    const abortSignal = options.abortSignal || null
+    const shouldStop =
+      typeof options.shouldStop === "function" ? options.shouldStop : null
+
+    if (!response?.body || typeof response.body.getReader !== "function") {
+      const text = await response.text()
+      if (!text) return ""
+
+      let parsedText = ""
+      const lines = text.split(/\r?\n/).filter((line) => line.trim())
+      for (const line of lines) {
+        try {
+          const token = parseChunk(line)
+          if (token === null) continue
+          parsedText += token
+          if (streamCallback) streamCallback(token)
+        } catch {
+          // If parsing fails for a non-streaming host, keep the raw body.
+        }
+      }
+
+      return parsedText || text
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let fullResponse = ""
+    let pending = ""
+    let streamDone = false
+
+    while (!streamDone) {
+      if (abortSignal?.aborted || shouldStop?.()) {
+        try {
+          reader.cancel()
+        } catch {}
+        break
+      }
+
+      const { done, value } = await reader.read()
+      if (done) {
+        streamDone = true
+        pending += decoder.decode()
+      } else {
+        pending += decoder.decode(value, { stream: true })
+      }
+
+      const lines = pending.split(/\r?\n/)
+      pending = streamDone ? "" : lines.pop() || ""
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try {
+          const token = parseChunk(line)
+          if (token === null) continue
+          fullResponse += token
+          if (streamCallback) streamCallback(token)
+          if (shouldStop?.()) {
+            try {
+              reader.cancel()
+            } catch {}
+            streamDone = true
+            break
+          }
+        } catch {
+          // Ignore malformed partial lines and keep reading.
+        }
+      }
+    }
+
+    if (pending.trim()) {
+      try {
+        const token = parseChunk(pending)
+        if (token !== null) {
+          fullResponse += token
+          if (streamCallback) streamCallback(token)
+        }
+      } catch {
+        // Ignore trailing parse issues.
+      }
+    }
+
+    return fullResponse
   }
 
   async scanCodebase(workspaceFolder) {
@@ -567,8 +720,13 @@ class AIAgent {
     abortSignal,
     options = {}
   ) {
+    // IMPORTANT: Always get fresh config to respect provider switches
     const config = this.getConfig()
     const mode = options.mode === "heavy" ? "heavy" : "fast"
+    const forcedIntent =
+      typeof options.intentOverride === "string" && options.intentOverride.trim()
+        ? options.intentOverride.trim().toLowerCase()
+        : null
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null
     const runtimeConfig = await this._prepareRuntimeConfig(config, reportStatus)
@@ -661,7 +819,7 @@ class AIAgent {
         .slice(-4, -1)
         .map((e) => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
         .join("\n\n")
-      const intent = this._detectIntent(userMessage)
+      const intent = forcedIntent || this._detectIntent(userMessage)
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -700,7 +858,7 @@ ${resolvedMessage}`
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0
 
-      const intent = this._detectIntent(userMessage)
+      const intent = forcedIntent || this._detectIntent(userMessage)
 
       reportStatus?.(
         isScopedActiveFileEdit
@@ -753,7 +911,10 @@ ${resolvedMessage}`
 
     try {
       reportStatus?.(`Contacting ${runtimeConfig.provider}...`)
-      const reqIntent = this._detectIntent(userMessage)
+      console.log(
+        `[CodeJanitor] Request config provider=${runtimeConfig.provider} model=${runtimeConfig.model} timeout=${runtimeConfig.timeout} url=${runtimeConfig.provider === "ollama" ? runtimeConfig.ollamaUrl : "remote"}`
+      )
+      const reqIntent = forcedIntent || this._detectIntent(userMessage)
       const shouldCheckRepetition = !this._shouldForceStructuredEdit(
         reqIntent,
         userMessage
@@ -778,56 +939,44 @@ ${resolvedMessage}`
       }
 
       let fullResponse = ""
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let streamDone = false
       let repetitionDetected = false
 
-      while (!streamDone) {
-        if (abortSignal?.aborted) {
-          break
-        }
-
-        const { done, value } = await reader.read()
-        if (done) {
-          streamDone = true
-          continue
-        }
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split("\n").filter((line) => line.trim())
-
-        for (const line of lines) {
-          try {
-            const token = reqOpts.parseChunk(line)
-            if (token === null) continue
-            const nextResponse = fullResponse + token
-            if (
-              shouldCheckRepetition &&
-              this._isRepeatingResponse(nextResponse, mode)
-            ) {
-              repetitionDetected = true
-              streamDone = true
-              if (!abortSignal?.aborted) {
-                try {
-                  reader.cancel()
-                } catch (_) {}
-              }
-              break
-            }
-            fullResponse += token
-            if (streamCallback) streamCallback(token)
-          } catch (parseError) {
-            // ignore partial chunks
+      fullResponse = await this._readResponseText(
+        response,
+        (line) => {
+          const token = reqOpts.parseChunk(line)
+          if (token === null) return null
+          const nextResponse = fullResponse + token
+          if (
+            shouldCheckRepetition &&
+            this._isRepeatingResponse(nextResponse, mode)
+          ) {
+            repetitionDetected = true
+            return null
           }
+          fullResponse = nextResponse
+          return token
+        },
+        {
+          streamCallback,
+          abortSignal,
+          shouldStop: () => repetitionDetected
         }
+      )
+
+      if (repetitionDetected && abortSignal?.aborted) {
+        repetitionDetected = false
+      }
+
+      if (repetitionDetected && !fullResponse) {
+        fullResponse = this._getEmptyResponseFallback(mode)
       }
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
         : fullResponse || this._getEmptyResponseFallback(mode)
       let parsedResponse = this._parseResponse(finalText)
-      const finalIntent = this._detectIntent(userMessage)
+      const finalIntent = forcedIntent || this._detectIntent(userMessage)
       const requiresFileActions = this._shouldForceStructuredEdit(
         finalIntent,
         userMessage
@@ -870,35 +1019,11 @@ ${resolvedMessage}`
           )
         }
 
-        let retryText = ""
-        const retryReader = retryResponse.body.getReader()
-        const retryDecoder = new TextDecoder()
-        let retryDone = false
-
-        while (!retryDone) {
-          if (abortSignal?.aborted) {
-            break
-          }
-
-          const { done, value } = await retryReader.read()
-          if (done) {
-            retryDone = true
-            continue
-          }
-
-          const chunk = retryDecoder.decode(value)
-          const lines = chunk.split("\n").filter((line) => line.trim())
-
-          for (const line of lines) {
-            try {
-              const token = retryOpts.parseChunk(line)
-              if (token === null) continue
-              retryText += token
-            } catch (_) {
-              // ignore partial chunks
-            }
-          }
-        }
+        const retryText = await this._readResponseText(
+          retryResponse,
+          retryOpts.parseChunk,
+          { abortSignal }
+        )
 
         firstRetryText = retryText || finalText
         parsedResponse = this._parseResponse(firstRetryText)
@@ -936,35 +1061,11 @@ ${resolvedMessage}`
           )
         }
 
-        let fileOnlyRetryText = ""
-        const fileOnlyReader = fileOnlyRetryResponse.body.getReader()
-        const fileOnlyDecoder = new TextDecoder()
-        let fileOnlyDone = false
-
-        while (!fileOnlyDone) {
-          if (abortSignal?.aborted) {
-            break
-          }
-
-          const { done, value } = await fileOnlyReader.read()
-          if (done) {
-            fileOnlyDone = true
-            continue
-          }
-
-          const chunk = fileOnlyDecoder.decode(value)
-          const lines = chunk.split("\n").filter((line) => line.trim())
-
-          for (const line of lines) {
-            try {
-              const token = fileOnlyRetryOpts.parseChunk(line)
-              if (token === null) continue
-              fileOnlyRetryText += token
-            } catch (_) {
-              // ignore partial chunks
-            }
-          }
-        }
+        const fileOnlyRetryText = await this._readResponseText(
+          fileOnlyRetryResponse,
+          fileOnlyRetryOpts.parseChunk,
+          { abortSignal }
+        )
 
         assistantText = fileOnlyRetryText || assistantText
         parsedResponse = this._parseResponse(assistantText)
@@ -1002,7 +1103,7 @@ ${resolvedMessage}`
         return { text: "Generation stopped", actions: [] }
       }
 
-      return { error: `AI error: ${error.message}` }
+      return { error: this._formatProviderError(runtimeConfig, error.message) }
     } finally {
       this.currentEditableTargets = null
     }

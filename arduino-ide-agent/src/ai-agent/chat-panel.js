@@ -4,8 +4,12 @@ const path = require("path");
 const AIAgent = require("./agent");
 
 const MODELS_BY_PROVIDER = {
-  groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
-  openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
+  groq: ["llama-3.1-8b-instant"],
+  openrouter: [
+    "mistralai/mistral-7b-instruct:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemini-2.0-flash-exp:free"
+  ],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
 };
 
@@ -13,7 +17,8 @@ class ChatPanel {
   constructor(context) {
     this.context = context;
     this.panel = null;
-    this.agent = new AIAgent();
+    this.circuitPreviewPanel = null;
+    this.agent = new AIAgent(context); // Pass context to agent
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
@@ -216,6 +221,7 @@ class ChatPanel {
       ".json": "json",
       ".html": "html",
       ".css": "css",
+      ".svg": "plaintext",
       ".md": "markdown",
       ".py": "python",
       ".java": "java",
@@ -242,11 +248,28 @@ class ChatPanel {
       );
       editBuilder.replace(fullRange, content);
     });
-    await vscode.languages.setTextDocumentLanguage(
-      editor.document,
-      this._getLanguageIdForPath(filePath)
-    );
+    try {
+      await vscode.languages.setTextDocumentLanguage(
+        editor.document,
+        this._getLanguageIdForPath(filePath)
+      );
+    } catch (_) {
+      // Some Arduino IDE hosts do not expose the same language IDs as VS Code.
+    }
     return { success: true, path: suggested };
+  }
+
+  async _openWorkspacePreviewFile(workspaceFolder, fileName, content) {
+    if (!workspaceFolder) {
+      return this._openDraftFile(fileName, content);
+    }
+
+    const previewDir = path.join(workspaceFolder, ".code-janitor-previews");
+    const targetPath = path.join(previewDir, fileName);
+    fs.mkdirSync(previewDir, { recursive: true });
+    fs.writeFileSync(targetPath, content, "utf8");
+    await this._revealWorkspaceFile(targetPath);
+    return { success: true, path: targetPath };
   }
 
   async _revealWorkspaceFile(filePath) {
@@ -283,6 +306,393 @@ class ChatPanel {
       path: document.fileName,
       relativePath: path.basename(document.fileName)
     };
+  }
+
+  _inferCircuitFromSketch(code) {
+    const text = String(code || "");
+    const pins = new Map();
+    const looksLikeHardwareLabel = (value) =>
+      /\b(pin|led|btn|button|switch|relay|echo|trig|trigger|servo|buzzer|motor|pwm|dir|en|enable|sensor|ultra|sonar|ir|rx|tx|sda|scl)\b/i.test(
+        String(value || "")
+      );
+    const registerPin = (rawPin, labelHint, modeHint) => {
+      const pin = String(rawPin || "").trim();
+      if (!pin || !/^(A\d+|\d+)$/i.test(pin)) return;
+      const normalizedPin = pin.toUpperCase();
+      const existing = pins.get(normalizedPin) || {
+        pin: normalizedPin,
+        labels: new Set(),
+        modes: new Set()
+      };
+      if (labelHint) existing.labels.add(String(labelHint).trim());
+      if (modeHint) existing.modes.add(String(modeHint).trim().toUpperCase());
+      pins.set(normalizedPin, existing);
+    };
+
+    const definitions = new Map();
+    const definitionRegex =
+      /^\s*(?:const\s+)?(?:byte|int|uint8_t|short|long|auto)\s+([A-Za-z_]\w*)\s*=\s*(A\d+|\d+)\s*;/gm;
+    let match;
+    while ((match = definitionRegex.exec(text)) !== null) {
+      definitions.set(match[1], match[2].toUpperCase());
+      if (looksLikeHardwareLabel(match[1])) {
+        registerPin(match[2], match[1], null);
+      }
+    }
+
+    const defineRegex = /^\s*#define\s+([A-Za-z_]\w*)\s+(A\d+|\d+)\b/gm;
+    while ((match = defineRegex.exec(text)) !== null) {
+      definitions.set(match[1], match[2].toUpperCase());
+      if (looksLikeHardwareLabel(match[1])) {
+        registerPin(match[2], match[1], null);
+      }
+    }
+
+    const resolvePin = (token) => {
+      const trimmed = String(token || "").trim();
+      if (/^(A\d+|\d+)$/i.test(trimmed)) return trimmed.toUpperCase();
+      return definitions.get(trimmed) || "";
+    };
+
+    const pinModeRegex = /pinMode\s*\(\s*([A-Za-z_]\w*|A\d+|\d+)\s*,\s*(INPUT_PULLUP|INPUT|OUTPUT)\s*\)/g;
+    while ((match = pinModeRegex.exec(text)) !== null) {
+      const resolved = resolvePin(match[1]);
+      registerPin(resolved, match[1], match[2]);
+    }
+
+    const pinUseRegex = /\b(?:digitalWrite|digitalRead|analogWrite|analogRead|tone|noTone|servo\.attach|attach)\s*\(\s*([A-Za-z_]\w*|A\d+|\d+)/g;
+    while ((match = pinUseRegex.exec(text)) !== null) {
+      const resolved = resolvePin(match[1]);
+      registerPin(resolved, match[1], null);
+    }
+
+    const classify = (entry) => {
+      const combined = Array.from(entry.labels).join(" ").toLowerCase();
+      if (/led/.test(combined)) return "LED";
+      if (/button|switch|key/.test(combined)) return "Button";
+      if (/buzzer|speaker|tone/.test(combined)) return "Buzzer";
+      if (/servo/.test(combined)) return "Servo";
+      if (/relay/.test(combined)) return "Relay";
+      if (/trig|echo|ultra|sonar/.test(combined)) return "Ultrasonic Sensor";
+      if (/dht|temp|humid/.test(combined)) return "Temperature Sensor";
+      if (/pot|analog/.test(combined)) return "Potentiometer";
+      if (/pir|motion/.test(combined)) return "Motion Sensor";
+      if (/motor/.test(combined)) return "Motor Driver";
+      if (entry.modes.has("OUTPUT")) return "Output Device";
+      if (entry.modes.has("INPUT") || entry.modes.has("INPUT_PULLUP"))
+        return "Input Device";
+      return "Verify Component";
+    };
+
+    return Array.from(pins.values())
+      .sort((a, b) => a.pin.localeCompare(b.pin, undefined, { numeric: true }))
+      .map((entry) => ({
+        pin: entry.pin,
+        label: Array.from(entry.labels)[0] || entry.pin,
+        mode: Array.from(entry.modes)[0] || "VERIFY",
+        component: classify(entry)
+      }));
+  }
+
+  _buildCircuitSvg(fileName, circuitEntries) {
+    const entries = Array.isArray(circuitEntries) ? circuitEntries.slice(0, 10) : [];
+    const width = 980;
+    const headerHeight = 84;
+    const rowHeight = 62;
+    const height = Math.max(360, headerHeight + 120 + entries.length * rowHeight);
+    const boardX = 60;
+    const boardY = 110;
+    const boardWidth = 250;
+    const boardHeight = Math.max(180, entries.length * 28 + 70);
+    const componentX = 640;
+
+    const escapeXml = (value) =>
+      String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const palette = ["#ff6b35", "#2a9d8f", "#e63946", "#457b9d", "#6d597a", "#43aa8b"];
+    const pins = entries
+      .map((entry, index) => {
+        const y = boardY + 38 + index * 28;
+        return `
+  <circle cx="${boardX + boardWidth}" cy="${y}" r="5" fill="#0f172a" />
+  <text x="${boardX + boardWidth - 16}" y="${y + 4}" font-size="13" text-anchor="end" fill="#0f172a">${escapeXml(entry.pin)}</text>
+  <line x1="${boardX + boardWidth + 6}" y1="${y}" x2="${componentX - 36}" y2="${headerHeight + 70 + index * rowHeight}" stroke="${palette[index % palette.length]}" stroke-width="3" />
+  <rect x="${componentX - 20}" y="${headerHeight + 44 + index * rowHeight}" width="250" height="40" rx="10" fill="#ffffff" stroke="${palette[index % palette.length]}" stroke-width="2" />
+  <text x="${componentX - 4}" y="${headerHeight + 68 + index * rowHeight}" font-size="14" font-weight="700" fill="#0f172a">${escapeXml(entry.component)}</text>
+  <text x="${componentX + 122}" y="${headerHeight + 68 + index * rowHeight}" font-size="12" text-anchor="end" fill="#475569">${escapeXml(entry.label)}</text>`;
+      })
+      .join("\n");
+
+    const notes = entries.length
+      ? "Verify resistor values, power rails, and exact sensor module variants in the sketch before wiring."
+      : "No obvious pin mappings were found automatically. Use the text tutorial and verify connections manually.";
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect width="${width}" height="${height}" fill="#f8fafc" />
+  <rect x="28" y="24" width="${width - 56}" height="${height - 48}" rx="24" fill="url(#panel)" stroke="#cbd5e1" />
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff7ed" />
+      <stop offset="100%" stop-color="#eef6ff" />
+    </linearGradient>
+  </defs>
+  <text x="56" y="64" font-size="28" font-weight="700" fill="#0f172a">TinkerCAD Wiring Preview</text>
+  <text x="56" y="90" font-size="14" fill="#475569">${escapeXml(fileName)}</text>
+  <rect x="${boardX}" y="${boardY}" width="${boardWidth}" height="${boardHeight}" rx="18" fill="#2563eb" />
+  <text x="${boardX + 24}" y="${boardY + 32}" font-size="24" font-weight="700" fill="#ffffff">Arduino Uno R3</text>
+  <text x="${boardX + 24}" y="${boardY + 56}" font-size="12" fill="#dbeafe">Detected signal pins from sketch</text>
+${pins}
+  <text x="56" y="${height - 42}" font-size="13" fill="#334155">${escapeXml(notes)}</text>
+</svg>`;
+  }
+
+  _buildCircuitPreviewHtml(fileName, svgContent) {
+    const escapedTitle = String(fileName || "Circuit Preview")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const embeddedSvg = String(svgContent || "").replace(
+      /^\s*<\?xml[^>]*>\s*/i,
+      ""
+    );
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapedTitle} Circuit Preview</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Segoe UI, Arial, sans-serif;
+      background: linear-gradient(135deg, #fff7ed 0%, #eff6ff 100%);
+      color: #0f172a;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    p {
+      margin: 0 0 16px;
+      color: #475569;
+    }
+    .frame {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 18px;
+      overflow: auto;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>${escapedTitle} Wiring Preview</h1>
+    <p>This is an auto-generated visual summary from the sketch. Verify pins and component values before building.</p>
+    <div class="frame">
+${embeddedSvg}
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  _buildCircuitMermaid(fileName, circuitEntries) {
+    const entries = Array.isArray(circuitEntries) ? circuitEntries.slice(0, 12) : [];
+    const sanitizeId = (value) =>
+      String(value || "node")
+        .replace(/[^a-z0-9]+/gi, "_")
+        .replace(/^_+|_+$/g, "") || "node";
+    const escapeLabel = (value) =>
+      String(value || "")
+        .replace(/"/g, "'")
+        .replace(/\n/g, " ");
+
+    const lines = [
+      "flowchart LR",
+      `  sketch["${escapeLabel(fileName || "Arduino Sketch")}"]`,
+      '  uno["Arduino Uno R3"]'
+    ];
+
+    if (entries.length === 0) {
+      lines.push('  note["No obvious hardware pins were detected automatically"]');
+      lines.push("  sketch --> uno");
+      lines.push("  uno -.-> note");
+      return lines.join("\n");
+    }
+
+    lines.push("  sketch --> uno");
+    entries.forEach((entry, index) => {
+      const componentId = `comp_${index}_${sanitizeId(entry.label || entry.pin)}`;
+      const pinId = `pin_${sanitizeId(entry.pin)}`;
+      const componentLabel = `${entry.component}\\n${entry.label}`;
+      lines.push(`  ${pinId}["Pin ${escapeLabel(entry.pin)}"]`);
+      lines.push(`  ${componentId}["${escapeLabel(componentLabel)}"]`);
+      lines.push(`  uno --> ${pinId}`);
+      lines.push(`  ${pinId} --> ${componentId}`);
+    });
+
+    return lines.join("\n");
+  }
+
+  _buildCircuitMermaidPreviewHtml(fileName, mermaidCode) {
+    const escapedTitle = String(fileName || "Circuit Preview")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const escapedCode = String(mermaidCode || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapedTitle} Mermaid Preview</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: linear-gradient(135deg, #fff7ed 0%, #eff6ff 100%);
+      color: #0f172a;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .panel {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 18px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+    .head {
+      padding: 18px 22px;
+      border-bottom: 1px solid #e2e8f0;
+      background: rgba(255,255,255,0.82);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+    }
+    p {
+      margin: 0;
+      color: #475569;
+    }
+    .diagram {
+      padding: 24px;
+      overflow: auto;
+      background: #fff;
+    }
+    .source {
+      padding: 18px 22px;
+      border-top: 1px solid #e2e8f0;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .fallback {
+      padding: 14px 18px;
+      background: #fff7ed;
+      color: #9a3412;
+      border: 1px solid #fdba74;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      display: none;
+    }
+  </style>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    window.__renderMermaid = async () => {
+      mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+      const el = document.querySelector(".mermaid");
+      if (!el) return;
+      await mermaid.run({ nodes: [el] });
+    };
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div class="head">
+        <h1>${escapedTitle} Block Diagram</h1>
+        <p>Auto-generated Mermaid diagram from the Arduino sketch. Verify detected pins before wiring hardware.</p>
+      </div>
+      <div class="diagram">
+        <div class="fallback" id="fallback">Mermaid failed to load in this host. The Mermaid source is shown below so you can still copy it.</div>
+        <div class="mermaid">${escapedCode}</div>
+      </div>
+      <div class="source">
+        <pre>${escapedCode}</pre>
+      </div>
+    </div>
+  </div>
+  <script>
+    (async function () {
+      try {
+        if (window.__renderMermaid) {
+          await window.__renderMermaid();
+        } else {
+          document.getElementById("fallback").style.display = "block";
+        }
+      } catch (error) {
+        document.getElementById("fallback").style.display = "block";
+      }
+    })();
+  </script>
+</body>
+</html>`;
+  }
+
+  _showCircuitMermaidPreview(fileName, mermaidCode) {
+    if (this.circuitPreviewPanel) {
+      this.circuitPreviewPanel.reveal(vscode.ViewColumn.Beside);
+    } else {
+      this.circuitPreviewPanel = vscode.window.createWebviewPanel(
+        "codeJanitorArduinoCircuitPreview",
+        `Circuit Preview: ${path.basename(fileName)}`,
+        vscode.ViewColumn.Beside,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true
+        }
+      );
+      this.circuitPreviewPanel.onDidDispose(() => {
+        this.circuitPreviewPanel = null;
+      });
+    }
+
+    this.circuitPreviewPanel.title = `Circuit Preview: ${path.basename(fileName)}`;
+    this.circuitPreviewPanel.webview.html = this._buildCircuitMermaidPreviewHtml(
+      fileName,
+      mermaidCode
+    );
   }
 
   _summarizeGitStatus(output) {
@@ -548,10 +958,44 @@ ${trimmedText}`;
   }
 
   async _updateAiConfig(key, value) {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const target = this._getConfigTargetForKey(key);
-    await cfg.update(key, value, target);
-    return cfg;
+    try {
+      // Arduino IDE uses Theia/Eclipse framework, not pure VS Code
+      // We need to update config and ensure it persists
+      const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+      
+      // Try Global target first (works in both VS Code and Arduino IDE)
+      await cfg.update(key, value, vscode.ConfigurationTarget.Global);
+      
+      // Also try updating in the configuration object directly as fallback
+      // This ensures Arduino IDE's Theia framework picks it up
+      await new Promise(r => setTimeout(r, 200));
+      
+      // Verify the update worked
+      const freshCfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+      const actualValue = freshCfg.get(key);
+      
+      console.log(`[CodeJanitor] Updated ${key} to ${value}, actual value: ${actualValue}`);
+      
+      if (actualValue !== value) {
+        console.warn(`[CodeJanitor] Config update may not have persisted. Expected ${value}, got ${actualValue}`);
+      }
+      
+      return freshCfg;
+    } catch (error) {
+      console.error(`[CodeJanitor] Failed to update config ${key}:`, error);
+      // Don't throw - return current config as fallback
+      return vscode.workspace.getConfiguration("codeJanitor.ai");
+    }
+  }
+
+  async _syncAiState(provider, model) {
+    if (provider) {
+      await this.context.globalState.update("codeJanitor.ai.provider", provider);
+    }
+    if (model) {
+      await this.context.globalState.update("codeJanitor.ai.model", model);
+      this._saveProviderModel(provider, model);
+    }
   }
 
   _setupMessageHandler() {
@@ -1011,35 +1455,181 @@ ${trimmedText}`;
       } else if (message.type === "setModel") {
         const cfg = await this._updateAiConfig("model", message.model);
         const provider = cfg.get("provider", "ollama");
-        this._saveProviderModel(provider, message.model);
+        await this._syncAiState(provider, message.model);
+        console.log(`[CodeJanitor] Model switched to: ${message.model} for provider: ${provider}`);
       } else if (message.type === "setProvider") {
-        await this._updateAiConfig("provider", message.provider);
-        const defaultModel = this._getDefaultModelForProvider(message.provider);
-        const savedModel = this._getSavedProviderModel(message.provider);
-        const nextModel = savedModel || defaultModel;
-        await this._updateAiConfig("model", nextModel);
-        if (message.apiKey && message.provider === "groq") {
-          await this._persistApiKey("groq", message.apiKey);
+        try {
+          console.log(`[CodeJanitor] Switching provider to: ${message.provider}`);
+
+          await this._updateAiConfig("provider", message.provider);
+          // Get the appropriate model for this provider
+          const defaultModel = this._getDefaultModelForProvider(message.provider);
+          const savedModel = this._getSavedProviderModel(message.provider);
+          const nextModel = savedModel || defaultModel;
+
+          console.log(`[CodeJanitor] Setting model to: ${nextModel}`);
+
+          await this._updateAiConfig("model", nextModel);
+          await this._syncAiState(message.provider, nextModel);
+
+          // Save API key if provided
+          if (message.apiKey) {
+            if (message.provider === "groq") {
+              await this._persistApiKey("groq", message.apiKey);
+            }
+            if (message.provider === "openrouter") {
+              await this._persistApiKey("openrouter", message.apiKey);
+            }
+            if (message.provider === "anthropic") {
+              await this._persistApiKey("anthropic", message.apiKey);
+            }
+            console.log(`[CodeJanitor] API key saved for ${message.provider}`);
+          }
+          
+          // Wait for persistence
+          await new Promise(r => setTimeout(r, 300));
+          
+          const effectiveConfig = this.agent.getConfig();
+          console.log(
+            `[CodeJanitor] Effective config - Provider: ${effectiveConfig.provider}, Model: ${effectiveConfig.model}`
+          );
+          
+          // Send updated state to UI
+          const restoredKeys = await this._restoreApiKeys();
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "providerSwitched",
+              provider: effectiveConfig.provider,
+              model: effectiveConfig.model,
+              hasGroqKey: restoredKeys.groq,
+              hasOpenrouterKey: restoredKeys.openrouter,
+              hasAnthropicKey: restoredKeys.anthropic
+            });
+          }
+          
+          // Fetch models for the new provider if needed
+          if (effectiveConfig.provider === "ollama") {
+            await this._fetchAndSendModels();
+          }
+        } catch (error) {
+          console.error(`[CodeJanitor] Error switching provider:`, error);
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "error",
+              text: `Failed to switch provider: ${error.message}`
+            });
+          }
         }
-        if (message.apiKey && message.provider === "openrouter") {
-          await this._persistApiKey("openrouter", message.apiKey);
-        }
-        if (message.apiKey && message.provider === "anthropic") {
-          await this._persistApiKey("anthropic", message.apiKey);
-        }
-        // Wait for config to persist before fetching models
-        await new Promise(r => setTimeout(r, 300));
-        if (this.panel) {
-          this.panel.webview.postMessage({
-            type: "status",
-            text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
-          });
-        }
-        await this._fetchAndSendModels();
       } else if (message.type === "openGit") {
         vscode.commands.executeCommand("codeJanitorArduino.openSourceControl");
+      } else if (message.type === "generateCircuit") {
+        await this._generateCircuitDiagram(workspaceFolder);
       }
     });
+  }
+
+  async _generateCircuitDiagram(workspaceFolder) {
+    const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+    if (
+      !activeEditor ||
+      activeEditor.document.uri.scheme !== "file" ||
+      !/\.ino$/i.test(activeEditor.document.fileName || "")
+    ) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Please open an Arduino (.ino) file to generate circuit instructions."
+      });
+      return;
+    }
+
+    this.panel.webview.postMessage({ type: "thinking" });
+    this.panel.webview.postMessage({ type: "status", text: "Analyzing Arduino sketch for TinkerCAD steps..." });
+
+    const code = activeEditor.document.getText();
+    const fileName = path.basename(activeEditor.document.fileName);
+    const sketchFolder = path.basename(path.dirname(activeEditor.document.fileName));
+
+    const prompt = `Analyze this Arduino sketch and generate a TinkerCAD Circuits build guide.
+
+File: ${fileName}
+Sketch folder: ${sketchFolder}
+\`\`\`cpp
+${code}
+\`\`\`
+
+Provide step-by-step TinkerCAD instructions:
+1. **Components Needed**: List all components with exact names as they appear in TinkerCAD (e.g., "Arduino Uno R3", "Red LED", "220Ω Resistor", "Pushbutton")
+2. **Step-by-Step Wiring**: Numbered steps for connecting each component in TinkerCAD
+   - Example: "1. Drag Arduino Uno R3 to workspace"
+   - Example: "2. Place Red LED on breadboard at E5-E6"
+   - Example: "3. Connect LED anode (E5) to Arduino pin 13 with wire"
+3. **Power Connections**: All GND and 5V/3.3V connections
+4. **Testing Instructions**: How to run the simulation in TinkerCAD
+5. **Expected Behavior**: What should happen when code runs
+
+Rules:
+- Do not output FILE:, MKDIR:, or CMD: actions.
+- Do not ask follow-up questions.
+- If a pin or component is uncertain, say "Verify this pin in the sketch".
+- Keep the answer practical and beginner-friendly.
+
+Format as a clear tutorial that students can follow step-by-step in TinkerCAD Circuits.`;
+
+    try {
+      let streamedText = "";
+      const response = await this.agent.chat(
+        prompt,
+        workspaceFolder,
+        (chunk) => {
+          streamedText += chunk;
+          this.panel.webview.postMessage({ type: "stream", text: chunk });
+        },
+        null,
+        {
+          mode: "fast",
+          intentOverride: "general",
+          onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
+        }
+      );
+
+      if (response.error) {
+        this.panel.webview.postMessage({ type: "error", text: response.error });
+      } else {
+        const fallbackText =
+          typeof response.text === "string" ? response.text.trim() : "";
+        if (!streamedText.trim() && fallbackText) {
+          this.panel.webview.postMessage({ type: "stream", text: fallbackText });
+        }
+        this.panel.webview.postMessage({ type: "status", text: "✅ TinkerCAD tutorial generated! Follow the steps above to build your circuit." });
+
+        this.panel.webview.postMessage({
+          type: "status",
+          text: "TinkerCAD tutorial generated. Follow the steps above to build your circuit."
+        });
+
+        const circuitEntries = this._inferCircuitFromSketch(code);
+        const mermaidCode = this._buildCircuitMermaid(fileName, circuitEntries);
+        this._showCircuitMermaidPreview(fileName, mermaidCode);
+        this.panel.webview.postMessage({
+          type: "status",
+          text: "Opened Mermaid circuit preview beside the chat."
+        });
+
+        const openTinkercad = await vscode.window.showInformationMessage(
+          "Open TinkerCAD Circuits to start building?",
+          "Open TinkerCAD",
+          "Cancel"
+        );
+
+        if (openTinkercad === "Open TinkerCAD") {
+          vscode.env.openExternal(vscode.Uri.parse("https://www.tinkercad.com/dashboard"));
+        }
+      }
+    } catch (err) {
+      this.panel.webview.postMessage({ type: "error", text: `Circuit generation failed: ${err.message}` });
+    } finally {
+      this.panel.webview.postMessage({ type: "done" });
+    }
   }
 }
 

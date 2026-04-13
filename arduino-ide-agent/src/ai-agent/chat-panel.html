@@ -888,6 +888,7 @@
 
     <div id="action-bar">
       <div class="action-chip" data-action="git">🌿 Source Control</div>
+      <div class="action-chip" data-action="circuit">🔌 Generate Circuit</div>
       <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
       <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
       <div class="action-chip" data-action="explain">💡 Explain file</div>
@@ -995,27 +996,11 @@
       var modelsByProvider = {
         groq: [
           "llama-3.1-8b-instant",
-          "llama-3.1-70b-versatile",
-          "llama3-8b-8192",
-          "llama3-70b-8192",
-          "mixtral-8x7b-32768",
-          "gemma2-9b-it",
         ],
         openrouter: [
-          "qwen/qwen-2.5-coder-32b-instruct",
-          "qwen/qwen3-coder:free",
-          "qwen/qwen3-coder",
-          "qwen/qwen3-32b",
-          "qwen/qwen3-14b",
-          "qwen/qwen3-8b",
-          "qwen/qwq-32b",
-          "qwen/qwen2.5-coder-7b-instruct",
-          "qwen/qwen-2.5-72b-instruct",
-          "deepseek/deepseek-r1-distill-qwen-32b",
-          "meta-llama/llama-3.3-70b-instruct",
+          "mistralai/mistral-7b-instruct:free",
           "meta-llama/llama-3.1-8b-instruct:free",
           "google/gemini-2.0-flash-exp:free",
-          "mistralai/mistral-7b-instruct:free",
         ],
         anthropic: [
           "claude-opus-4-5",
@@ -1531,6 +1516,11 @@
             vscode.postMessage({ type: "openGit" });
             return;
           }
+          // Circuit diagram generation
+          if (action === "circuit") {
+            vscode.postMessage({ type: "generateCircuit" });
+            return;
+          }
           // Syntax/scan chips run directly without the model
           if (action === "syntax") {
             vscode.postMessage({ type: "syntaxScan", activeOnly: true });
@@ -1680,6 +1670,57 @@
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
           addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
+        } else if (msg.type === "providerSwitched") {
+          // Provider was switched - update UI without triggering onchange
+          console.log("[UI] Provider switched to:", msg.provider, "Model:", msg.model);
+          
+          // Temporarily disable onchange to prevent circular updates
+          var oldOnChange = providerSelect.onchange;
+          providerSelect.onchange = null;
+          
+          providerSelect.value = msg.provider;
+          currentHasGroqKey = !!msg.hasGroqKey;
+          currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
+          currentHasAnthropicKey = !!msg.hasAnthropicKey;
+          
+          var needsKey =
+            msg.provider === "groq" ||
+            msg.provider === "openrouter" ||
+            msg.provider === "anthropic";
+          apiKeyRow.classList.toggle("visible", needsKey);
+          
+          if (needsKey && providerLinks[msg.provider]) {
+            apiKeyLink.href = providerLinks[msg.provider];
+            apiKeyLink.textContent = "Get " + msg.provider + " key";
+          }
+          
+          var hasKey =
+            (msg.provider === "groq" && currentHasGroqKey) ||
+            (msg.provider === "openrouter" && currentHasOpenrouterKey) ||
+            (msg.provider === "anthropic" && currentHasAnthropicKey);
+          
+          if (hasKey) {
+            showKeySaved();
+            var modelsToShow = modelsByProvider[msg.provider];
+            if (modelsToShow) {
+              populateModels(modelsToShow);
+              if (msg.model) {
+                modelSelect.value = msg.model;
+              }
+            }
+          } else if (msg.provider === "ollama") {
+            showNoModels("Loading models...");
+          } else {
+            showKeyInput();
+            if (needsKey) showNoModels("Save an API key to see models");
+          }
+          
+          // Restore onchange handler
+          setTimeout(function() {
+            providerSelect.onchange = oldOnChange;
+          }, 100);
+          
+          addRow("Provider switched to " + msg.provider + ". Model: " + msg.model, "status");
         } else if (msg.type === "setCurrentProvider") {
           if (msg.provider) {
             providerSelect.value = msg.provider;

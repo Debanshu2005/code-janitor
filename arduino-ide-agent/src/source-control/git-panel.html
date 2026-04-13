@@ -687,179 +687,179 @@
     <div id="status-bar"></div>
 
     <div id="commit-graph">
-    <div class="graph-header" id="graph-toggle">
-    <span>📊 Commits</span>
-    <span id="graph-arrow">▼</span>
-    </div>
-    <div id="commit-list"></div>
+      <div class="graph-header" id="graph-toggle">
+        <span>📊 Commits</span>
+        <span id="graph-arrow">▼</span>
+      </div>
+      <div id="commit-list"></div>
     </div>
 
     <script>
-    const vscode = acquireVsCodeApi();
+      const vscode = acquireVsCodeApi();
 
-    function showStatus(text, type = "info") {
-    const statusBar = document.getElementById("status-bar");
-    statusBar.textContent = text;
-    statusBar.className = "visible " + type;
-    setTimeout(() => statusBar.classList.remove("visible"), 5000);
-    }
+      function showStatus(text, type = "info") {
+        const statusBar = document.getElementById("status-bar");
+        statusBar.textContent = text;
+        statusBar.className = "visible " + type;
+        setTimeout(() => statusBar.classList.remove("visible"), 5000);
+      }
 
-    function getStatusIcon(status) {
-    if (status === "M") return { icon: "M", class: "modified" };
-    if (status === "A") return { icon: "A", class: "added" };
-    if (status === "D") return { icon: "D", class: "deleted" };
-    if (status === "?") return { icon: "U", class: "untracked" };
-    return { icon: "M", class: "modified" };
-    }
+      function getStatusIcon(status) {
+        if (status === "M") return { icon: "M", class: "modified" };
+        if (status === "A") return { icon: "A", class: "added" };
+        if (status === "D") return { icon: "D", class: "deleted" };
+        if (status === "?") return { icon: "U", class: "untracked" };
+        return { icon: "M", class: "modified" };
+      }
 
-    function createFileItem(file, status, isStaged, isConflict = false) {
-    const item = document.createElement("div");
-    item.className = "file-item" + (isConflict ? " conflict" : "");
+      function createFileItem(file, status, isStaged, isConflict = false) {
+        const item = document.createElement("div");
+        item.className = "file-item" + (isConflict ? " conflict" : "");
 
-    const statusInfo = isConflict
-    ? { icon: "!", class: "deleted" }
-    : getStatusIcon(status);
-    const statusEl = document.createElement("div");
-    statusEl.className = `file-status ${statusInfo.class}`;
-    statusEl.textContent = statusInfo.icon;
+        const statusInfo = isConflict
+          ? { icon: "!", class: "deleted" }
+          : getStatusIcon(status);
+        const statusEl = document.createElement("div");
+        statusEl.className = `file-status ${statusInfo.class}`;
+        statusEl.textContent = statusInfo.icon;
 
-    const nameEl = document.createElement("div");
-    nameEl.className = "file-name";
-    nameEl.textContent = file;
-    nameEl.title = file;
+        const nameEl = document.createElement("div");
+        nameEl.className = "file-name";
+        nameEl.textContent = file;
+        nameEl.title = file;
 
-    const actionsEl = document.createElement("div");
-    actionsEl.className = "file-actions";
+        const actionsEl = document.createElement("div");
+        actionsEl.className = "file-actions";
 
-    if (isConflict) {
-    const resolveBtn = document.createElement("button");
-    resolveBtn.className = "file-action";
-    resolveBtn.textContent = "✓";
-    resolveBtn.title = "Mark Resolved";
-    resolveBtn.onclick = (e) => {
-    e.stopPropagation();
-    vscode.postMessage({ type: "resolveConflict", file });
-    };
-    actionsEl.appendChild(resolveBtn);
-    } else {
-    const stageBtn = document.createElement("button");
-    stageBtn.className = "file-action";
-    stageBtn.textContent = isStaged ? "−" : "+";
-    stageBtn.title = isStaged ? "Unstage" : "Stage";
-    stageBtn.onclick = (e) => {
-    e.stopPropagation();
-    vscode.postMessage({ type: isStaged ? "unstage" : "stage", file });
-    };
+        if (isConflict) {
+          const resolveBtn = document.createElement("button");
+          resolveBtn.className = "file-action";
+          resolveBtn.textContent = "✓";
+          resolveBtn.title = "Mark Resolved";
+          resolveBtn.onclick = (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: "resolveConflict", file });
+          };
+          actionsEl.appendChild(resolveBtn);
+        } else {
+          const stageBtn = document.createElement("button");
+          stageBtn.className = "file-action";
+          stageBtn.textContent = isStaged ? "−" : "+";
+          stageBtn.title = isStaged ? "Unstage" : "Stage";
+          stageBtn.onclick = (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: isStaged ? "unstage" : "stage", file });
+          };
 
-    if (!isStaged && status !== "?") {
-    const discardBtn = document.createElement("button");
-    discardBtn.className = "file-action";
-    discardBtn.textContent = "↶";
-    discardBtn.title = "Discard";
-    discardBtn.onclick = (e) => {
-    e.stopPropagation();
-    vscode.postMessage({ type: "discardChanges", file });
-    };
-    actionsEl.appendChild(discardBtn);
-    }
+          if (!isStaged && status !== "?") {
+            const discardBtn = document.createElement("button");
+            discardBtn.className = "file-action";
+            discardBtn.textContent = "↶";
+            discardBtn.title = "Discard";
+            discardBtn.onclick = (e) => {
+              e.stopPropagation();
+              vscode.postMessage({ type: "discardChanges", file });
+            };
+            actionsEl.appendChild(discardBtn);
+          }
 
-    actionsEl.appendChild(stageBtn);
-    }
+          actionsEl.appendChild(stageBtn);
+        }
 
-    item.appendChild(statusEl);
-    item.appendChild(nameEl);
-    item.appendChild(actionsEl);
+        item.appendChild(statusEl);
+        item.appendChild(nameEl);
+        item.appendChild(actionsEl);
 
-    item.onclick = () => vscode.postMessage({ type: "openFile", file });
+        item.onclick = () => vscode.postMessage({ type: "openFile", file });
 
-    return item;
-    }
+        return item;
+      }
 
-    window.addEventListener("message", (event) => {
-    const msg = event.data;
+      window.addEventListener("message", (event) => {
+        const msg = event.data;
 
-    if (msg.type === "updateStatus") {
-    document.getElementById("no-repo").style.display = "none";
-    document.getElementById("branch-info").style.display = "flex";
-    document.getElementById("commit-section").style.display = "block";
-    document.getElementById("commit-graph").style.display = "block";
-    document.getElementById("branch-text").textContent = msg.branch;
+        if (msg.type === "updateStatus") {
+          document.getElementById("no-repo").style.display = "none";
+          document.getElementById("branch-info").style.display = "flex";
+          document.getElementById("commit-section").style.display = "block";
+          document.getElementById("commit-graph").style.display = "block";
+          document.getElementById("branch-text").textContent = msg.branch;
 
-    document.getElementById("staged-list").innerHTML = "";
-    document.getElementById("unstaged-list").innerHTML = "";
-    document.getElementById("conflict-list").innerHTML = "";
+          document.getElementById("staged-list").innerHTML = "";
+          document.getElementById("unstaged-list").innerHTML = "";
+          document.getElementById("conflict-list").innerHTML = "";
 
-    const hasConflicts = msg.conflicts && msg.conflicts.length > 0;
-    document.getElementById("merge-banner").style.display = hasConflicts
-    ? "block"
-    : "none";
+          const hasConflicts = msg.conflicts && msg.conflicts.length > 0;
+          document.getElementById("merge-banner").style.display = hasConflicts
+            ? "block"
+            : "none";
 
-    if (hasConflicts) {
-    document.getElementById("conflict-msg").textContent =
-    `${msg.conflicts.length} file(s) with conflicts`;
-    document.getElementById("conflict-section").style.display = "block";
-    document.getElementById("conflict-count").textContent =
-    msg.conflicts.length;
-    msg.conflicts.forEach((file) => {
-    document
-    .getElementById("conflict-list")
-    .appendChild(createFileItem(file, "U", false, true));
-    });
-    } else {
-    document.getElementById("conflict-section").style.display = "none";
-    }
+          if (hasConflicts) {
+            document.getElementById("conflict-msg").textContent =
+              `${msg.conflicts.length} file(s) with conflicts`;
+            document.getElementById("conflict-section").style.display = "block";
+            document.getElementById("conflict-count").textContent =
+              msg.conflicts.length;
+            msg.conflicts.forEach((file) => {
+              document
+                .getElementById("conflict-list")
+                .appendChild(createFileItem(file, "U", false, true));
+            });
+          } else {
+            document.getElementById("conflict-section").style.display = "none";
+          }
 
-    if (
-    msg.staged.length === 0 &&
-    msg.unstaged.length === 0 &&
-    !hasConflicts
-    ) {
-    document.getElementById("staged-section").style.display = "none";
-    document.getElementById("unstaged-section").style.display = "none";
-    document.getElementById("no-changes").style.display = "block";
-    } else {
-    document.getElementById("no-changes").style.display = "none";
+          if (
+            msg.staged.length === 0 &&
+            msg.unstaged.length === 0 &&
+            !hasConflicts
+          ) {
+            document.getElementById("staged-section").style.display = "none";
+            document.getElementById("unstaged-section").style.display = "none";
+            document.getElementById("no-changes").style.display = "block";
+          } else {
+            document.getElementById("no-changes").style.display = "none";
 
-    if (msg.staged.length > 0) {
-    document.getElementById("staged-section").style.display = "block";
-    document.getElementById("staged-count").textContent =
-    msg.staged.length;
-    msg.staged.forEach((item) => {
-    document
-    .getElementById("staged-list")
-    .appendChild(createFileItem(item.file, item.status, true));
-    });
-    } else {
-    document.getElementById("staged-section").style.display = "none";
-    }
+            if (msg.staged.length > 0) {
+              document.getElementById("staged-section").style.display = "block";
+              document.getElementById("staged-count").textContent =
+                msg.staged.length;
+              msg.staged.forEach((item) => {
+                document
+                  .getElementById("staged-list")
+                  .appendChild(createFileItem(item.file, item.status, true));
+              });
+            } else {
+              document.getElementById("staged-section").style.display = "none";
+            }
 
-    if (msg.unstaged.length > 0) {
-    document.getElementById("unstaged-section").style.display =
-    "block";
-    document.getElementById("unstaged-count").textContent =
-    msg.unstaged.length;
-    msg.unstaged.forEach((item) => {
-    document
-    .getElementById("unstaged-list")
-    .appendChild(createFileItem(item.file, item.status, false));
-    });
-    } else {
-    document.getElementById("unstaged-section").style.display =
-    "none";
-    }
-    }
+            if (msg.unstaged.length > 0) {
+              document.getElementById("unstaged-section").style.display =
+                "block";
+              document.getElementById("unstaged-count").textContent =
+                msg.unstaged.length;
+              msg.unstaged.forEach((item) => {
+                document
+                  .getElementById("unstaged-list")
+                  .appendChild(createFileItem(item.file, item.status, false));
+              });
+            } else {
+              document.getElementById("unstaged-section").style.display =
+                "none";
+            }
+          }
 
-    document.getElementById("btn-commit").disabled =
-    (msg.staged.length === 0 && msg.unstaged.length === 0) ||
-    hasConflicts;
+          document.getElementById("btn-commit").disabled =
+            (msg.staged.length === 0 && msg.unstaged.length === 0) ||
+            hasConflicts;
 
-    if (msg.commits) {
-    renderCommits(msg.commits);
-    }
-    } else if (msg.type === "noRepo") {
-    document.getElementById("no-repo").style.display = "block";
-    document.getElementById("branch-info").style.display = "none";
-    document.getElementById("commit-section").style.display = "none";
+          if (msg.commits) {
+            renderCommits(msg.commits);
+          }
+        } else if (msg.type === "noRepo") {
+          document.getElementById("no-repo").style.display = "block";
+          document.getElementById("branch-info").style.display = "none";
+          document.getElementById("commit-section").style.display = "none";
           document.getElementById("staged-section").style.display = "none";
           document.getElementById("unstaged-section").style.display = "none";
           document.getElementById("conflict-section").style.display = "none";
@@ -885,7 +885,9 @@
           graphLine.className = "commit-graph-line";
 
           const dot = document.createElement("div");
-          dot.className = "commit-dot" + (commit.branches && commit.branches.length > 0 ? " branch" : "");
+          dot.className =
+            "commit-dot" +
+            (commit.branches && commit.branches.length > 0 ? " branch" : "");
           graphLine.appendChild(dot);
 
           if (index < commits.length - 1) {
@@ -920,7 +922,7 @@
           meta.appendChild(hash);
 
           if (commit.branches && commit.branches.length > 0) {
-            commit.branches.forEach(branch => {
+            commit.branches.forEach((branch) => {
               const branchTag = document.createElement("span");
               branchTag.className = "commit-branch";
               branchTag.textContent = branch;
@@ -936,7 +938,8 @@
           item.appendChild(graphLine);
           item.appendChild(content);
 
-          item.onclick = () => vscode.postMessage({ type: "viewCommit", hash: commit.hash });
+          item.onclick = () =>
+            vscode.postMessage({ type: "viewCommit", hash: commit.hash });
 
           commitList.appendChild(item);
         });
