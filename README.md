@@ -38,6 +38,47 @@ To install Code Janitor, follow these steps:
 
 4. **AI Chat Panel**: To interact with the AI assistant, open the Command Palette and type `Code Janitor: Open AI Chat`.
    <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
+   
+
+
+
+# Code Janitor Arduino AI Agent
+
+`Code Janitor Arduino AI Agent` is a standalone VSIX package that brings the Code Janitor chat assistant into Arduino IDE 2.x and other compatible Theia / VS Code extension hosts.
+
+Website for the package: https://code-janitor-web.vercel.app/
+
+This package is focused on AI chat and guided edits. It does not include the full command set from the main `Code Janitor` VS Code extension.
+
+## Features
+
+- Opens a dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
+- Supports `ollama`, `groq`, `openrouter`, and `anthropic`
+- Scans the workspace for relevant context before answering
+- Can generate structured `FILE`, `MKDIR`, and `CMD` actions with safety checks
+- Preserves the last selected model per provider
+- Includes quick actions such as explain, review, fix, refactor, tests, and syntax scan
+- Source control. Use git to collaborate with co-workers.
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/7360f607-ec15-4be3-ac74-ea9d70d4485d" />
+
+
+## Package Layout
+
+- `src/extension.js`: Arduino extension activation entry
+- `src/ai-agent/chat-panel.js`: webview bridge, command handling, and settings sync
+- `src/ai-agent/agent.js`: prompt building, provider requests, parsing, and action safety
+- `src/ai-agent/chat-panel.html`: chat UI
+
+## Commands
+
+- `Code Janitor Arduino: Open Arduino AI Chat`
+
+Default keybinding:
+
+- `Ctrl+Alt+A` on Windows/Linux
+
+
 
 
 ### Contributing
