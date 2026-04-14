@@ -48,6 +48,25 @@ const STOP_WORDS = new Set([
   "to",
   "with"
 ])
+const CONTENT_NOISE_WORDS = new Set([
+  "fix",
+  "fixes",
+  "fixed",
+  "error",
+  "errors",
+  "issue",
+  "issues",
+  "bug",
+  "bugs",
+  "problem",
+  "problems",
+  "broken",
+  "failing",
+  "why",
+  "how",
+  "what",
+  "help"
+])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
 
 class AIAgent {
@@ -90,12 +109,15 @@ class AIAgent {
             ? "meta-llama/llama-3.1-8b-instruct:free"
             : provider === "anthropic"
               ? "claude-3-5-haiku-20241022"
-              : "codellama:latest"
+              : provider === "nvidia"
+                ? "nvidia/minimax-m2.7"
+                : "qwen2.5-coder:1.5b"
       ),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
-      timeout: config.get("timeout", 90_000)
+      nvidiaApiKey: config.get("nvidiaApiKey", ""),
+      timeout: config.get("timeout", 180_000)
     }
   }
 
@@ -129,8 +151,8 @@ class AIAgent {
     if (currentModel && models.includes(currentModel)) return currentModel
 
     const preferredModels = [
-      "codellama:latest",
       "qwen2.5-coder:1.5b",
+      "codellama:latest",
       "llama3:latest"
     ]
     for (const candidate of preferredModels) {
@@ -141,31 +163,40 @@ class AIAgent {
   }
 
   async _prepareRuntimeConfig(config, reportStatus) {
-    if (!config || config.provider !== "ollama") {
+    if (!config) {
       return config
     }
 
-    const models = await this._fetchOllamaModelNames(config.ollamaUrl)
+    const baseConfig = {
+      ...config,
+      timeout: Math.max(config.timeout || 0, 180_000)
+    }
+
+    if (baseConfig.provider !== "ollama") {
+      return baseConfig
+    }
+
+    const models = await this._fetchOllamaModelNames(baseConfig.ollamaUrl)
     if (models.length === 0) {
-      return config
+      return baseConfig
     }
 
-    const resolvedModel = this._pickOllamaModel(models, config.model)
-    if (resolvedModel !== config.model) {
+    const resolvedModel = this._pickOllamaModel(models, baseConfig.model)
+    if (resolvedModel !== baseConfig.model) {
       reportStatus?.(
-        `Ollama model ${config.model} was unavailable. Using ${resolvedModel} instead.`
+        `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
       )
     }
 
     return {
-      ...config,
+      ...baseConfig,
       model: resolvedModel
     }
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const maxTokens = isUnlimited ? 16000 : mode === "heavy" ? 8192 : 1024
+    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -270,6 +301,35 @@ class AIAgent {
         }
       }
     }
+    if (config.provider === "nvidia") {
+      return {
+        url: "https://integrate.api.nvidia.com/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.nvidiaApiKey}`
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
+          ],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: maxTokens
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null
+          try {
+            return (
+              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            )
+          } catch {
+            return null
+          }
+        }
+      }
+    }
     // Ollama — use /api/chat for proper system/user role support
     return {
       url: `${config.ollamaUrl}/api/chat`,
@@ -283,9 +343,10 @@ class AIAgent {
         stream: true,
         options: {
           temperature: 0.05,
-          num_predict: mode === "heavy" ? -1 : 1024,
+          num_predict: mode === "heavy" ? 2048 : 1024,
           top_k: 10,
-          top_p: 0.7
+          top_p: 0.7,
+          num_ctx: 2048
         }
       }),
       parseChunk: (line) => {
@@ -566,20 +627,34 @@ class AIAgent {
     abortSignal,
     options = {}
   ) {
+    const mode = options.mode === "heavy" ? "heavy" : "fast"
+    const reportStatus =
+      typeof options.onStatus === "function" ? options.onStatus : null
+
+    const runtimeConfig =
+      options.runtimeConfig && typeof options.runtimeConfig === "object"
+        ? {
+            ...this.getConfig(),
+            ...options.runtimeConfig
+          }
+        : this.getConfig()
+
     const config = await this._prepareRuntimeConfig(
-      this.getConfig(),
+      runtimeConfig,
       reportStatus
     )
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
     }
 
-    const mode = options.mode === "heavy" ? "heavy" : "fast"
-    const reportStatus =
-      typeof options.onStatus === "function" ? options.onStatus : null
-
     this.conversationHistory.push({ role: "user", content: userMessage })
     const isTabQuestion = this._isTabQuestion(userMessage)
+
+    // Detect intent early for knowledge graph decision
+    const earlyIntent = this._detectIntent(userMessage)
+
+    // Check for knowledge graph only for code-related intents
+    const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent)
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
@@ -626,25 +701,27 @@ class AIAgent {
 
     // Inject active file path so the model never needs to ask for it
     let resolvedMessage = userMessage
-    if (
-      activeEditor &&
-      effectiveWorkspace &&
-      /\b(active|current)\s*(file|tab)?\b/i.test(userMessage) &&
-      !/[/\\]/.test(userMessage)
-    ) {
+    if (activeEditor && effectiveWorkspace) {
       const rel = path
         .relative(effectiveWorkspace, activeEditor.document.fileName)
         .replace(/\\/g, "/")
-      resolvedMessage = userMessage.replace(
-        /\b(active|current)\s*(file|tab)?\b/gi,
-        `"${rel}"`
-      )
+      
+      // Replace "current file", "active file", "this file" with actual path
+      if (/\b(active|current|this)\s*(file|tab)?\b/i.test(userMessage) && !/[/\\]/.test(userMessage)) {
+        resolvedMessage = userMessage.replace(
+          /\b(active|current|this)\s*(file|tab)?\b/gi,
+          `"${rel}"`
+        )
+      }
     }
 
     let prompt
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...")
-      const activeFileContext = this._getActiveFileContext(effectiveWorkspace)
+      const activeFileContext = this._getActiveFileContext(
+        effectiveWorkspace,
+        1_200
+      )
       const editorState = this._getEditorState(effectiveWorkspace)
       let fastContext = ""
       if (
@@ -657,11 +734,16 @@ class AIAgent {
           userMessage,
           effectiveWorkspace
         )
-        fastContext = this._buildRelevantFileContext(relevantFiles)
+        fastContext = this._buildRelevantFileContext(relevantFiles, 600, 4_000)
       }
       const history = this.conversationHistory
-        .slice(-4, -1)
-        .map((e) => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
+        .slice(-2, -1)
+        .map(
+          (e) =>
+            `${e.role === "user" ? "User" : "Assistant"}: ${String(
+              e.content || ""
+            ).slice(0, 200)}`
+        )
         .join("\n\n")
       const intent = this._detectIntent(userMessage)
       const editableTargets = this._resolveEditableTargets(
@@ -675,7 +757,8 @@ class AIAgent {
           : null
       const systemInstruction = this._buildSystemInstruction(
         intent,
-        effectiveWorkspace
+        effectiveWorkspace,
+        mode
       )
       const isCreateIntent = intent === "create"
       const isEditIntent =
@@ -686,7 +769,8 @@ class AIAgent {
         isEditIntent && activeFileContext
           ? "\nOutput the complete updated file using FILE: path then a code block."
           : ""
-      prompt = `${systemInstruction}${editHint}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      const fastKnowledgeGraph = intent === "scan" ? knowledgeGraphContext : ""
+      prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`
@@ -749,7 +833,8 @@ ${resolvedMessage}`
         openTabSnippetContext,
         isTabQuestion,
         editableTargets,
-        mode
+        mode,
+        knowledgeGraphContext
       )
     }
 
@@ -764,10 +849,17 @@ ${resolvedMessage}`
         userMessage
       )
       const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent)
+      const extendedTimeout =
+        reqIntent === "create" ||
+        reqIntent === "edit" ||
+        reqIntent === "debug" ||
+        reqIntent === "refactor"
+          ? Math.max(config.timeout || 0, 240_000)
+          : config.timeout
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
-        signal: this._createRequestSignal(abortSignal, config.timeout),
+        signal: this._createRequestSignal(abortSignal, extendedTimeout),
         body: reqOpts.body
       })
 
@@ -1003,7 +1095,37 @@ ${resolvedMessage}`
     }
   }
 
-  _getActiveFileContext(workspaceFolder) {
+  async _loadKnowledgeGraph(workspaceFolder, userMessage, intent) {
+    if (!workspaceFolder) return ""
+
+    // Only load graph for code-related intents where location matters
+    const shouldLoadGraph = 
+      intent === "scan" || 
+      intent === "debug" || 
+      intent === "refactor" ||
+      /\b(where is|where's|locate|find|location|which file|what file)\b/i.test(userMessage)
+    
+    if (!shouldLoadGraph) return ""
+
+    try {
+      const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
+      const graphReport = await fs.readFile(graphReportPath, "utf8")
+      
+      // Extract only first 3 god nodes for speed
+      const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
+      
+      if (godNodesMatch) {
+        const firstThreeNodes = godNodesMatch[0].split('###').slice(0, 4).join('###')
+        return `\n**Knowledge Graph (Top 3 Central Files):**\n${firstThreeNodes.slice(0, 800)}\n`
+      }
+      
+      return ""
+    } catch (err) {
+      return ""
+    }
+  }
+
+  _getActiveFileContext(workspaceFolder, maxChars = 4_000) {
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
     if (!activeEditor) return ""
@@ -1027,7 +1149,7 @@ ${resolvedMessage}`
       "Active file",
       doc,
       workspaceFolder,
-      4_000
+      maxChars
     )
   }
 
@@ -1292,6 +1414,7 @@ ${resolvedMessage}`
   }
 
   _isEditRequest(message) {
+    if (this._isGreetingOnly(message)) return false
     return (
       /\b(edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/i.test(
         message || ""
@@ -1309,6 +1432,13 @@ ${resolvedMessage}`
 
   _detectIntent(message) {
     const m = message.toLowerCase()
+    if (this._isGreetingOnly(m)) return "greeting"
+    const hasExplicitCommandRequest =
+      /\b(run|execute|exec|launch|start|invoke)\b/.test(m) &&
+      (
+        /`[^`]+`/.test(message || "") ||
+        /\b(npm|pnpm|yarn|node|python|pip|git|cargo|go|java|javac|mvn|gradle|docker|kubectl|pytest|jest|vitest|eslint|prettier|powershell|bash|cmd)\b/.test(m)
+      )
     const hasExplicitEditVerb =
       /\b(add|edit|update|upadet|modify|change|rename|patch|insert|remove|delete|make|set|turn|enable|disable|implement|include|put|give|write|fix)\b/.test(
         m
@@ -1328,6 +1458,29 @@ ${resolvedMessage}`
       /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
       this._mentionsEditorFiles(m) ||
       /\b(code|project|app|site|html|css|js|file|files)\b/.test(m)
+    const hasReviewIntent =
+      /\b(review|code review|pr review|audit|inspect for bugs|look for bugs|find issues|find bugs|find regressions|find risks|find problems)\b/.test(
+        m
+      ) &&
+      (
+        this._mentionsEditorFiles(m) ||
+        /\b(code|diff|patch|changes|project|repo|repository|workspace|implementation)\b/.test(m)
+      )
+    const hasScanIntent =
+      /\b(scan|review|analyze|audit|check|inspect|summari[sz]e|overview|read|walk through|walkthrough|map out)\b/.test(
+        m
+      ) &&
+      /\b(codebase|repo|repository|project|workspace|file|files|folder|folders|module|modules)\b/.test(
+        m
+      )
+    const hasDebugSignals =
+      /\b(fix|debug|error|issue|bug|broken|not working|failing|wrong|problem|crash|exception|traceback|stack trace|syntax error)\b/.test(
+        m
+      )
+    const hasRefactorSignals =
+      /\b(refactor|improve|optimize|clean up|rewrite|restructure|simplify|tidy up|modernize|harden)\b/.test(
+        m
+      )
     if (
       /\b(hi|hello|hey|thanks|thank you|thx|good morning|good evening|how are you|what's up|sup)\b/.test(
         m
@@ -1336,7 +1489,15 @@ ${resolvedMessage}`
     )
       return "greeting"
     if (
-      /\b(make|create|build|develop|generate|scaffold|write me|code me)\b/.test(
+      /\b(show|display|open|visualize|view)\b/.test(m) &&
+      /\b(graph|graphify|visualization|dependency|dependencies|architecture|structure)\b/.test(m) &&
+      /\b(repo|repository|codebase|project)\b/.test(m)
+    )
+      return "show_graph"
+    if (hasExplicitCommandRequest) return "command"
+    if (hasReviewIntent) return "review"
+    if (
+      /\b(make|create|build|develop|generate|scaffold|bootstrap|spin up|write me|code me|start a new|set up a new)\b/.test(
         m
       ) &&
       /\b(app|website|site|portfolio|game|api|server|script|program|html|css|component|page|project|tool|extension|plugin|bot|dashboard|landing)\b/.test(
@@ -1345,31 +1506,18 @@ ${resolvedMessage}`
     )
       return "create"
     if (
-      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(
+      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
         m
       )
     )
       return "explain"
     if (hasApplyChangePhrase && hasImplementationContext) return "edit"
     if (hasExplicitEditVerb) return "edit"
-    if (
-      /\b(fix|debug|error|issue|bug|broken|not working|failing|wrong|problem|crash)\b/.test(
-        m
-      )
-    )
+    if (hasDebugSignals)
       return "debug"
-    if (
-      /\b(refactor|improve|optimize|clean up|rewrite|restructure|simplify)\b/.test(
-        m
-      )
-    )
+    if (hasRefactorSignals)
       return "refactor"
-    if (
-      /\b(scan|review|analyze|audit|check|inspect|summarize|overview|readme)\b/.test(
-        m
-      ) &&
-      /\b(codebase|repo|project|workspace|file|files)\b/.test(m)
-    ) {
+    if (hasScanIntent || /\breadme\b/.test(m) && /\b(codebase|repo|project|workspace|file|files)\b/.test(m)) {
       // If also asking to update/write a file, treat as edit
       if (hasExplicitEditVerb || /\b(rewrite|improve)\b/.test(m)) return "edit"
       return "scan"
@@ -1377,31 +1525,91 @@ ${resolvedMessage}`
     return "general"
   }
 
-  _buildSystemInstruction(intent, workspaceFolder) {
+  _isGreetingOnly(message) {
+    const text = (message || "").toLowerCase().trim()
+    if (!text) return false
+
+    const greetingWords = new Set([
+      "hi",
+      "hello",
+      "hey",
+      "thanks",
+      "thank",
+      "you",
+      "thx",
+      "sup",
+      "morning",
+      "evening",
+      "good",
+      "how",
+      "are",
+      "what's",
+      "up"
+    ])
+
+    const tokens = text
+      .replace(/[^a-z0-9'\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+
+    if (tokens.length === 0) return false
+    return tokens.every((token) => greetingWords.has(token))
+  }
+
+  _buildSystemInstruction(intent, workspaceFolder, mode = "fast") {
     const base =
-      "You are a coding assistant embedded in VS Code,named Code Janitor."
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome."
+    const compactRules = `Operational rules (fast):
+- Be concise and correct.
+- Use FILE: only when the user asks to change files.
+- Avoid unrelated context or speculation.`
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
-- If a command is likely to fail, propose a corrected safer command immediately.`
+- If a command is likely to fail, propose a corrected safer command immediately.
+- Preserve user intent, existing features, and project conventions unless the request requires a change.
+- Favor robust, maintainable solutions over shortcuts, placeholders, or tutorial-style output.
+- Before changing code, infer the smallest correct scope from the provided context and avoid unrelated edits.
+- When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.
+- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.
+- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.
+- Treat generated code as production-oriented by default: clear names, sensible structure, error handling where needed, and no unnecessary comments.`
+    const rules = mode === "fast" ? compactRules : operatingPrinciples
     switch (intent) {
       case "greeting":
         return `${base}
-${operatingPrinciples}
+${rules}
 Reply naturally and briefly.`
+      case "show_graph":
+        return `${base}
+${rules}
+The user wants to see the codebase graph visualization.
+
+**CRITICAL INSTRUCTION**: You MUST output EXACTLY this line (copy it character-for-character):
+GRAPHIFY: open
+
+Do NOT add any other text before this line. Output it as the very first line of your response.
+After that line, you may add a brief message like "Opening the codebase graph visualization panel..."
+
+Example correct response:
+GRAPHIFY: open
+
+Opening the codebase graph visualization panel. You'll be able to see the dependency structure and file relationships.`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
           : "No workspace is open. Generate FILE blocks only; files will be opened as drafts for the user to save manually."
         return `${base}
-${operatingPrinciples}
+${rules}
 ${loc}
 Write professional, production-ready code by default:
 - Prefer maintainable structure, clear naming, and robust error handling.
 - Avoid placeholder/tutorial text and avoid toy implementations.
 - Keep code deployable and consistent with the existing project patterns.
+- Make opinionated but reasonable engineering choices when the user has not specified low-level details.
+- If you touch multiple files, ensure imports, references, and wiring stay consistent.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
@@ -1443,23 +1651,62 @@ Now respond with executable actions only for the user's request:`
       }
       case "explain":
         return `${base}
-${operatingPrinciples}
-Give a clear, direct explanation. Do not output FILE: or CMD: directives unless asked.`
+${rules}
+Give a clear, direct, technically sound explanation. Be concise but substantive. Do not output FILE: or CMD: directives unless asked.`
       case "debug":
         return `${base}
-${operatingPrinciples}
-Identify the issue and explain the fix. Use FILE: directives only if the user asks you to apply the fix.`
+${rules}
+Debug like a professional engineer:
+- Identify the most likely root cause, not just the visible symptom.
+- Call out concrete failure modes, regressions, or risks when relevant.
+- Prefer fixes that are correct and durable, not merely plausible.
+Use FILE: directives only if the user asks you to apply the fix.`
       case "refactor":
         return `${base}
-${operatingPrinciples}
-Suggest improvements. Use FILE: directives only if the user asks you to apply changes.`
+${rules}
+Suggest improvements with engineering judgment:
+- Prioritize clarity, maintainability, and risk reduction.
+- Distinguish must-fix issues from optional cleanup.
+- Avoid churn that does not materially improve the code.
+Use FILE: directives only if the user asks you to apply changes.`
+      case "review":
+        return `${base}
+${rules}
+Perform a professional code review:
+- Prioritize correctness issues, regressions, security risks, missing validation, and testing gaps.
+- Lead with concrete findings rather than long summaries.
+- Cite the most relevant files, behaviors, or failure modes from the provided context.
+- Be explicit when a concern is a risk or inference rather than a confirmed bug.
+Use FILE: directives only if the user explicitly asks you to apply changes.`
+      case "command":
+        return `${base}
+${rules}
+The user is asking to run or provide command-oriented actions.
+- Prefer the smallest workspace-scoped command that satisfies the request.
+- Use CMD: only when command execution is actually requested or clearly necessary.
+- Do not wrap commands in explanations or tutorials.
+- If file edits are also required, combine FILE: and CMD: only when both are necessary.
+Respond with executable actions when a command is requested.
+If a command alone solves the request, output CMD: actions only.
+Format:
+CMD: <single workspace command>
+FILE: <exact file path>
+\`\`\`
+(complete updated file content)
+\`\`\`
+MKDIR: folder/subfolder
+Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`
       case "edit":
         return `${base}
-${operatingPrinciples}
+${rules}
 The user wants to edit a file. Write professional, production-ready code by default:
 - Preserve existing architecture and style unless changes are required.
 - Prefer robust, maintainable implementations over minimal placeholders.
 - Include concrete fixes, not advisory text.
+- Make the smallest correct change that fully solves the request.
+- Preserve public behavior unless the user explicitly asks for a behavioral change.
+- Update all directly affected code paths, imports, and nearby integration points when necessary.
+- Do not silently remove logic, configuration, or content unless the request clearly calls for it.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 FILE: <exact file path>
@@ -1471,12 +1718,15 @@ CMD: <single workspace command>
 Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`
       case "scan":
         return `${base}
-${operatingPrinciples}
-Analyze the provided codebase context and give a detailed, accurate response.`
+${rules}
+Analyze the provided codebase context like a professional reviewer:
+- Prioritize correctness, architecture, behavioral risks, and missing verification.
+- Ground conclusions in the supplied files and context rather than generic advice.
+- Be explicit when something is an inference rather than directly shown by the code.`
       default:
         return `${base}
-${operatingPrinciples}
-Answer helpfully. Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`
+${rules}
+Answer helpfully and professionally. Prefer direct, actionable guidance over generic coaching. Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`
     }
   }
 
@@ -1574,9 +1824,31 @@ ${(rawResponse || "").slice(0, 4000)}
   }
 
   _shouldUseRepoContextInFastMode(message) {
-    return /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all|overview|readme|why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
-      message || ""
+    const text = message || ""
+    return (
+      /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all files|overview|summarize|audit|architecture|graph|graphify|readme)\b/i.test(
+        text
+      ) ||
+      (/\b(error|issue|bug|broken|not working|failing|cannot|can't|why)\b/i.test(
+        text
+      ) &&
+        /\b(repo|repository|project|workspace|codebase|across|multiple files|all files)\b/i.test(
+          text
+        ))
     )
+  }
+
+  _shouldSearchContent(query, pathHints) {
+    const text = (query || "").toLowerCase()
+    if (Array.isArray(pathHints) && pathHints.length > 0) return true
+    if (
+      /\b(codebase|repo|repository|project|workspace|all files|entire|whole|scan|overview|summari[sz]e|analy[sz]e|audit|review)\b/i.test(
+        text
+      )
+    )
+      return true
+    if (this._mentionsEditorFiles(text)) return false
+    return false
   }
 
   _isLikelyActiveFileFollowUp(message) {
@@ -1609,15 +1881,20 @@ ${(rawResponse || "").slice(0, 4000)}
     )
   }
 
-  _buildRelevantFileContext(relevantFiles) {
+  _buildRelevantFileContext(
+    relevantFiles,
+    maxSnippetChars = MAX_FILE_SNIPPET,
+    maxContextChars = MAX_CONTEXT_CHARS
+  ) {
     if (!Array.isArray(relevantFiles) || relevantFiles.length === 0) {
       return ""
     }
 
     let context = "Relevant workspace files:\n"
     for (const file of relevantFiles) {
-      const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`
-      if ((context + block).length > MAX_CONTEXT_CHARS) {
+      const snippet = (file.content || "").slice(0, maxSnippetChars)
+      const block = `File: ${file.path}\n\`\`\`\n${snippet}\n\`\`\`\n\n`
+      if ((context + block).length > maxContextChars) {
         break
       }
       context += block
@@ -1850,13 +2127,27 @@ ${(rawResponse || "").slice(0, 4000)}
 
     if (!this.validateCommand(cmd).allowed) return null
     const result = await this.executeCommand(cmd, workspaceFolder)
-    return result
+    
+    // For syntax checks, non-zero exit = syntax error
+    // Python py_compile writes errors to stderr
+    // Node --check writes errors to stderr
+    // Java javac writes errors to stderr
+    const hasSyntaxError = !result.success || 
+                           (result.output && result.output.trim().length > 0) ||
+                           (result.error && result.error.trim().length > 0)
+    
+    return {
+      success: !hasSyntaxError,
+      output: result.output || result.error || "",
+      error: hasSyntaxError ? (result.error || result.output || "Syntax check failed") : null
+    }
   }
 
   _findRelevantFiles(query, workspaceFolder) {
     const keywords = this._extractKeywords(query)
     const pathHints = this._extractPathHints(query)
     const relevant = []
+    const allowContentSearch = this._shouldSearchContent(query, pathHints)
 
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
@@ -1898,11 +2189,22 @@ ${(rawResponse || "").slice(0, 4000)}
         }
       }
 
+      let contentHits = 0
       for (const keyword of keywords) {
         if (fileName.includes(keyword)) score += 10
         if (directory.includes(keyword)) score += 5
         if (normalizedPath.includes(keyword)) score += 4
-        if (fileContent.includes(keyword)) score += 1
+        if (
+          allowContentSearch &&
+          !CONTENT_NOISE_WORDS.has(keyword) &&
+          fileContent.includes(keyword)
+        ) {
+          contentHits += 1
+        }
+      }
+
+      if (allowContentSearch && contentHits > 0) {
+        score += Math.min(6, contentHits * 2)
       }
 
       if (score > 0) {
@@ -1941,7 +2243,8 @@ ${(rawResponse || "").slice(0, 4000)}
     openTabSnippetContext,
     isTabQuestion,
     editableTargets,
-    mode
+    mode,
+    knowledgeGraphContext = ""
   ) {
     const historyEntries = isTabQuestion
       ? this.conversationHistory
@@ -1956,10 +2259,11 @@ ${(rawResponse || "").slice(0, 4000)}
       .join("\n\n")
 
     const intent = this._detectIntent(userMessage)
-    const systemInstruction = this._buildSystemInstruction(
-      intent,
-      this.workspaceRoot
-    )
+      const systemInstruction = this._buildSystemInstruction(
+        intent,
+        this.workspaceRoot,
+        mode
+      )
     const isCreateIntent = intent === "create"
     const MAX_PROMPT_CHARS = 12_000
 
@@ -1988,8 +2292,10 @@ ${(rawResponse || "").slice(0, 4000)}
             context =
               snippetContext ||
               `Workspace files:\n${allFiles.map((f) => `- ${f}`).join("\n")}\n`
-          } else {
+          } else if (this._shouldUseRepoContextInFastMode(userMessage)) {
             context = `Workspace files:\n${allFiles.map((f) => `- ${f}`).join("\n")}\n`
+          } else {
+            context = "No additional workspace file context was included.\n"
           }
         } else {
           context = "No indexed files found.\n"
@@ -2002,10 +2308,11 @@ ${(rawResponse || "").slice(0, 4000)}
     const effectiveEditorState = isCreateIntent ? "" : editorStateContext
     const effectiveActiveFile = isCreateIntent ? "" : activeFileContext
     const effectiveTabContext = isCreateIntent ? "" : openTabSnippetContext
+    const effectiveKnowledgeGraph = isCreateIntent ? "" : knowledgeGraphContext
 
     return `${systemInstruction}
 Indexed files: ${this.codebaseContext.size}
-${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
+${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
 ${history ? `${history}\n\n` : ""}
 ### USER_MESSAGE ###
 ${userMessage}`
@@ -2129,6 +2436,20 @@ ${userMessage}`
         continue
       }
       actions.push({ type: "mkdir", path: normalizedPath })
+    }
+
+    // Match GRAPHIFY: open (case insensitive, flexible spacing)
+    // Also match variations like "GRAPHIFY:open" or "graphify: open"
+    if (/GRAPHIFY\s*:\s*open/i.test(response)) {
+      actions.push({ type: "graphify" })
+    }
+    
+    // Fallback: if intent was show_graph but no GRAPHIFY action found, add it anyway
+    // This handles cases where the AI doesn't follow instructions perfectly
+    const hasGraphifyAction = actions.some(a => a.type === "graphify")
+    if (!hasGraphifyAction && /\b(graph|graphify|visualization|visualize|dependency|dependencies|architecture|structure)\b/i.test(response) && 
+        /\b(show|display|open|view)\b/i.test(response)) {
+      actions.push({ type: "graphify" })
     }
 
     return { text: response, actions, warnings }

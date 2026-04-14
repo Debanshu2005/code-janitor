@@ -36,10 +36,14 @@ async function fixPythonBuffer(code, filePath = "") {
 
     // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
+      const force =
+        !ollamaClient._passesLanguageValidation(code, "python") ||
+        !ollamaClient._passesLanguageValidation(fixedCode, "python")
       const aiResult = await ollamaClient.validateAndFix(
         code,
         fixedCode,
-        "python"
+        "python",
+        { force }
       )
       if (aiResult && aiResult.shouldUseAI) {
         console.log(`AI improved code: ${aiResult.reason}`)
@@ -64,10 +68,14 @@ async function fixJSBuffer(code, filePath = "") {
 
     // AI validation and enhancement if enabled
     if (await ollamaClient.isAvailable()) {
+      const force =
+        !ollamaClient._passesLanguageValidation(code, "javascript") ||
+        !ollamaClient._passesLanguageValidation(fixedCode, "javascript")
       const aiResult = await ollamaClient.validateAndFix(
         code,
         fixedCode,
-        "javascript"
+        "javascript",
+        { force }
       )
       if (aiResult && aiResult.shouldUseAI) {
         console.log(`AI improved code: ${aiResult.reason}`)

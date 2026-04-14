@@ -229,8 +229,8 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    // Very conservative token limits for speed, especially for Ollama
-    const maxTokens = isUnlimited ? 2048 : mode === "heavy" ? 1024 : 512
+    // Increased token limits for Arduino IDE to prevent truncated responses
+    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -737,6 +737,12 @@ class AIAgent {
     this.conversationHistory.push({ role: "user", content: userMessage })
     const isTabQuestion = this._isTabQuestion(userMessage)
 
+    // Detect intent early for knowledge graph decision
+    const earlyIntent = forcedIntent || this._detectIntent(userMessage)
+
+    // Check for knowledge graph only for code-related intents
+    const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent)
+
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
@@ -842,7 +848,7 @@ class AIAgent {
         isEditIntent && activeFileContext
           ? "\nOutput the complete updated file using FILE: path then a code block."
           : ""
-      prompt = `${systemInstruction}${editHint}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`
@@ -905,7 +911,8 @@ ${resolvedMessage}`
         openTabSnippetContext,
         isTabQuestion,
         editableTargets,
-        mode
+        mode,
+        knowledgeGraphContext
       )
     }
 
@@ -1106,6 +1113,36 @@ ${resolvedMessage}`
       return { error: this._formatProviderError(runtimeConfig, error.message) }
     } finally {
       this.currentEditableTargets = null
+    }
+  }
+
+  async _loadKnowledgeGraph(workspaceFolder, userMessage, intent) {
+    if (!workspaceFolder) return ""
+
+    // Only load graph for code-related intents where location matters
+    const shouldLoadGraph = 
+      intent === "scan" || 
+      intent === "debug" || 
+      intent === "refactor" ||
+      /\b(where is|where's|locate|find|location|which file|what file)\b/i.test(userMessage)
+    
+    if (!shouldLoadGraph) return ""
+
+    try {
+      const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
+      const graphReport = await fs.readFile(graphReportPath, "utf8")
+      
+      // Extract only first 3 god nodes for speed
+      const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
+      
+      if (godNodesMatch) {
+        const firstThreeNodes = godNodesMatch[0].split('###').slice(0, 4).join('###')
+        return `\n**Knowledge Graph (Top 3 Central Files):**\n${firstThreeNodes.slice(0, 800)}\n`
+      }
+      
+      return ""
+    } catch (err) {
+      return ""
     }
   }
 
@@ -1442,6 +1479,12 @@ ${resolvedMessage}`
     )
       return "greeting"
     if (
+      /\b(show|display|open|visualize|view)\b/.test(m) &&
+      /\b(graph|graphify|visualization|dependency|dependencies|architecture|structure)\b/.test(m) &&
+      /\b(repo|repository|codebase|project)\b/.test(m)
+    )
+      return "show_graph"
+    if (
       /\b(make|create|build|develop|generate|scaffold|write me|code me)\b/.test(
         m
       ) &&
@@ -1497,6 +1540,14 @@ ${resolvedMessage}`
         return `${base}
 ${operatingPrinciples}
 Reply naturally and briefly.`
+      case "show_graph":
+        return `${base}
+${operatingPrinciples}
+The user wants to see the codebase graph visualization.
+You MUST output this exact line first:
+GRAPHIFY: open
+
+Then you may add a brief message like "Opening the codebase graph visualization panel..."`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
@@ -2049,7 +2100,8 @@ ${(rawResponse || "").slice(0, 4000)}
     openTabSnippetContext,
     isTabQuestion,
     editableTargets,
-    mode
+    mode,
+    knowledgeGraphContext = ""
   ) {
     const historyEntries = isTabQuestion
       ? this.conversationHistory
@@ -2110,10 +2162,11 @@ ${(rawResponse || "").slice(0, 4000)}
     const effectiveEditorState = isCreateIntent ? "" : editorStateContext
     const effectiveActiveFile = isCreateIntent ? "" : activeFileContext
     const effectiveTabContext = isCreateIntent ? "" : openTabSnippetContext
+    const effectiveKnowledgeGraph = isCreateIntent ? "" : knowledgeGraphContext
 
     return `${systemInstruction}
 Indexed files: ${this.codebaseContext.size}
-${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
+${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
 ${history ? `${history}\n\n` : ""}
 ### USER_MESSAGE ###
 ${userMessage}`
@@ -2243,6 +2296,11 @@ ${userMessage}`
       actions.push({ type: "mkdir", path: normalizedPath })
     }
 
+    // Match GRAPHIFY: open (case insensitive, flexible spacing)
+    if (/GRAPHIFY\s*:\s*open/i.test(response)) {
+      actions.push({ type: "graphify" })
+    }
+
     return { text: response, actions, warnings }
   }
 
@@ -2347,7 +2405,12 @@ ${userMessage}`
       "javac ",
       "java ",
       ".\\node_modules\\.bin\\",
-      "./node_modules/.bin/"
+      "./node_modules/.bin/",
+      "wmic path win32_pnpentity",
+      "mode",
+      "arduino-cli board list",
+      "arduino-cli compile",
+      "arduino-cli upload"
     ]
 
     if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {

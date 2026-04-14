@@ -114,7 +114,7 @@ class OllamaClient {
       case "python":
         return /^(if|elif|else|def|class|for|while|try|except|finally|with)\b(?!.*:)/m.test(
           trimmed
-        );
+        ) || this._hasUnbalancedPythonBrackets(trimmed);
       case "javascript":
       case "java":
       case "c":
@@ -129,6 +129,35 @@ class OllamaClient {
       default:
         return false;
     }
+  }
+
+  _hasUnbalancedPythonBrackets(code) {
+    if (!code) return false;
+
+    const stripped = code
+      .replace(/("""|''')[\s\S]*?\1/g, "")
+      .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, "")
+      .replace(/#.*$/gm, "");
+
+    const stack = [];
+    const pairs = { "(": ")", "[": "]", "{": "}" };
+    const closers = new Set(Object.values(pairs));
+
+    for (let i = 0; i < stripped.length; i += 1) {
+      const ch = stripped[i];
+      if (pairs[ch]) {
+        stack.push(pairs[ch]);
+        continue;
+      }
+      if (closers.has(ch)) {
+        const expected = stack.pop();
+        if (expected !== ch) {
+          return true;
+        }
+      }
+    }
+
+    return stack.length > 0;
   }
 
   buildPrompt(originalCode, ruleBasedFix, language) {
@@ -293,10 +322,14 @@ Final fixed code:`;
     return true;
   }
 
-  async validateAndFix(originalCode, ruleBasedFix, language) {
+  async validateAndFix(originalCode, ruleBasedFix, language, options = {}) {
     const config = this.getConfig();
     const safeOriginal = originalCode || "";
     const safeRuleBased = ruleBasedFix || safeOriginal;
+    const force =
+      options.force === true ||
+      !this._passesLanguageValidation(safeOriginal, language) ||
+      !this._passesLanguageValidation(safeRuleBased, language);
 
     if (!config.enabled) {
       return {
@@ -307,7 +340,7 @@ Final fixed code:`;
       };
     }
 
-    if (!this.shouldAttemptAI(safeOriginal, safeRuleBased, language)) {
+    if (!force && !this.shouldAttemptAI(safeOriginal, safeRuleBased, language)) {
       return {
         shouldUseAI: false,
         fixedCode: safeRuleBased,
@@ -359,7 +392,7 @@ Final fixed code:`;
         return {
           shouldUseAI: true,
           fixedCode,
-          reason: "AI improved the candidate fix",
+          reason: force ? "AI forced due to invalid syntax" : "AI improved the candidate fix",
           securityIssues: []
         };
       }

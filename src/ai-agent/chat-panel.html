@@ -712,9 +712,172 @@
         margin-top: 5px;
         padding-left: 2px;
       }
+
+      /* Welcome overlay */
+      #welcome-overlay {
+        position: absolute;
+        inset: 60px 14px 84px 14px;
+        background: rgba(9, 12, 17, 0.94);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 18px 18px 16px;
+        display: none;
+        flex-direction: column;
+        gap: 14px;
+        z-index: 40;
+        box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+      }
+      #welcome-overlay.visible {
+        display: flex;
+        animation: fadeSlideIn 0.35s ease-out;
+      }
+      #welcome-overlay.hidden {
+        display: none;
+      }
+      .welcome-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+      }
+      .welcome-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--text);
+        letter-spacing: 0.2px;
+      }
+      .welcome-sub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .welcome-steps {
+        display: grid;
+        gap: 8px;
+      }
+      .welcome-step {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid transparent;
+        background: rgba(18, 26, 35, 0.7);
+        color: #cbd5e1;
+        opacity: 0.35;
+        transform: translateY(6px);
+        transition: opacity 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+      }
+      .welcome-step.active {
+        opacity: 1;
+        transform: translateY(0);
+        border-color: rgba(88, 166, 255, 0.4);
+        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+      }
+      .welcome-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+      }
+      .welcome-card {
+        background: rgba(12, 18, 26, 0.9);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .welcome-card h4 {
+        font-size: 12px;
+        color: var(--text);
+        margin-bottom: 6px;
+      }
+      .welcome-card ul {
+        list-style: none;
+        display: grid;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .welcome-key {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .welcome-key kbd {
+        background: #0f1724;
+        border: 1px solid #1f2a38;
+        border-radius: 6px;
+        padding: 2px 6px;
+        font-size: 10px;
+        color: #e2e8f0;
+        font-family: "Cascadia Code", "Fira Code", monospace;
+      }
+      .welcome-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .welcome-btn {
+        padding: 6px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .welcome-btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      @keyframes fadeSlideIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="welcome-overlay" class="hidden">
+      <div class="welcome-header">
+        <div>
+          <div class="welcome-title">Hi, I am Code Janitor</div>
+          <div class="welcome-sub">Fast fixes, safe edits, and syntax checks in one place.</div>
+        </div>
+        <button class="welcome-btn" id="welcome-skip">Skip</button>
+      </div>
+      <div class="welcome-steps">
+        <div class="welcome-step" data-step="0">I can format, repair, and refactor the active file.</div>
+        <div class="welcome-step" data-step="1">Ask anything, or use the action chips to run fixes fast.</div>
+        <div class="welcome-step" data-step="2">I respect your workspace and only edit what you ask.</div>
+      </div>
+      <div class="welcome-grid">
+        <div class="welcome-card">
+          <h4>Core Features</h4>
+          <ul>
+            <li>Format + lint for JS/Python/Java/C/HTML</li>
+            <li>AI syntax repair with safety checks</li>
+            <li>Workspace scanning + Graphify visualization</li>
+          </ul>
+        </div>
+        <div class="welcome-card">
+          <h4>Keybindings</h4>
+          <ul>
+            <li class="welcome-key"><span>Format Code</span><kbd>Alt + D</kbd></li>
+            <li class="welcome-key"><span>Lint Code</span><kbd>Alt + L</kbd></li>
+            <li class="welcome-key"><span>Live Preview</span><kbd>Alt + P</kbd></li>
+            <li class="welcome-key"><span>Validate Frontend</span><kbd>Alt + V</kbd></li>
+            <li class="welcome-key"><span>Open AI Chat</span><kbd>Ctrl + Alt + C</kbd></li>
+            <li class="welcome-key"><span>Open Graphify</span><kbd>Ctrl + Alt + G</kbd></li>
+          </ul>
+        </div>
+      </div>
+      <div class="welcome-actions">
+        <button class="welcome-btn" id="welcome-later">Show Later</button>
+        <button class="welcome-btn primary" id="welcome-ok">Let us go</button>
+      </div>
+    </div>
     <div id="header">
       <div id="header-left">
         <div id="header-title">Code Janitor AI</div>
@@ -726,6 +889,7 @@
           <option value="groq">⚡ Groq (cloud)</option>
           <option value="openrouter">🌐 OpenRouter</option>
           <option value="anthropic">🤖 Anthropic (Claude)</option>
+          <option value="nvidia">🚀 NVIDIA NIM</option>
         </select>
         <select id="model-select" title="Switch model">
           <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
@@ -853,12 +1017,14 @@
         groq: "https://console.groq.com/keys",
         openrouter: "https://openrouter.ai/keys",
         anthropic: "https://console.anthropic.com/settings/keys",
+        nvidia: "https://build.nvidia.com/explore/discover"
       };
 
       var modelsByProvider = {
         groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
         openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
-        anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
+        anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
+        nvidia: ["nvidia/minimax-m2.7","nvidia/llama-3.1-nemotron-70b-instruct","nvidia/mistral-nemo-minitron-8b-8k-instruct","nvidia/llama-3.1-nemotron-51b-instruct"]
       };
 
       function populateModels(models) {
@@ -882,24 +1048,52 @@
       var currentHasGroqKey = false;
       var currentHasOpenrouterKey = false;
       var currentHasAnthropicKey = false;
+      var currentHasNvidiaKey = false;
 
-      providerSelect.onchange = function () {
-        var p = providerSelect.value;
-        var needsKey = p === "groq" || p === "openrouter" || p === "anthropic";
+      function providerHasSavedKey(provider) {
+        return (provider === "groq" && currentHasGroqKey) ||
+               (provider === "openrouter" && currentHasOpenrouterKey) ||
+               (provider === "anthropic" && currentHasAnthropicKey) ||
+               (provider === "nvidia" && currentHasNvidiaKey);
+      }
+
+      function syncProviderUi(provider, selectedModel, models) {
+        var needsKey = provider === "groq" || provider === "openrouter" || provider === "anthropic" || provider === "nvidia";
+        var hasKey = providerHasSavedKey(provider);
+
         apiKeyRow.classList.toggle("visible", needsKey);
-        if (needsKey && providerLinks[p]) {
-          apiKeyLink.href = providerLinks[p];
-          apiKeyLink.textContent = "Get " + p + " key";
+        if (needsKey && providerLinks[provider]) {
+          apiKeyLink.href = providerLinks[provider];
+          apiKeyLink.textContent = "Get " + provider + " key";
         }
-        if (modelsByProvider[p]) {
-          var hasKey = (p === "groq" && currentHasGroqKey) ||
-                       (p === "openrouter" && currentHasOpenrouterKey) ||
-                       (p === "anthropic" && currentHasAnthropicKey);
-          if (hasKey) { populateModels(modelsByProvider[p]); }
-          else { showNoModels("Save an API key to see models"); }
+
+        if (needsKey) {
+          if (hasKey) showKeySaved();
+          else showKeyInput();
+        }
+
+        if (models && models.length) {
+          populateModels(models);
+        } else if (modelsByProvider[provider]) {
+          if (hasKey) populateModels(modelsByProvider[provider]);
+          else showNoModels("Save an API key to see models");
         } else {
           showNoModels("Loading models...");
         }
+
+        if (selectedModel) {
+          for (var i = 0; i < modelSelect.options.length; i++) {
+            if (modelSelect.options[i].value === selectedModel) {
+              modelSelect.selectedIndex = i;
+              break;
+            }
+          }
+        }
+      }
+
+      providerSelect.onchange = function () {
+        var p = providerSelect.value;
+        syncProviderUi(p);
         vscode.postMessage({ type: "setProvider", provider: p });
         if (p === "ollama") vscode.postMessage({ type: "refreshOllamaModels" });
       };
@@ -914,6 +1108,7 @@
         if (p === "groq") currentHasGroqKey = true;
         if (p === "openrouter") currentHasOpenrouterKey = true;
         if (p === "anthropic") currentHasAnthropicKey = true;
+        if (p === "nvidia") currentHasNvidiaKey = true;
         if (modelsByProvider[p]) populateModels(modelsByProvider[p]);
         addRow("API key saved for " + p + ".", "status");
       };
@@ -1276,25 +1471,34 @@
       // ── Send ─────────────────────────────────────────────────
 
       function sendMessage(text) {
-        text = (text || input.value).trim();
-        if (!text) return;
-        addRow(text, "user");
-        input.value = "";
-        input.style.height = "38px";
-        setInputState(true);
+        try {
+          text = (text || input.value).trim();
+          if (!text) return;
+          console.log("[Chat] Sending message:", text);
+          addRow(text, "user");
+          input.value = "";
+          input.style.height = "38px";
+          setInputState(true);
 
-        if (/^\/fast$/i.test(text)) {
-          setMode("fast");
-          setInputState(false);
-          return;
-        }
-        if (/^\/heavy$/i.test(text)) {
-          setMode("heavy");
-          setInputState(false);
-          return;
-        }
+          if (/^\/fast$/i.test(text)) {
+            setMode("fast");
+            setInputState(false);
+            return;
+          }
+          if (/^\/heavy$/i.test(text)) {
+            setMode("heavy");
+            setInputState(false);
+            return;
+          }
 
-        vscode.postMessage({ type: "chat", text: text });
+          console.log("[Chat] Posting message to extension");
+          vscode.postMessage({ type: "chat", text: text });
+          console.log("[Chat] Message posted successfully");
+        } catch (error) {
+          console.error("[Chat] Error in sendMessage:", error);
+          addRow("Error: " + error.message, "status");
+          setInputState(false);
+        }
       }
 
       // ── Events ───────────────────────────────────────────────
@@ -1352,11 +1556,11 @@
           }
           var prompts = {
             explain: "Explain what the active file does",
-            fix: "Fix all issues in the active file",
+            fix: "Fix all issues in the active file. Apply the fix directly with FILE actions.",
             refactor: "Refactor the active file for clarity and performance",
             tests: "Generate unit tests for the active file",
             docs: "Add JSDoc/docstring comments to the active file",
-            git: "Show git status",
+            git: "Run `git status --short` in the workspace and show me the result using CMD.",
           };
           if (prompts[action]) sendMessage(prompts[action]);
         });
@@ -1486,35 +1690,8 @@
             currentHasGroqKey = !!msg.hasGroqKey;
             currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
             currentHasAnthropicKey = !!msg.hasAnthropicKey;
-            var needsKey = msg.provider === "groq" || msg.provider === "openrouter" || msg.provider === "anthropic";
-            apiKeyRow.classList.toggle("visible", needsKey);
-            if (needsKey && providerLinks[msg.provider]) {
-              apiKeyLink.href = providerLinks[msg.provider];
-              apiKeyLink.textContent = "Get " + msg.provider + " key";
-            }
-            var hasKey = (msg.provider === "groq" && currentHasGroqKey) ||
-                         (msg.provider === "openrouter" && currentHasOpenrouterKey) ||
-                         (msg.provider === "anthropic" && currentHasAnthropicKey);
-            if (hasKey) {
-              showKeySaved();
-              var modelsToShow = msg.models || modelsByProvider[msg.provider];
-              if (modelsToShow) {
-                populateModels(modelsToShow);
-                if (msg.model) {
-                  for (var i = 0; i < modelSelect.options.length; i++) {
-                    if (modelSelect.options[i].value === msg.model) {
-                      modelSelect.selectedIndex = i; break;
-                    }
-                  }
-                }
-              }
-            } else if (msg.provider === "ollama") {
-              // Ollama needs no key — show loading, backend will send setModelOptions
-              showNoModels("Loading models...");
-            } else {
-              showKeyInput();
-              if (needsKey) showNoModels("Save an API key to see models");
-            }
+            currentHasNvidiaKey = !!msg.hasNvidiaKey;
+            syncProviderUi(msg.provider, msg.model, msg.models || null);
           }
         } else if (msg.type === "setModelOptions") {
           // Only update if this matches the currently selected provider
@@ -1538,6 +1715,55 @@
         "Ready. Select a model above, pick an action chip, or just ask.",
         "status",
       );
+
+      // Welcome overlay animation
+      (function () {
+        var overlay = document.getElementById("welcome-overlay");
+        var skipBtn = document.getElementById("welcome-skip");
+        var okBtn = document.getElementById("welcome-ok");
+        var laterBtn = document.getElementById("welcome-later");
+        var steps = Array.prototype.slice.call(
+          overlay.querySelectorAll(".welcome-step")
+        );
+        var current = 0;
+        var timer = null;
+
+        function highlightStep(index) {
+          steps.forEach(function (step, i) {
+            step.classList.toggle("active", i === index);
+          });
+        }
+
+        function advance() {
+          highlightStep(current);
+          current += 1;
+          if (current < steps.length) {
+            timer = setTimeout(advance, 1400);
+          }
+        }
+
+        function hideOverlay() {
+          overlay.classList.remove("visible");
+          overlay.classList.add("hidden");
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+        }
+
+        function showOverlay() {
+          overlay.classList.remove("hidden");
+          overlay.classList.add("visible");
+          current = 0;
+          advance();
+        }
+
+        skipBtn.onclick = hideOverlay;
+        okBtn.onclick = hideOverlay;
+        laterBtn.onclick = hideOverlay;
+
+        showOverlay();
+      })();
     </script>
   </body>
 </html>

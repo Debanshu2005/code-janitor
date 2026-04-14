@@ -45,6 +45,15 @@ class PythonFixer extends BaseFixer {
     super(code, filePath);
     this.options = options;
     this.pythonExecutable = this._getBundledPythonPath();
+    this.ollamaClient = null;
+  }
+
+  _getOllamaClient() {
+    if (!this.ollamaClient) {
+      const OllamaClient = require("../ai/ollama-client");
+      this.ollamaClient = new OllamaClient();
+    }
+    return this.ollamaClient;
   }
 
   _getBundledPythonPath() {
@@ -104,7 +113,18 @@ class PythonFixer extends BaseFixer {
         });
       }
 
+      // For manual fixes: if code is valid, only format if indentation is actually wrong
       if (originalIsValid) {
+        const hasIndentationIssues = this._hasIndentationIssues(originalCode);
+        
+        if (!hasIndentationIssues) {
+          // Code is valid and properly indented - don't touch it!
+          return this._buildResult(originalCode, originalCode, {
+            message: "Valid Python with correct indentation, no changes needed.",
+            skipAI: true
+          });
+        }
+        
         const formatted = await this._formatValidPython(originalCode);
         return this._buildResult(originalCode, formatted, {
           message:
@@ -126,10 +146,22 @@ class PythonFixer extends BaseFixer {
         });
       }
 
+      // Try AI fixing if rule-based failed
+      const aiFixed = await this._fixWithAI(originalCode);
+      if (aiFixed && aiFixed !== originalCode) {
+        const aiIsValid = await this._isValidPython(aiFixed);
+        if (aiIsValid) {
+          const formatted = await this._formatValidPython(aiFixed);
+          return this._buildResult(originalCode, formatted, {
+            message: "Repaired invalid Python using AI.",
+            skipAI: true
+          });
+        }
+      }
+
       return this._buildResult(originalCode, originalCode, {
-        message: "Rule-based Python fix could not produce valid syntax.",
-        skipAI: false,
-        shouldTryAI: true
+        message: "Could not repair Python code automatically.",
+        skipAI: true
       });
     } catch (error) {
       console.error(`Python Fixer Error: ${error.message}`);
@@ -139,6 +171,63 @@ class PythonFixer extends BaseFixer {
         shouldTryAI: true
       });
     }
+  }
+
+  _hasIndentationIssues(code) {
+    const lines = code.split("\n");
+    const indentStack = [0];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      
+      const leadingSpaces = line.match(/^\s*/)[0];
+      const indentLevel = leadingSpaces.length;
+      
+      // Tabs are always wrong
+      if (leadingSpaces.includes("\t")) return true;
+      
+      // Non-multiple of 4 is wrong
+      if (indentLevel % 4 !== 0) return true;
+      
+      // Check if current indent matches expected context
+      const currentExpected = indentStack[indentStack.length - 1];
+      
+      // Block-ending keywords should align with block start
+      if (/^(elif|else|except|finally)\b/.test(trimmed)) {
+        if (indentStack.length > 1) {
+          const blockStart = indentStack[indentStack.length - 2];
+          if (indentLevel !== blockStart) return true;
+        }
+      } else if (trimmed.endsWith(":")) {
+        // New block: should be at current level, next line should indent
+        if (indentLevel < currentExpected) {
+          // Dedent to valid level
+          while (indentStack.length > 1 && indentLevel < indentStack[indentStack.length - 1]) {
+            indentStack.pop();
+          }
+        }
+        indentStack.push(indentLevel + 4);
+      } else {
+        // Regular statement: should match current expected level
+        if (indentLevel !== currentExpected) {
+          // Check if it's a valid dedent
+          let validDedent = false;
+          for (let j = indentStack.length - 1; j >= 0; j--) {
+            if (indentLevel === indentStack[j]) {
+              validDedent = true;
+              indentStack.length = j + 1;
+              break;
+            }
+          }
+          if (!validDedent) return true;
+        }
+      }
+    }
+    
+    return false;
   }
 
   _buildResult(originalCode, fixedCode, extra = {}) {
@@ -179,6 +268,14 @@ class PythonFixer extends BaseFixer {
 
   async _formatValidPython(code) {
     const autopep8Path = FormatterPaths.getAutopep8Path();
+
+    // Safety check: if autopep8 is not available, return original code unchanged
+    if (!autopep8Path || !fs.existsSync(autopep8Path)) {
+      if (this.options.verbose) {
+        console.warn("autopep8 not found, skipping formatting");
+      }
+      return code;
+    }
 
     try {
       const result = await spawnCommand(autopep8Path, ["-"], {
@@ -314,6 +411,81 @@ class PythonFixer extends BaseFixer {
     }
 
     return converted.join("\n");
+  }
+
+  async _fixWithAI(code) {
+    try {
+      const client = this._getOllamaClient();
+      const isAvailable = await client.isAvailable();
+      
+      if (this.options.verbose) {
+        console.log(`AI availability check: ${isAvailable}`);
+      }
+      
+      if (!isAvailable) {
+        if (this.options.verbose) {
+          console.log("AI not available for Python fixing");
+        }
+        return null;
+      }
+
+      if (this.options.verbose) {
+        console.log("Using AI to fix Python code...");
+        console.log("Code to fix:", code.slice(0, 200));
+      }
+
+      const force = !(await this._passesExternalSyntaxCheck(code));
+      const aiResult = await client.validateAndFix(code, code, "python", { force });
+      
+      if (this.options.verbose) {
+        console.log("AI result:", {
+          shouldUseAI: aiResult.shouldUseAI,
+          reason: aiResult.reason,
+          hasFixedCode: !!aiResult.fixedCode,
+          fixedCodeLength: aiResult.fixedCode?.length || 0
+        });
+      }
+      
+      if (aiResult && aiResult.shouldUseAI && aiResult.fixedCode) {
+        if (this.options.verbose) {
+          console.log(`AI fix reason: ${aiResult.reason}`);
+          console.log("Fixed code:", aiResult.fixedCode.slice(0, 200));
+        }
+        return aiResult.fixedCode;
+      }
+
+      return null;
+    } catch (error) {
+      if (this.options.verbose) {
+        console.warn(`AI fixing failed: ${error.message}`);
+        console.warn("Error stack:", error.stack);
+      }
+      return null;
+    }
+  }
+
+  async _passesExternalSyntaxCheck(code) {
+    const tmpDir = os.tmpdir();
+    const tmpName = `code-janitor-${Date.now()}-${Math.random().toString(16).slice(2)}.py`;
+    const tmpPath = path.join(tmpDir, tmpName);
+
+    try {
+      fs.writeFileSync(tmpPath, code, "utf8");
+      const result = await spawnCommand(
+        this.pythonExecutable,
+        ["-m", "py_compile", tmpPath],
+        { timeout: 10_000, verbose: this.options.verbose }
+      );
+      return result.exitCode === 0;
+    } catch {
+      return false;
+    } finally {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 
   getFixedCode() {

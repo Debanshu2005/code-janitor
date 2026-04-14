@@ -994,9 +994,7 @@
       };
 
       var modelsByProvider = {
-        groq: [
-          "llama-3.1-8b-instant",
-        ],
+        groq: ["llama-3.1-8b-instant"],
         openrouter: [
           "mistralai/mistral-7b-instruct:free",
           "meta-llama/llama-3.1-8b-instruct:free",
@@ -1672,33 +1670,38 @@
           addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
         } else if (msg.type === "providerSwitched") {
           // Provider was switched - update UI without triggering onchange
-          console.log("[UI] Provider switched to:", msg.provider, "Model:", msg.model);
-          
+          console.log(
+            "[UI] Provider switched to:",
+            msg.provider,
+            "Model:",
+            msg.model,
+          );
+
           // Temporarily disable onchange to prevent circular updates
           var oldOnChange = providerSelect.onchange;
           providerSelect.onchange = null;
-          
+
           providerSelect.value = msg.provider;
           currentHasGroqKey = !!msg.hasGroqKey;
           currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
           currentHasAnthropicKey = !!msg.hasAnthropicKey;
-          
+
           var needsKey =
             msg.provider === "groq" ||
             msg.provider === "openrouter" ||
             msg.provider === "anthropic";
           apiKeyRow.classList.toggle("visible", needsKey);
-          
+
           if (needsKey && providerLinks[msg.provider]) {
             apiKeyLink.href = providerLinks[msg.provider];
             apiKeyLink.textContent = "Get " + msg.provider + " key";
           }
-          
+
           var hasKey =
             (msg.provider === "groq" && currentHasGroqKey) ||
             (msg.provider === "openrouter" && currentHasOpenrouterKey) ||
             (msg.provider === "anthropic" && currentHasAnthropicKey);
-          
+
           if (hasKey) {
             showKeySaved();
             var modelsToShow = modelsByProvider[msg.provider];
@@ -1714,13 +1717,16 @@
             showKeyInput();
             if (needsKey) showNoModels("Save an API key to see models");
           }
-          
+
           // Restore onchange handler
-          setTimeout(function() {
+          setTimeout(function () {
             providerSelect.onchange = oldOnChange;
           }, 100);
-          
-          addRow("Provider switched to " + msg.provider + ". Model: " + msg.model, "status");
+
+          addRow(
+            "Provider switched to " + msg.provider + ". Model: " + msg.model,
+            "status",
+          );
         } else if (msg.type === "setCurrentProvider") {
           if (msg.provider) {
             providerSelect.value = msg.provider;

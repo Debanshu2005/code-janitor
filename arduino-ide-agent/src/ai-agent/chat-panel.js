@@ -312,7 +312,7 @@ class ChatPanel {
     const text = String(code || "");
     const pins = new Map();
     const looksLikeHardwareLabel = (value) =>
-      /\b(pin|led|btn|button|switch|relay|echo|trig|trigger|servo|buzzer|motor|pwm|dir|en|enable|sensor|ultra|sonar|ir|rx|tx|sda|scl)\b/i.test(
+      /\b(pin|led|btn|button|switch|relay|echo|trig|trigger|servo|buzzer|motor|pwm|dir|en|enable|sensor|ultra|sonar|ir|rx|tx|sda|scl|pot|temp|humid|dht|pir|motion|lcd|display|oled)\b/i.test(
         String(value || "")
       );
     const registerPin = (rawPin, labelHint, modeHint) => {
@@ -368,20 +368,54 @@ class ChatPanel {
 
     const classify = (entry) => {
       const combined = Array.from(entry.labels).join(" ").toLowerCase();
-      if (/led/.test(combined)) return "LED";
-      if (/button|switch|key/.test(combined)) return "Button";
-      if (/buzzer|speaker|tone/.test(combined)) return "Buzzer";
-      if (/servo/.test(combined)) return "Servo";
-      if (/relay/.test(combined)) return "Relay";
-      if (/trig|echo|ultra|sonar/.test(combined)) return "Ultrasonic Sensor";
-      if (/dht|temp|humid/.test(combined)) return "Temperature Sensor";
-      if (/pot|analog/.test(combined)) return "Potentiometer";
-      if (/pir|motion/.test(combined)) return "Motion Sensor";
-      if (/motor/.test(combined)) return "Motor Driver";
-      if (entry.modes.has("OUTPUT")) return "Output Device";
-      if (entry.modes.has("INPUT") || entry.modes.has("INPUT_PULLUP"))
-        return "Input Device";
-      return "Verify Component";
+      
+      // More specific component detection
+      if (/\bred.*led|led.*red\b/.test(combined)) return "Red LED";
+      if (/\bgreen.*led|led.*green\b/.test(combined)) return "Green LED";
+      if (/\bblue.*led|led.*blue\b/.test(combined)) return "Blue LED";
+      if (/\byellow.*led|led.*yellow\b/.test(combined)) return "Yellow LED";
+      if (/\bled\b/.test(combined)) return "LED";
+      
+      if (/\bpush.*button|button.*push\b/.test(combined)) return "Pushbutton";
+      if (/\bbutton|switch|key\b/.test(combined)) return "Button";
+      
+      if (/\bbuzzer|speaker|tone\b/.test(combined)) return "Piezo Buzzer";
+      if (/\bservo\b/.test(combined)) return "Servo Motor";
+      if (/\brelay\b/.test(combined)) return "Relay Module";
+      
+      if (/\btrig|echo|ultra|sonar|hcsr04|hc-sr04\b/.test(combined)) return "Ultrasonic Sensor (HC-SR04)";
+      if (/\bdht22\b/.test(combined)) return "DHT22 Temperature Sensor";
+      if (/\bdht11\b/.test(combined)) return "DHT11 Temperature Sensor";
+      if (/\bdht|temp|humid\b/.test(combined)) return "Temperature/Humidity Sensor";
+      
+      if (/\bpot|potentiometer\b/.test(combined)) return "Potentiometer";
+      if (/\bldr|light.*sensor\b/.test(combined)) return "LDR (Light Sensor)";
+      if (/\bpir|motion\b/.test(combined)) return "PIR Motion Sensor";
+      if (/\bir.*sensor\b/.test(combined)) return "IR Sensor";
+      
+      if (/\blcd.*16.*2|lcd.*1602\b/.test(combined)) return "LCD 16x2 Display";
+      if (/\blcd\b/.test(combined)) return "LCD Display";
+      if (/\boled\b/.test(combined)) return "OLED Display";
+      
+      if (/\bmotor.*driver|l298n|l293d\b/.test(combined)) return "Motor Driver Module";
+      if (/\bmotor\b/.test(combined)) return "DC Motor";
+      
+      if (/\bsda|scl|i2c\b/.test(combined)) return "I2C Device";
+      if (/\brx|tx|serial\b/.test(combined)) return "Serial Device";
+      
+      // Fallback based on mode
+      if (entry.modes.has("OUTPUT")) {
+        const label = Array.from(entry.labels)[0] || "";
+        return label ? `${label} (Output)` : "Output Device";
+      }
+      if (entry.modes.has("INPUT") || entry.modes.has("INPUT_PULLUP")) {
+        const label = Array.from(entry.labels)[0] || "";
+        return label ? `${label} (Input)` : "Input Device";
+      }
+      
+      // Use the label itself if nothing matches
+      const label = Array.from(entry.labels)[0];
+      return label || "Component";
     };
 
     return Array.from(pins.values())
@@ -513,7 +547,7 @@ ${embeddedSvg}
   }
 
   _buildCircuitMermaid(fileName, circuitEntries) {
-    const entries = Array.isArray(circuitEntries) ? circuitEntries.slice(0, 12) : [];
+    const entries = Array.isArray(circuitEntries) ? circuitEntries : [];
     const sanitizeId = (value) =>
       String(value || "node")
         .replace(/[^a-z0-9]+/gi, "_")
@@ -523,29 +557,82 @@ ${embeddedSvg}
         .replace(/"/g, "'")
         .replace(/\n/g, " ");
 
+    // Get component icon/emoji
+    const getComponentIcon = (component) => {
+      const c = String(component || "").toLowerCase();
+      if (/led/.test(c)) return "💡";
+      if (/button|switch/.test(c)) return "🔘";
+      if (/buzzer|speaker/.test(c)) return "🔊";
+      if (/servo|motor/.test(c)) return "⚙️";
+      if (/relay/.test(c)) return "🔌";
+      if (/ultrasonic|sensor/.test(c)) return "📡";
+      if (/temperature|humid|dht/.test(c)) return "🌡️";
+      if (/potentiometer/.test(c)) return "🎚️";
+      if (/motion|pir/.test(c)) return "👁️";
+      if (/display|lcd|oled/.test(c)) return "📺";
+      if (/light|ldr/.test(c)) return "☀️";
+      return "🔧";
+    };
+
     const lines = [
-      "flowchart LR",
-      `  sketch["${escapeLabel(fileName || "Arduino Sketch")}"]`,
-      '  uno["Arduino Uno R3"]'
+      "%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#2563eb','primaryTextColor':'#fff','primaryBorderColor':'#1e40af','lineColor':'#64748b','secondaryColor':'#00979d','tertiaryColor':'#f59e0b'}}}%%",
+      "flowchart TB",
+      `  sketch[\"📄 ${escapeLabel(fileName || "Arduino Sketch")}\"]:::sketchStyle`,
+      '  uno[\"🔷 Arduino Uno R3\"]:::arduinoStyle',
+      '  gnd[\"⏚ GND\"]:::powerStyle',
+      '  vcc[\"⚡ 5V\"]:::powerStyle'
     ];
 
     if (entries.length === 0) {
-      lines.push('  note["No obvious hardware pins were detected automatically"]');
+      lines.push('  note[\"⚠️ No hardware pins detected automatically\"]:::noteStyle');
       lines.push("  sketch --> uno");
       lines.push("  uno -.-> note");
-      return lines.join("\n");
+    } else {
+      lines.push("  sketch --> uno");
+      
+      // Group components by type for better organization
+      const grouped = {};
+      entries.forEach((entry) => {
+        const type = entry.component.split(" ")[0]; // Get first word (LED, Button, etc.)
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push(entry);
+      });
+
+      entries.forEach((entry, index) => {
+        const pinId = `pin_${sanitizeId(entry.pin)}`;
+        const componentId = `comp_${index}_${sanitizeId(entry.label || entry.pin)}`;
+        const icon = getComponentIcon(entry.component);
+        const componentLabel = `${icon} ${escapeLabel(entry.component)}`;
+        const pinLabel = `Pin ${escapeLabel(entry.pin)}`;
+        const varName = entry.label !== entry.pin ? `<br/><small>${escapeLabel(entry.label)}</small>` : "";
+        
+        // Determine wire style based on mode
+        const wireStyle = entry.mode === "OUTPUT" ? "-->" : entry.mode === "INPUT" ? "-.->" : "---";
+        const modeLabel = entry.mode === "OUTPUT" ? "OUTPUT" : entry.mode === "INPUT" ? "INPUT" : entry.mode === "INPUT_PULLUP" ? "INPUT_PULLUP" : "";
+        
+        lines.push(`  ${pinId}[\"${pinLabel}${varName}\"]:::pinStyle`);
+        lines.push(`  ${componentId}[\"${componentLabel}\"]:::componentStyle`);
+        lines.push(`  uno ${wireStyle}|${modeLabel}| ${pinId}`);
+        lines.push(`  ${pinId} --> ${componentId}`);
+        
+        // Add power connections if component needs them
+        if (/led|buzzer|sensor|display|motor|relay/.test(entry.component.toLowerCase())) {
+          lines.push(`  gnd -.-> ${componentId}`);
+          if (!/button|switch/.test(entry.component.toLowerCase())) {
+            lines.push(`  vcc -.-> ${componentId}`);
+          }
+        }
+      });
     }
 
-    lines.push("  sketch --> uno");
-    entries.forEach((entry, index) => {
-      const componentId = `comp_${index}_${sanitizeId(entry.label || entry.pin)}`;
-      const pinId = `pin_${sanitizeId(entry.pin)}`;
-      const componentLabel = `${entry.component}\\n${entry.label}`;
-      lines.push(`  ${pinId}["Pin ${escapeLabel(entry.pin)}"]`);
-      lines.push(`  ${componentId}["${escapeLabel(componentLabel)}"]`);
-      lines.push(`  uno --> ${pinId}`);
-      lines.push(`  ${pinId} --> ${componentId}`);
-    });
+    // Add styling classes
+    lines.push("");
+    lines.push("  classDef sketchStyle fill:#f0f9ff,stroke:#0284c7,stroke-width:3px,color:#0c4a6e");
+    lines.push("  classDef arduinoStyle fill:#2563eb,stroke:#1e40af,stroke-width:4px,color:#fff,font-weight:bold");
+    lines.push("  classDef pinStyle fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a");
+    lines.push("  classDef componentStyle fill:#00979d,stroke:#006d75,stroke-width:3px,color:#fff,font-weight:bold");
+    lines.push("  classDef powerStyle fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#78350f");
+    lines.push("  classDef noteStyle fill:#fef2f2,stroke:#ef4444,stroke-width:2px,color:#7f1d1d");
 
     return lines.join("\n");
   }
@@ -565,7 +652,7 @@ ${embeddedSvg}
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapedTitle} Mermaid Preview</title>
+  <title>${escapedTitle} Circuit Diagram</title>
   <style>
     body {
       margin: 0;
@@ -574,7 +661,7 @@ ${embeddedSvg}
       color: #0f172a;
     }
     .wrap {
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 0 auto;
       padding: 24px;
     }
@@ -599,18 +686,42 @@ ${embeddedSvg}
       color: #475569;
     }
     .diagram {
-      padding: 24px;
+      padding: 32px 24px;
       overflow: auto;
       background: #fff;
+      min-height: 400px;
     }
     .source {
       padding: 18px 22px;
       border-top: 1px solid #e2e8f0;
       background: #0f172a;
       color: #e2e8f0;
+      position: relative;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 18px;
+      right: 22px;
+      padding: 6px 14px;
+      background: #00979d;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover {
+      background: #00b4ba;
+      transform: translateY(-1px);
+    }
+    .copy-btn:active {
+      transform: translateY(0);
     }
     pre {
       margin: 0;
+      margin-top: 32px;
       white-space: pre-wrap;
       word-break: break-word;
       font-family: Consolas, "Courier New", monospace;
@@ -626,14 +737,71 @@ ${embeddedSvg}
       margin-bottom: 16px;
       display: none;
     }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #64748b;
+      font-size: 14px;
+    }
   </style>
   <script type="module">
-    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
-    window.__renderMermaid = async () => {
-      mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
-      const el = document.querySelector(".mermaid");
-      if (!el) return;
-      await mermaid.run({ nodes: [el] });
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    
+    mermaid.initialize({ 
+      startOnLoad: false, 
+      theme: "base",
+      themeVariables: {
+        primaryColor: '#2563eb',
+        primaryTextColor: '#fff',
+        primaryBorderColor: '#1e40af',
+        lineColor: '#64748b',
+        secondaryColor: '#00979d',
+        tertiaryColor: '#f59e0b'
+      },
+      securityLevel: "loose",
+      flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+      }
+    });
+    
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const diagramDiv = document.querySelector('.diagram');
+        const mermaidDiv = document.querySelector('.mermaid');
+        const fallbackDiv = document.getElementById('fallback');
+        const loadingDiv = document.querySelector('.loading');
+        
+        if (!mermaidDiv) {
+          fallbackDiv.style.display = 'block';
+          loadingDiv.style.display = 'none';
+          return;
+        }
+        
+        // Render the diagram
+        await mermaid.run({ nodes: [mermaidDiv] });
+        loadingDiv.style.display = 'none';
+      } catch (error) {
+        console.error('Mermaid rendering error:', error);
+        document.getElementById('fallback').style.display = 'block';
+        document.querySelector('.loading').style.display = 'none';
+      }
+    });
+    
+    // Copy button functionality
+    window.copyMermaidCode = () => {
+      const code = document.querySelector('pre').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        const originalText = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => {
+          btn.textContent = originalText;
+        }, 2000);
+      }).catch(err => {
+        console.error('Copy failed:', err);
+      });
     };
   </script>
 </head>
@@ -641,31 +809,22 @@ ${embeddedSvg}
   <div class="wrap">
     <div class="panel">
       <div class="head">
-        <h1>${escapedTitle} Block Diagram</h1>
-        <p>Auto-generated Mermaid diagram from the Arduino sketch. Verify detected pins before wiring hardware.</p>
+        <h1>${escapedTitle} Circuit Diagram</h1>
+        <p>Auto-generated Mermaid diagram from Arduino sketch. Shows all detected components with actual names.</p>
       </div>
       <div class="diagram">
-        <div class="fallback" id="fallback">Mermaid failed to load in this host. The Mermaid source is shown below so you can still copy it.</div>
-        <div class="mermaid">${escapedCode}</div>
+        <div class="fallback" id="fallback">⚠️ Mermaid failed to render. The source code is shown below so you can copy it.</div>
+        <div class="loading">⏳ Rendering circuit diagram...</div>
+        <div class="mermaid">
+${mermaidCode}
+        </div>
       </div>
       <div class="source">
+        <button class="copy-btn" onclick="copyMermaidCode()">📋 Copy Code</button>
         <pre>${escapedCode}</pre>
       </div>
     </div>
   </div>
-  <script>
-    (async function () {
-      try {
-        if (window.__renderMermaid) {
-          await window.__renderMermaid();
-        } else {
-          document.getElementById("fallback").style.display = "block";
-        }
-      } catch (error) {
-        document.getElementById("fallback").style.display = "block";
-      }
-    })();
-  </script>
 </body>
 </html>`;
   }
@@ -1106,7 +1265,11 @@ ${trimmedText}`;
 
         // Debug: show what was parsed
         if (response.actions && response.actions.length > 0) {
-          this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${response.actions.map(a => `${a.type}:${a.path || a.command}`).join(", ")}` });
+          const actionSummary = response.actions.map(a => {
+            if (a.type === 'graphify') return 'graphify:open';
+            return `${a.type}:${a.path || a.command || ''}`;
+          }).join(", ");
+          this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
         }
 
         if (response.actions && response.actions.length > 0) {
@@ -1345,6 +1508,20 @@ ${trimmedText}`;
                 type: result.success ? "applied" : "error",
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
+            } else if (action.type === "graphify") {
+              this.panel.webview.postMessage({ type: "status", text: "Opening Graphify visualization..." });
+              try {
+                await vscode.commands.executeCommand("codeJanitorArduino.openGraphify");
+                this.panel.webview.postMessage({
+                  type: "applied",
+                  text: "\u2705 Graphify panel opened. You can now visualize the codebase structure."
+                });
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to open Graphify: ${err.message}`
+                });
+              }
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
                 this.panel.webview.postMessage({
@@ -1608,11 +1785,13 @@ Format as a clear tutorial that students can follow step-by-step in TinkerCAD Ci
         });
 
         const circuitEntries = this._inferCircuitFromSketch(code);
+        
+        // Generate enhanced Mermaid block diagram with actual component names
         const mermaidCode = this._buildCircuitMermaid(fileName, circuitEntries);
         this._showCircuitMermaidPreview(fileName, mermaidCode);
         this.panel.webview.postMessage({
           type: "status",
-          text: "Opened Mermaid circuit preview beside the chat."
+          text: "Opened enhanced circuit diagram beside the chat."
         });
 
         const openTinkercad = await vscode.window.showInformationMessage(
