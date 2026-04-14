@@ -110,13 +110,14 @@ class AIAgent {
             : provider === "anthropic"
               ? "claude-3-5-haiku-20241022"
               : provider === "nvidia"
-                ? "nvidia/minimax-m2.7"
+                ? config.get("nvidiaModel", "meta/llama-3.1-8b-instruct")
                 : "qwen2.5-coder:1.5b"
       ),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
+      nvidiaModel: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
       timeout: config.get("timeout", 180_000)
     }
   }
@@ -313,21 +314,30 @@ class AIAgent {
       }
     }
     if (config.provider === "nvidia") {
+      // NVIDIA Build API - uses catalog endpoint with model names
+      // Log the model being used
+      console.log("[Agent] NVIDIA request - Model:", config.model);
+      console.log("[Agent] NVIDIA request - nvidiaModel:", config.nvidiaModel);
+      
+      // Use nvidiaModel if available, otherwise fall back to config.model
+      const modelToUse = config.nvidiaModel || config.model;
+      console.log("[Agent] NVIDIA request - Using model:", modelToUse);
+      
       return {
-        url: "https://integrate.api.nvidia.com/v1/chat/completions",
+        url: `https://integrate.api.nvidia.com/v1/chat/completions`,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: config.model,
+          model: modelToUse,
           messages: [
-            { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: `${sysContent}\n\n${userContent}` }
           ],
-          stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          top_p: 0.7,
+          max_tokens: maxTokens,
+          stream: true
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null

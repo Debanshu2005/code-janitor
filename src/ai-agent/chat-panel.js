@@ -443,26 +443,49 @@ class ChatPanel {
   }
 
   async _persistApiKey(provider, apiKey) {
-    const configKey = this._getApiKeyConfigKey(provider);
-    const sanitized = this._sanitizeApiKey(apiKey);
-    if (!configKey || !sanitized) {
-      console.log(`[ChatPanel] Skipping persist for ${provider}: configKey=${configKey}, sanitized=${!!sanitized}`);
-      return;
+    try {
+      const configKey = this._getApiKeyConfigKey(provider);
+      const sanitized = this._sanitizeApiKey(apiKey);
+      if (!configKey || !sanitized) {
+        console.log(`[ChatPanel] Skipping persist for ${provider}: configKey=${configKey}, sanitized=${!!sanitized}`);
+        return;
+      }
+      
+      console.log(`[ChatPanel] Persisting API key for ${provider}, length: ${sanitized.length}, preview: ${sanitized.substring(0, 10)}...`);
+      
+      // Store in secrets first (this is safe and won't corrupt settings.json)
+      await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
+      console.log(`[ChatPanel] Stored in secrets: ${this._getApiSecretKey(provider)}`);
+      
+      // CRITICAL: Validate settings.json before writing to it
+      const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+      
+      // Read current settings to ensure they're valid
+      try {
+        const currentValue = cfg.get(configKey, "");
+        console.log(`[ChatPanel] Current ${configKey} value exists:`, !!currentValue);
+      } catch (readError) {
+        console.error(`[ChatPanel] Settings file is corrupted, skipping config update:`, readError);
+        // Don't try to write to corrupted settings - just use secrets
+        return;
+      }
+      
+      // Try to update config (but don't fail if settings.json is corrupted)
+      try {
+        await cfg.update(configKey, sanitized, vscode.ConfigurationTarget.Global);
+        
+        // Verify it was saved
+        const verify = cfg.get(configKey, "");
+        console.log(`[ChatPanel] Verified ${provider} key saved in config:`, !!verify, `length: ${verify ? verify.length : 0}`);
+      } catch (writeError) {
+        console.error(`[ChatPanel] Failed to write to settings.json (file may be corrupted):`, writeError);
+        console.log(`[ChatPanel] API key is still stored in secrets and will work`);
+        // Don't throw - the key is in secrets which is enough
+      }
+    } catch (error) {
+      console.error(`[ChatPanel] Error persisting API key for ${provider}:`, error);
+      throw error; // Re-throw so caller knows it failed
     }
-    
-    console.log(`[ChatPanel] Persisting API key for ${provider}, length: ${sanitized.length}, preview: ${sanitized.substring(0, 10)}...`);
-    
-    // Store in secrets first
-    await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
-    console.log(`[ChatPanel] Stored in secrets: ${this._getApiSecretKey(provider)}`);
-    
-    // Then update config
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    await cfg.update(configKey, sanitized, vscode.ConfigurationTarget.Global);
-    
-    // Verify it was saved
-    const verify = cfg.get(configKey, "");
-    console.log(`[ChatPanel] Verified ${provider} key saved in config:`, !!verify, `length: ${verify ? verify.length : 0}`);
   }
 
   async _restoreApiKeys() {
@@ -1453,49 +1476,67 @@ ${trimmedText}`;
         const provider = cfg.get("provider", "ollama");
         this._saveProviderModel(provider, message.model);
       } else if (message.type === "setProvider") {
-        await this._updateAiConfig("provider", message.provider);
-        const defaultModel = this._getDefaultModelForProvider(message.provider);
-        const savedModel = this._getSavedProviderModel(message.provider);
-        const nextModel = savedModel || defaultModel;
-        await this._updateAiConfig("model", nextModel);
-        if (message.apiKey && message.provider === "groq") {
-          await this._persistApiKey("groq", message.apiKey);
+        try {
+          console.log("[ChatPanel] setProvider message received:", message.provider);
+          await this._updateAiConfig("provider", message.provider);
+          const defaultModel = this._getDefaultModelForProvider(message.provider);
+          const savedModel = this._getSavedProviderModel(message.provider);
+          const nextModel = savedModel || defaultModel;
+          await this._updateAiConfig("model", nextModel);
+          
+          // Persist API key if provided
+          if (message.apiKey && message.provider === "groq") {
+            console.log("[ChatPanel] Persisting Groq API key...");
+            await this._persistApiKey("groq", message.apiKey);
+          }
+          if (message.apiKey && message.provider === "openrouter") {
+            console.log("[ChatPanel] Persisting OpenRouter API key...");
+            await this._persistApiKey("openrouter", message.apiKey);
+          }
+          if (message.apiKey && message.provider === "anthropic") {
+            console.log("[ChatPanel] Persisting Anthropic API key...");
+            await this._persistApiKey("anthropic", message.apiKey);
+          }
+          if (message.apiKey && message.provider === "nvidia") {
+            console.log("[ChatPanel] Persisting NVIDIA API key...");
+            await this._persistApiKey("nvidia", message.apiKey);
+          }
+          
+          // Wait for config to persist before fetching models
+          await new Promise(r => setTimeout(r, 300));
+          const restoredKeys = await this._restoreApiKeys();
+          if (this.panel) {
+            const hasKey = (message.provider === "groq" && restoredKeys.groq) ||
+                           (message.provider === "openrouter" && restoredKeys.openrouter) ||
+                           (message.provider === "anthropic" && restoredKeys.anthropic) ||
+                           (message.provider === "nvidia" && restoredKeys.nvidia);
+            this.panel.webview.postMessage({
+              type: "setCurrentProvider",
+              provider: message.provider,
+              model: nextModel,
+              hasGroqKey: restoredKeys.groq,
+              hasOpenrouterKey: restoredKeys.openrouter,
+              hasAnthropicKey: restoredKeys.anthropic,
+              hasNvidiaKey: restoredKeys.nvidia,
+              models: hasKey ? (MODELS_BY_PROVIDER[message.provider] || null) : null
+            });
+          }
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "status",
+              text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
+            });
+          }
+          await this._fetchAndSendModels("ollama");
+        } catch (error) {
+          console.error("[ChatPanel] Error in setProvider:", error);
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "error",
+              text: `Failed to switch provider: ${error.message}`
+            });
+          }
         }
-        if (message.apiKey && message.provider === "openrouter") {
-          await this._persistApiKey("openrouter", message.apiKey);
-        }
-        if (message.apiKey && message.provider === "anthropic") {
-          await this._persistApiKey("anthropic", message.apiKey);
-        }
-        if (message.apiKey && message.provider === "nvidia") {
-          await this._persistApiKey("nvidia", message.apiKey);
-        }
-        // Wait for config to persist before fetching models
-        await new Promise(r => setTimeout(r, 300));
-        const restoredKeys = await this._restoreApiKeys();
-        if (this.panel) {
-          const hasKey = (message.provider === "groq" && restoredKeys.groq) ||
-                         (message.provider === "openrouter" && restoredKeys.openrouter) ||
-                         (message.provider === "anthropic" && restoredKeys.anthropic) ||
-                         (message.provider === "nvidia" && restoredKeys.nvidia);
-          this.panel.webview.postMessage({
-            type: "setCurrentProvider",
-            provider: message.provider,
-            model: nextModel,
-            hasGroqKey: restoredKeys.groq,
-            hasOpenrouterKey: restoredKeys.openrouter,
-            hasAnthropicKey: restoredKeys.anthropic,
-            hasNvidiaKey: restoredKeys.nvidia,
-            models: hasKey ? (MODELS_BY_PROVIDER[message.provider] || null) : null
-          });
-        }
-        if (this.panel) {
-          this.panel.webview.postMessage({
-            type: "status",
-            text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
-          });
-        }
-        await this._fetchAndSendModels("ollama");
       }
     });
   }

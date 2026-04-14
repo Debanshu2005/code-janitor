@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "1.5.7",
+  "version": "1.6.1",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -109,6 +109,20 @@
           "type": "string",
           "default": "",
           "description": "NVIDIA NIM API key (get key at https://build.nvidia.com)"
+        },
+        "codeJanitor.ai.nvidiaModel": {
+          "type": "string",
+          "default": "meta/llama-3.1-8b-instruct",
+          "enum": [
+            "meta/llama-3.1-8b-instruct",
+            "meta/llama-3.1-70b-instruct",
+            "meta/llama-3.1-405b-instruct",
+            "mistralai/mistral-7b-instruct-v0.3",
+            "mistralai/mixtral-8x7b-instruct-v0.1",
+            "google/gemma-2-9b-it",
+            "google/gemma-2-27b-it"
+          ],
+          "description": "NVIDIA NIM model (free tier: llama-3.1-8b-instruct, mistral-7b, gemma-2-9b)"
         },
         "codeJanitor.ai.groqApiKey": {
           "type": "string",

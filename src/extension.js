@@ -175,7 +175,8 @@ function getPreferredSyntaxFixRuntimeConfig() {
   if (nvidiaApiKey) {
     return {
       provider: "nvidia",
-      model: "nvidia/minimax-m2.7",
+      model: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
+      nvidiaModel: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
       nvidiaApiKey,
       timeout
     }
