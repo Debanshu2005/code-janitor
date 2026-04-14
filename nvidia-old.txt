@@ -1,0 +1,30 @@
+﻿          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.nvidiaApiKey}`
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
+          ],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: maxTokens
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null
+          try {
+            return (
+              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            )
+          } catch {
+            return null
+          }
+        }
+      }
+    }
+    // Ollama â€” use /api/chat for proper system/user role support
+    return {
+      url: `${config.ollamaUrl}/api/chat`,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({

@@ -1,8 +1,6 @@
 const vscode = require("vscode")
 const fs = require("fs").promises
-const fsSync = require("fs")
 const path = require("path")
-const { exec } = require("child_process")
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
@@ -108,18 +106,17 @@ class AIAgent {
         provider === "groq"
           ? "llama-3.1-8b-instant"
           : provider === "openrouter"
-            ? "qwen/qwen-2.5-coder-32b-instruct"
+            ? "meta-llama/llama-3.1-8b-instruct:free"
             : provider === "anthropic"
               ? "claude-3-5-haiku-20241022"
               : provider === "nvidia"
-                ? config.get("nvidiaModel", "meta/llama-3.1-8b-instruct")
+                ? "nvidia/minimax-m2.7"
                 : "qwen2.5-coder:1.5b"
       ),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
-      nvidiaModel: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
       timeout: config.get("timeout", 180_000)
     }
   }
@@ -133,30 +130,7 @@ class AIAgent {
     if (/\/api$/i.test(normalized)) {
       normalized = normalized.replace(/\/api$/i, "")
     }
-    normalized = normalized || "http://localhost:11434"
-    try {
-      const parsed = new URL(normalized)
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return "http://localhost:11434"
-      }
-      const hostname = parsed.hostname.toLowerCase()
-      const privatePatterns = [
-        /^169\.254\./,
-        /^10\./,
-        /^172\.(1[6-9]|2[0-9]|3[01])\./,
-        /^192\.168\./,
-        /^::1$/,
-        /^fd[0-9a-f]{2}:/i
-      ]
-      const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
-      const isPrivate = privatePatterns.some((p) => p.test(hostname))
-      if (!isLocalhost && !isPrivate) {
-        return "http://localhost:11434"
-      }
-    } catch {
-      return "http://localhost:11434"
-    }
-    return normalized
+    return normalized || "http://localhost:11434"
   }
 
   async _fetchOllamaModelNames(ollamaUrl, timeoutMs = 8_000) {
@@ -222,7 +196,7 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const maxTokens = config.provider === "nvidia" ? 16384 : (isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048)
+    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -339,30 +313,21 @@ class AIAgent {
       }
     }
     if (config.provider === "nvidia") {
-      // NVIDIA Build API - uses catalog endpoint with model names
-      // Log the model being used
-      console.log("[Agent] NVIDIA request - Model:", config.model);
-      console.log("[Agent] NVIDIA request - nvidiaModel:", config.nvidiaModel);
-      
-      // Use nvidiaModel if available, otherwise fall back to config.model
-      const modelToUse = config.nvidiaModel || config.model;
-      console.log("[Agent] NVIDIA request - Using model:", modelToUse);
-      
       return {
-        url: `https://integrate.api.nvidia.com/v1/chat/completions`,
+        url: "https://integrate.api.nvidia.com/v1/chat/completions",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: modelToUse,
+          model: config.model,
           messages: [
-            { role: "user", content: `${sysContent}\n\n${userContent}` }
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
           ],
-          temperature: 0.2,
-          top_p: 0.7,
-          max_tokens: maxTokens,
-          stream: true
+          stream: true,
+          temperature: 0.05,
+          max_tokens: maxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -1155,11 +1120,7 @@ ${resolvedMessage}`
 
     try {
       const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
-      const resolvedGraphPath = path.resolve(graphReportPath)
-      if (!resolvedGraphPath.startsWith(path.resolve(workspaceFolder))) {
-        return ""
-      }
-      const graphReport = await fs.readFile(resolvedGraphPath, "utf8")
+      const graphReport = await fs.readFile(graphReportPath, "utf8")
       
       // Extract only first 3 god nodes for speed
       const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
@@ -1274,7 +1235,7 @@ ${resolvedMessage}`
             filePath.includes("extension-output") ||
             filePath.includes("AppData\\Local\\Programs") ||
             filePath.includes("AppData/Local/Programs") ||
-            !fsSync.existsSync(filePath)
+            !require("fs").existsSync(filePath)
           )
             continue
           const relativePath = this._toWorkspaceRelativePath(
@@ -1710,11 +1671,6 @@ Debug like a professional engineer:
 - Identify the most likely root cause, not just the visible symptom.
 - Call out concrete failure modes, regressions, or risks when relevant.
 - Prefer fixes that are correct and durable, not merely plausible.
-- When fixing syntax errors: preserve ALL existing code structure, imports, and functionality
-- Only fix the specific errors identified - do NOT refactor or optimize
-- Maintain original code style, variable names, and conventions
-- Return the COMPLETE file with ALL lines from start to finish - never truncate
-- Include every single line of the original file in your output
 Use FILE: directives only if the user asks you to apply the fix.`
       case "refactor":
         return `${base}
@@ -1763,11 +1719,6 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Update all directly affected code paths, imports, and nearby integration points when necessary.
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
-- When fixing syntax errors: Fix ONLY the syntax errors shown, preserve ALL existing functionality
-- Maintain original code style, formatting, variable names, and identifiers exactly as they are
-- Do NOT refactor, optimize, or add features unless explicitly requested
-- Return the COMPLETE file with ALL lines from start to finish - never truncate or omit code
-- Include every single line of the original file in your output
 You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 FILE: <exact file path>
 \`\`\`
@@ -2772,13 +2723,9 @@ ${userMessage}`
         }
       }
 
-      const resolvedFull = path.resolve(fullPath)
-      if (workspaceRoot && !outsideWorkspace && !resolvedFull.startsWith(path.resolve(workspaceRoot))) {
-        return { success: false, error: "Path traversal detected: file is outside workspace." }
-      }
       const changeSummary = this._summarizeLineChanges(oldContent, newContent)
-      await fs.mkdir(path.dirname(resolvedFull), { recursive: true })
-      await fs.writeFile(resolvedFull, newContent, "utf8")
+      await fs.mkdir(path.dirname(fullPath), { recursive: true })
+      await fs.writeFile(fullPath, newContent, "utf8")
 
       const relativePath = workspaceRoot
         ? path.relative(workspaceRoot, fullPath)
@@ -2850,6 +2797,7 @@ ${userMessage}`
     }
 
     return new Promise((resolve) => {
+      const { exec } = require("child_process")
       exec(
         command,
         { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },

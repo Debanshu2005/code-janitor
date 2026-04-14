@@ -862,10 +862,21 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
         console.log(`Command stderr: ${stderr}`)
         console.log(`Combined output: ${output}`)
 
-        // For Python: py_compile writes errors to stderr and exits with non-zero code
-        // For Node: --check writes errors to stderr and exits with non-zero code
-        // For Java: javac writes errors to stderr and exits with non-zero code
-        const hasSyntaxErrors = !!error
+        // Detect syntax errors:
+        // 1. Non-zero exit code = definite error
+        // 2. stderr with error keywords = likely error
+        const stderrText = (stderr || "").trim().toLowerCase()
+        const hasErrorKeywords = stderrText && (
+          stderrText.includes("error") ||
+          stderrText.includes("syntaxerror") ||
+          stderrText.includes("exception") ||
+          stderrText.includes("invalid") ||
+          stderrText.includes("unexpected") ||
+          stderrText.includes("failed") ||
+          /line \d+/.test(stderrText) // Error messages often include line numbers
+        )
+        
+        const hasSyntaxErrors = !!error || hasErrorKeywords
 
         if (hasSyntaxErrors) {
           console.log(`✗ Syntax errors detected in ${fileName}`)
