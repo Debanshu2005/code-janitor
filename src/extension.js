@@ -1018,20 +1018,21 @@ async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
     const targetPaths = Array.from(
       getDocumentPathCandidates(document, workspaceFolder)
     ).join(", ")
-    const fixRequest = `Fix syntax errors in the current ${language} file only.
-Return exactly one FILE action for this file and include the complete corrected file contents.
-Do not remove unrelated code. Do not return an empty file.
-Target file path must match one of: ${targetPaths}
+    const fixRequest = `Fix the syntax errors in this ${language} file.
 
-Current file path: ${fileName.replace(/\\/g, "/")}
+**File Information:**
+File path: ${fileName.replace(/\\\\/g, "/")}
+Language: ${language}
 
-Current syntax-check output:
+**Syntax Errors from Compiler:**
 ${syntaxErrorOutput || "No syntax checker output was provided."}
 
-Current file contents:
+**Current File Contents:**
 \`\`\`${language}
 ${code}
-\`\`\``
+\`\`\`
+
+IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not truncate or omit any code. Include the entire file from start to finish.`
 
     let fullResponse = ""
     const streamCallback = (token) => {

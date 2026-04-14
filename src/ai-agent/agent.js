@@ -197,7 +197,7 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
+    const maxTokens = config.provider === "nvidia" ? 16384 : (isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048)
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -1681,6 +1681,11 @@ Debug like a professional engineer:
 - Identify the most likely root cause, not just the visible symptom.
 - Call out concrete failure modes, regressions, or risks when relevant.
 - Prefer fixes that are correct and durable, not merely plausible.
+- When fixing syntax errors: preserve ALL existing code structure, imports, and functionality
+- Only fix the specific errors identified - do NOT refactor or optimize
+- Maintain original code style, variable names, and conventions
+- Return the COMPLETE file with ALL lines from start to finish - never truncate
+- Include every single line of the original file in your output
 Use FILE: directives only if the user asks you to apply the fix.`
       case "refactor":
         return `${base}
@@ -1729,6 +1734,11 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Update all directly affected code paths, imports, and nearby integration points when necessary.
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
+- When fixing syntax errors: Fix ONLY the syntax errors shown, preserve ALL existing functionality
+- Maintain original code style, formatting, variable names, and identifiers exactly as they are
+- Do NOT refactor, optimize, or add features unless explicitly requested
+- Return the COMPLETE file with ALL lines from start to finish - never truncate or omit code
+- Include every single line of the original file in your output
 You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 FILE: <exact file path>
 \`\`\`
