@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "1.4.9",
+  "version": "1.5.7",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -90,15 +90,15 @@
         },
         "codeJanitor.ai.provider": {
           "type": "string",
-          "default": "groq",
+          "default": "ollama",
           "enum": [
-            "groq",
             "ollama",
+            "groq",
             "openrouter",
             "anthropic",
             "nvidia"
           ],
-          "description": "AI provider: groq (cloud, FASTEST, free), ollama (local), openrouter (cloud, 100+ models), anthropic (Claude), nvidia (NVIDIA NIM)"
+          "description": "AI provider: ollama (local, default), groq (cloud, FASTEST, free), openrouter (cloud, 100+ models), anthropic (Claude), nvidia (NVIDIA NIM)"
         },
         "codeJanitor.ai.anthropicApiKey": {
           "type": "string",

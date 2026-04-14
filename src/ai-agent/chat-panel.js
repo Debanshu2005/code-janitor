@@ -1,5 +1,6 @@
 const vscode = require("vscode");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const AIAgent = require("./agent");
 
@@ -34,6 +35,29 @@ class ChatPanel {
     if (this.panel) {
       this.panel.reveal();
       return;
+    }
+
+    // CRITICAL FIX: Force provider to ollama if no API keys are configured
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const currentProvider = cfg.get("provider", "ollama");
+    const groqKey = cfg.get("groqApiKey", "");
+    const openrouterKey = cfg.get("openrouterApiKey", "");
+    const anthropicKey = cfg.get("anthropicApiKey", "");
+    const nvidiaKey = cfg.get("nvidiaApiKey", "");
+
+    // If using a cloud provider but no API key is set, force to ollama
+    if (currentProvider === "groq" && !groqKey) {
+      console.log("[ChatPanel] No Groq API key found, forcing provider to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+    } else if (currentProvider === "openrouter" && !openrouterKey) {
+      console.log("[ChatPanel] No OpenRouter API key found, forcing provider to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+    } else if (currentProvider === "anthropic" && !anthropicKey) {
+      console.log("[ChatPanel] No Anthropic API key found, forcing provider to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+    } else if (currentProvider === "nvidia" && !nvidiaKey) {
+      console.log("[ChatPanel] No NVIDIA API key found, forcing provider to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
     }
 
     // Show setup guide on first ever open
@@ -76,15 +100,53 @@ class ChatPanel {
     let reply = `Scanning ${files.length} file(s) for syntax errors...\n`;
     this.panel.webview.postMessage({ type: "stream", text: reply });
     let errorCount = 0;
+    const dirtyOpen = new Map();
+    for (const editor of vscode.window.visibleTextEditors || []) {
+      const doc = editor.document;
+      if (!doc || doc.uri.scheme !== "file" || !doc.isDirty) continue;
+      const rel = path.relative(workspaceFolder, doc.fileName).replace(/\\/g, "/");
+      if (rel) dirtyOpen.set(rel, doc);
+    }
     for (const f of files) {
-      const result = await this.agent._runSyntaxCheck(f.replace(/\\/g, "/"), workspaceFolder, null);
+      const normalized = f.replace(/\\/g, "/");
+      let result = null;
+      let tempPath = "";
+      const dirtyDoc = dirtyOpen.get(normalized);
+      const shouldUseTemp = !!dirtyDoc;
+
+      if (shouldUseTemp) {
+        const ext = path.extname(dirtyDoc.fileName);
+        const tmpName = `code-janitor-scan-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`;
+        tempPath = path.join(os.tmpdir(), tmpName);
+        try {
+          fs.writeFileSync(tempPath, dirtyDoc.getText(), "utf8");
+          const cmd = this.agent._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"));
+          result = cmd ? await this.agent.executeCommand(cmd, workspaceFolder) : null;
+          if (result && result.success) {
+            result = { success: true };
+          } else if (result) {
+            result = {
+              success: false,
+              error: result.error || result.output || "Syntax check failed",
+              output: result.output || result.error || ""
+            };
+          }
+        } finally {
+          if (tempPath) {
+            try { fs.unlinkSync(tempPath); } catch (_) {}
+          }
+        }
+      } else {
+        result = await this.agent._runSyntaxCheck(normalized, workspaceFolder, null);
+      }
+
       if (!result) {
         // File type not supported for syntax checking
         continue;
       }
       if (result.skipped) {
         // C/C++ files that need manual checking
-        const msg = `\n\u26a0\ufe0f ${f}: ${result.output}`;
+        const msg = `\n\u26a0\ufe0f ${normalized}: ${result.output}`;
         this.panel.webview.postMessage({ type: "stream", text: msg });
         reply += msg;
         continue;
@@ -92,7 +154,7 @@ class ChatPanel {
       if (!result.success) {
         // Syntax error found
         const errorMsg = result.error || result.output || "Unknown syntax error";
-        const msg = `\n\u274c ${f}:\n${errorMsg}`;
+        const msg = `\n\u274c ${normalized}:\n${errorMsg}`;
         this.panel.webview.postMessage({ type: "stream", text: msg });
         reply += msg;
         errorCount++;
@@ -102,6 +164,153 @@ class ChatPanel {
       ? `\n\n\u274c Found ${errorCount} file(s) with syntax errors.` 
       : "\n\n\u2705 No syntax errors found.";
     this.panel.webview.postMessage({ type: "stream", text: summary });
+    this.panel.webview.postMessage({ type: "done" });
+  }
+
+  async _runActiveSyntaxFix(workspaceFolder) {
+    const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+    if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Open the file you want to repair, then ask me to fix its syntax errors."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    const fileName = activeEditor.document.fileName;
+    const fileContent = activeEditor.document.getText();
+    const relativePath = workspaceFolder
+      ? path.relative(workspaceFolder, fileName).replace(/\\/g, "/")
+      : path.basename(fileName);
+
+    this.panel.webview.postMessage({
+      type: "status",
+      text: `Analyzing ${relativePath} for syntax errors...`
+    });
+    this.panel.webview.postMessage({ type: "thinking" });
+
+    // Run syntax check first
+    const syntaxCheck = await this.agent._runSyntaxCheck(
+      fileName.replace(/\\/g, "/"),
+      workspaceFolder,
+      fileContent
+    );
+
+    if (!syntaxCheck) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Syntax checking is not supported for this file type."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    if (syntaxCheck.skipped) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: syntaxCheck.output
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    if (syntaxCheck.success) {
+      this.panel.webview.postMessage({
+        type: "stream",
+        text: `✅ No syntax errors found in ${relativePath}.`
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    // Syntax errors found - use AI to fix
+    const errorOutput = syntaxCheck.error || syntaxCheck.output || "Unknown syntax error";
+    this.panel.webview.postMessage({
+      type: "stream",
+      text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
+    });
+
+    const ext = path.extname(fileName).toLowerCase();
+    const langMap = {
+      ".js": "javascript",
+      ".jsx": "javascript",
+      ".ts": "typescript",
+      ".tsx": "typescript",
+      ".py": "python",
+      ".java": "java",
+      ".c": "c",
+      ".cpp": "cpp",
+      ".h": "c",
+      ".hpp": "cpp"
+    };
+    const language = langMap[ext] || "code";
+
+    const fixPrompt = `Fix the syntax errors in this ${language} file. Return exactly one FILE action with the complete corrected file.\n\nFile: ${relativePath}\n\nSyntax errors:\n${errorOutput}\n\nCurrent file content:\n\`\`\`${language}\n${fileContent}\n\`\`\``;
+
+    const runtimeConfig = await this._getEffectiveAiConfig();
+    const response = await this.agent.chat(
+      fixPrompt,
+      workspaceFolder,
+      (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
+      null,
+      { mode: "heavy", runtimeConfig }
+    );
+
+    if (response.error) {
+      this.panel.webview.postMessage({ type: "error", text: response.error });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    const fileAction = (response.actions || []).find(a => a.type === "file" && a.content);
+    if (!fileAction) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "AI did not generate a file fix. Try rephrasing your request or use a different AI model."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    // Apply the fix
+    const applied = await activeEditor.edit((editBuilder) => {
+      const fullRange = new vscode.Range(
+        activeEditor.document.positionAt(0),
+        activeEditor.document.positionAt(activeEditor.document.getText().length)
+      );
+      editBuilder.replace(fullRange, fileAction.content);
+    });
+
+    if (!applied) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Failed to apply the fix to the editor."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    await activeEditor.document.save();
+
+    // Verify the fix
+    const verifyCheck = await this.agent._runSyntaxCheck(
+      fileName.replace(/\\/g, "/"),
+      workspaceFolder,
+      activeEditor.document.getText()
+    );
+    if (verifyCheck && verifyCheck.success) {
+      this.panel.webview.postMessage({
+        type: "stream",
+        text: `\n\n✅ Syntax errors fixed successfully!`
+      });
+    } else {
+      this.panel.webview.postMessage({
+        type: "stream",
+        text: `\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes.`
+      });
+    }
+
     this.panel.webview.postMessage({ type: "done" });
   }
 
@@ -140,14 +349,25 @@ class ChatPanel {
 
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     const configValue = this._sanitizeApiKey(cfg.get(configKey, ""));
-    if (configValue) return configValue;
+    const secretValue = this._sanitizeApiKey(
+      await this.context.secrets.get(this._getApiSecretKey(provider))
+    );
 
-    const secretValue = await this.context.secrets.get(this._getApiSecretKey(provider));
-    return this._sanitizeApiKey(secretValue || "");
+    if (secretValue) return secretValue;
+    return configValue;
   }
 
   async _getEffectiveAiConfig() {
     const config = this.agent.getConfig();
+    console.log("[ChatPanel] Base config from agent:", {
+      provider: config.provider,
+      model: config.model,
+      hasGroqKey: !!config.groqApiKey,
+      hasOpenrouterKey: !!config.openrouterApiKey,
+      hasAnthropicKey: !!config.anthropicApiKey,
+      hasNvidiaKey: !!config.nvidiaApiKey
+    });
+
     const [groqApiKey, openrouterApiKey, anthropicApiKey, nvidiaApiKey] = await Promise.all([
       this._getStoredApiKey("groq"),
       this._getStoredApiKey("openrouter"),
@@ -155,24 +375,86 @@ class ChatPanel {
       this._getStoredApiKey("nvidia")
     ]);
 
-    return {
+    console.log("[ChatPanel] Retrieved API keys:", {
+      groq: groqApiKey ? `${groqApiKey.substring(0, 10)}...` : "(empty)",
+      openrouter: openrouterApiKey ? `${openrouterApiKey.substring(0, 10)}...` : "(empty)",
+      anthropic: anthropicApiKey ? `${anthropicApiKey.substring(0, 10)}...` : "(empty)",
+      nvidia: nvidiaApiKey ? `${nvidiaApiKey.substring(0, 10)}...` : "(empty)"
+    });
+
+    // CRITICAL FIX: If using cloud provider without API key, force to ollama
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    if (config.provider === "groq" && !groqApiKey) {
+      console.log("[ChatPanel] CRITICAL: Groq selected but no API key! Forcing to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      config.provider = "ollama";
+      config.model = "qwen2.5-coder:1.5b";
+    } else if (config.provider === "openrouter" && !openrouterApiKey) {
+      console.log("[ChatPanel] CRITICAL: OpenRouter selected but no API key! Forcing to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      config.provider = "ollama";
+      config.model = "qwen2.5-coder:1.5b";
+    } else if (config.provider === "anthropic" && !anthropicApiKey) {
+      console.log("[ChatPanel] CRITICAL: Anthropic selected but no API key! Forcing to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      config.provider = "ollama";
+      config.model = "qwen2.5-coder:1.5b";
+    } else if (config.provider === "nvidia" && !nvidiaApiKey) {
+      console.log("[ChatPanel] CRITICAL: NVIDIA selected but no API key! Forcing to ollama");
+      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      config.provider = "ollama";
+      config.model = "qwen2.5-coder:1.5b";
+    }
+
+    // Ensure config reflects stored secrets to avoid empty key overwrites
+    if (groqApiKey && config.groqApiKey !== groqApiKey) {
+      const target = this._getConfigTargetForKey("groqApiKey");
+      await cfg.update("groqApiKey", groqApiKey, target);
+    }
+    if (openrouterApiKey && config.openrouterApiKey !== openrouterApiKey) {
+      const target = this._getConfigTargetForKey("openrouterApiKey");
+      await cfg.update("openrouterApiKey", openrouterApiKey, target);
+    }
+    if (anthropicApiKey && config.anthropicApiKey !== anthropicApiKey) {
+      const target = this._getConfigTargetForKey("anthropicApiKey");
+      await cfg.update("anthropicApiKey", anthropicApiKey, target);
+    }
+    if (nvidiaApiKey && config.nvidiaApiKey !== nvidiaApiKey) {
+      const target = this._getConfigTargetForKey("nvidiaApiKey");
+      await cfg.update("nvidiaApiKey", nvidiaApiKey, target);
+    }
+
+    const effectiveConfig = {
       ...config,
       groqApiKey,
       openrouterApiKey,
       anthropicApiKey,
       nvidiaApiKey
     };
+
+    console.log("[ChatPanel] Effective config for provider", config.provider, ":", {
+      hasKey: config.provider === "groq" ? !!groqApiKey :
+              config.provider === "openrouter" ? !!openrouterApiKey :
+              config.provider === "anthropic" ? !!anthropicApiKey :
+              config.provider === "nvidia" ? !!nvidiaApiKey : false
+    });
+
+    return effectiveConfig;
   }
 
   async _persistApiKey(provider, apiKey) {
     const configKey = this._getApiKeyConfigKey(provider);
     const sanitized = this._sanitizeApiKey(apiKey);
-    if (!configKey || !sanitized) return;
+    if (!configKey || !sanitized) {
+      console.log(`[ChatPanel] Skipping persist for ${provider}: configKey=${configKey}, sanitized=${!!sanitized}`);
+      return;
+    }
     
-    console.log(`[ChatPanel] Persisting API key for ${provider}`);
+    console.log(`[ChatPanel] Persisting API key for ${provider}, length: ${sanitized.length}, preview: ${sanitized.substring(0, 10)}...`);
     
     // Store in secrets first
     await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
+    console.log(`[ChatPanel] Stored in secrets: ${this._getApiSecretKey(provider)}`);
     
     // Then update config
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
@@ -180,7 +462,7 @@ class ChatPanel {
     
     // Verify it was saved
     const verify = cfg.get(configKey, "");
-    console.log(`[ChatPanel] Verified ${provider} key saved:`, !!verify);
+    console.log(`[ChatPanel] Verified ${provider} key saved in config:`, !!verify, `length: ${verify ? verify.length : 0}`);
   }
 
   async _restoreApiKeys() {
@@ -520,12 +802,13 @@ ${trimmedText}`;
     }
   }
 
-  async _fetchAndSendModels() {
+  async _fetchAndSendModels(forceProvider = null) {
     // Only needed for Ollama — other providers populate models client-side
     try {
-      const config = this.agent.getConfig();
-      if (config.provider !== "ollama") return;
-      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(8000) });
+      const config = await this._getEffectiveAiConfig();
+      const provider = forceProvider || config.provider;
+      if (provider !== "ollama") return;
+      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
         const data = await res.json();
         const models = (data.models || []).map(m => m.name).filter(Boolean);
@@ -534,7 +817,20 @@ ${trimmedText}`;
           return;
         }
       }
-    } catch (_) {}
+      if (this.panel) {
+        this.panel.webview.postMessage({
+          type: "status",
+          text: "Ollama responded, but no models were returned. Showing defaults."
+        });
+      }
+    } catch (err) {
+      if (this.panel) {
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `Ollama model list failed: ${err.message || err}. Showing defaults.`
+        });
+      }
+    }
     // Ollama unreachable or no models — show defaults
     if (this.panel) {
       this.panel.webview.postMessage({
@@ -610,6 +906,14 @@ ${trimmedText}`;
           allowDocTruncate: hasExplicitDestructiveWriteIntent
         };
 
+        if (/^\/ollama$/i.test(trimmedText)) {
+          await this._updateAiConfig("provider", "ollama");
+          await this._updateAiConfig("model", "qwen2.5-coder:1.5b");
+          this.panel.webview.postMessage({ type: "status", text: "Provider forced to Ollama. Reloading..." });
+          await this._fetchAndSendModels("ollama");
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
         if (/^\/fast$/i.test(trimmedText)) {
           this.chatMode = "fast";
           this.panel.webview.postMessage({ type: "status", text: "Mode switched to Fast." });
@@ -658,130 +962,7 @@ ${trimmedText}`;
         }
 
         if (this._isSyntaxFixRequest(trimmedText)) {
-          const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
-          if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
-            this.panel.webview.postMessage({
-              type: "error",
-              text: "Open the file you want to repair, then ask me to fix its syntax errors."
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          const fileName = activeEditor.document.fileName;
-          const fileContent = activeEditor.document.getText();
-          const relativePath = workspaceFolder ? path.relative(workspaceFolder, fileName).replace(/\\/g, "/") : path.basename(fileName);
-
-          this.panel.webview.postMessage({
-            type: "status",
-            text: `Analyzing ${relativePath} for syntax errors...`
-          });
-          this.panel.webview.postMessage({ type: "thinking" });
-
-          // Run syntax check first
-          const syntaxCheck = await this.agent._runSyntaxCheck(fileName.replace(/\\/g, "/"), workspaceFolder, fileContent);
-          
-          if (!syntaxCheck) {
-            this.panel.webview.postMessage({
-              type: "error",
-              text: "Syntax checking is not supported for this file type."
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          if (syntaxCheck.skipped) {
-            this.panel.webview.postMessage({
-              type: "status",
-              text: syntaxCheck.output
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          if (syntaxCheck.success) {
-            this.panel.webview.postMessage({
-              type: "stream",
-              text: `✅ No syntax errors found in ${relativePath}.`
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          // Syntax errors found - use AI to fix
-          const errorOutput = syntaxCheck.error || syntaxCheck.output || "Unknown syntax error";
-          this.panel.webview.postMessage({
-            type: "stream",
-            text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
-          });
-
-          const ext = path.extname(fileName).toLowerCase();
-          const langMap = { ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript",
-                           ".py": "python", ".java": "java", ".c": "c", ".cpp": "cpp", ".h": "c", ".hpp": "cpp" };
-          const language = langMap[ext] || "code";
-
-          const fixPrompt = `Fix the syntax errors in this ${language} file. Return exactly one FILE action with the complete corrected file.\n\nFile: ${relativePath}\n\nSyntax errors:\n${errorOutput}\n\nCurrent file content:\n\`\`\`${language}\n${fileContent}\n\`\`\``;
-
-          const runtimeConfig = await this._getEffectiveAiConfig();
-          const response = await this.agent.chat(
-            fixPrompt,
-            workspaceFolder,
-            (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
-            null,
-            { mode: "heavy", runtimeConfig }
-          );
-
-          if (response.error) {
-            this.panel.webview.postMessage({ type: "error", text: response.error });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          const fileAction = (response.actions || []).find(a => a.type === "file" && a.content);
-          if (!fileAction) {
-            this.panel.webview.postMessage({
-              type: "error",
-              text: "AI did not generate a file fix. Try rephrasing your request or use a different AI model."
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          // Apply the fix
-          const applied = await activeEditor.edit((editBuilder) => {
-            const fullRange = new vscode.Range(
-              activeEditor.document.positionAt(0),
-              activeEditor.document.positionAt(activeEditor.document.getText().length)
-            );
-            editBuilder.replace(fullRange, fileAction.content);
-          });
-
-          if (!applied) {
-            this.panel.webview.postMessage({
-              type: "error",
-              text: "Failed to apply the fix to the editor."
-            });
-            this.panel.webview.postMessage({ type: "done" });
-            return;
-          }
-
-          await activeEditor.document.save();
-
-          // Verify the fix
-          const verifyCheck = await this.agent._runSyntaxCheck(fileName.replace(/\\/g, "/"), workspaceFolder, activeEditor.document.getText());
-          if (verifyCheck && verifyCheck.success) {
-            this.panel.webview.postMessage({
-              type: "stream",
-              text: `\n\n✅ Syntax errors fixed successfully!`
-            });
-          } else {
-            this.panel.webview.postMessage({
-              type: "stream",
-              text: `\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes.`
-            });
-          }
-
-          this.panel.webview.postMessage({ type: "done" });
+          await this._runActiveSyntaxFix(workspaceFolder);
           return;
         }
 
@@ -1237,6 +1418,8 @@ ${trimmedText}`;
           ? (this.lastActiveEditor ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")] : [])
           : null;
         await this._runSyntaxScan(workspaceFolder, files);
+      } else if (message.type === "fixActive") {
+        await this._runActiveSyntaxFix(workspaceFolder);
       } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
@@ -1262,7 +1445,7 @@ ${trimmedText}`;
             models
           });
         }
-        this._fetchAndSendModels();
+        this._fetchAndSendModels("ollama");
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
@@ -1312,7 +1495,7 @@ ${trimmedText}`;
             text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
           });
         }
-        await this._fetchAndSendModels();
+        await this._fetchAndSendModels("ollama");
       }
     });
   }

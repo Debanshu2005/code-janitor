@@ -198,6 +198,15 @@ class AIAgent {
     const isUnlimited = mode === "heavy" && intent === "create"
     const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
 
+    // Log API key status for debugging
+    console.log("[Agent] Building request for provider:", config.provider);
+    console.log("[Agent] API key status:", {
+      groq: config.groqApiKey ? `${config.groqApiKey.substring(0, 10)}... (length: ${config.groqApiKey.length})` : "(empty)",
+      openrouter: config.openrouterApiKey ? `${config.openrouterApiKey.substring(0, 10)}... (length: ${config.openrouterApiKey.length})` : "(empty)",
+      anthropic: config.anthropicApiKey ? `${config.anthropicApiKey.substring(0, 10)}... (length: ${config.anthropicApiKey.length})` : "(empty)",
+      nvidia: config.nvidiaApiKey ? `${config.nvidiaApiKey.substring(0, 10)}... (length: ${config.nvidiaApiKey.length})` : "(empty)"
+    });
+
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
     const sysIdx = prompt.indexOf(SYS_END)
@@ -242,11 +251,13 @@ class AIAgent {
       }
     }
     if (config.provider === "groq") {
+      const apiKey = config.groqApiKey;
+      console.log("[Agent] Groq request - API key:", apiKey ? `${apiKey.substring(0, 10)}... (length: ${apiKey.length})` : "(EMPTY!)");
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${config.groqApiKey}`
+          Authorization: `Bearer ${apiKey}`
         },
         body: JSON.stringify({
           model: config.model,

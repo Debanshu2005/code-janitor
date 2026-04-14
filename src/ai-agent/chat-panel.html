@@ -1556,12 +1556,15 @@
           }
           var prompts = {
             explain: "Explain what the active file does",
-            fix: "Fix all issues in the active file. Apply the fix directly with FILE actions.",
             refactor: "Refactor the active file for clarity and performance",
             tests: "Generate unit tests for the active file",
             docs: "Add JSDoc/docstring comments to the active file",
             git: "Run `git status --short` in the workspace and show me the result using CMD.",
           };
+          if (action === "fix") {
+            vscode.postMessage({ type: "fixActive" });
+            return;
+          }
           if (prompts[action]) sendMessage(prompts[action]);
         });
 

@@ -379,14 +379,16 @@ async function restorePersistedApiKeys(context) {
     if (!configKey) continue
 
     const configValue = String(cfg.get(configKey, "") || "").trim()
-    if (configValue) continue
-
     const secretValue = String(
       (await context.secrets.get(getApiSecretKey(provider))) || ""
     )
       .trim()
       .replace(/^['"`]|['"`]$/g, "")
     if (!secretValue) continue
+
+    if (configValue && configValue === secretValue) {
+      continue
+    }
 
     const target = getConfigTargetForKey(configKey)
     await cfg.update(configKey, secretValue, target)
