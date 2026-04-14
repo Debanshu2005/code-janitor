@@ -1,6 +1,8 @@
 const vscode = require("vscode")
 const fs = require("fs").promises
+const fsSync = require("fs")
 const path = require("path")
+const { exec } = require("child_process")
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
@@ -106,7 +108,7 @@ class AIAgent {
         provider === "groq"
           ? "llama-3.1-8b-instant"
           : provider === "openrouter"
-            ? "meta-llama/llama-3.1-8b-instruct:free"
+            ? "qwen/qwen-2.5-coder-32b-instruct"
             : provider === "anthropic"
               ? "claude-3-5-haiku-20241022"
               : provider === "nvidia"
@@ -131,7 +133,30 @@ class AIAgent {
     if (/\/api$/i.test(normalized)) {
       normalized = normalized.replace(/\/api$/i, "")
     }
-    return normalized || "http://localhost:11434"
+    normalized = normalized || "http://localhost:11434"
+    try {
+      const parsed = new URL(normalized)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "http://localhost:11434"
+      }
+      const hostname = parsed.hostname.toLowerCase()
+      const privatePatterns = [
+        /^169\.254\./,
+        /^10\./,
+        /^172\.(1[6-9]|2[0-9]|3[01])\./,
+        /^192\.168\./,
+        /^::1$/,
+        /^fd[0-9a-f]{2}:/i
+      ]
+      const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+      const isPrivate = privatePatterns.some((p) => p.test(hostname))
+      if (!isLocalhost && !isPrivate) {
+        return "http://localhost:11434"
+      }
+    } catch {
+      return "http://localhost:11434"
+    }
+    return normalized
   }
 
   async _fetchOllamaModelNames(ollamaUrl, timeoutMs = 8_000) {
@@ -1130,7 +1155,11 @@ ${resolvedMessage}`
 
     try {
       const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
-      const graphReport = await fs.readFile(graphReportPath, "utf8")
+      const resolvedGraphPath = path.resolve(graphReportPath)
+      if (!resolvedGraphPath.startsWith(path.resolve(workspaceFolder))) {
+        return ""
+      }
+      const graphReport = await fs.readFile(resolvedGraphPath, "utf8")
       
       // Extract only first 3 god nodes for speed
       const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
@@ -1245,7 +1274,7 @@ ${resolvedMessage}`
             filePath.includes("extension-output") ||
             filePath.includes("AppData\\Local\\Programs") ||
             filePath.includes("AppData/Local/Programs") ||
-            !require("fs").existsSync(filePath)
+            !fsSync.existsSync(filePath)
           )
             continue
           const relativePath = this._toWorkspaceRelativePath(
@@ -2733,9 +2762,13 @@ ${userMessage}`
         }
       }
 
+      const resolvedFull = path.resolve(fullPath)
+      if (workspaceRoot && !outsideWorkspace && !resolvedFull.startsWith(path.resolve(workspaceRoot))) {
+        return { success: false, error: "Path traversal detected: file is outside workspace." }
+      }
       const changeSummary = this._summarizeLineChanges(oldContent, newContent)
-      await fs.mkdir(path.dirname(fullPath), { recursive: true })
-      await fs.writeFile(fullPath, newContent, "utf8")
+      await fs.mkdir(path.dirname(resolvedFull), { recursive: true })
+      await fs.writeFile(resolvedFull, newContent, "utf8")
 
       const relativePath = workspaceRoot
         ? path.relative(workspaceRoot, fullPath)
@@ -2807,7 +2840,6 @@ ${userMessage}`
     }
 
     return new Promise((resolve) => {
-      const { exec } = require("child_process")
       exec(
         command,
         { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },

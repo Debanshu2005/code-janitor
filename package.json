@@ -141,8 +141,8 @@
         },
         "codeJanitor.ai.model": {
           "type": "string",
-          "default": "qwen2.5-coder:1.5b",
-          "description": "Preferred local fallback model for Ollama (tries qwen2.5-coder:1.5b first, then codellama:latest, then llama3:latest if available)"
+          "default": "",
+          "description": "AI model to use. Leave empty to use the provider default. For OpenRouter use slugs like qwen/qwen-2.5-coder-32b-instruct. For Ollama use qwen2.5-coder:1.5b. For NVIDIA NIM use nvidia/minimax-m2.7 or nvidia/llama-3.1-nemotron-70b-instruct."
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
