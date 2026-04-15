@@ -8,7 +8,7 @@ const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
   openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
-  nvidia: ["nvidia/minimax-m2.7","nvidia/llama-3.1-nemotron-70b-instruct","nvidia/mistral-nemo-minitron-8b-8k-instruct","nvidia/llama-3.1-nemotron-51b-instruct"]
+  nvidia: ["minimaxai/minimax-m2.7","meta/llama-3.1-8b-instruct","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5","mistralai/mistral-nemotron"]
 };
 
 class ChatPanel {
@@ -866,7 +866,7 @@ ${trimmedText}`;
 
   _getDefaultModelForProvider(provider) {
     if (provider === "ollama") return "qwen2.5-coder:1.5b";
-    if (provider === "nvidia") return "nvidia/minimax-m2.7";
+    if (provider === "nvidia") return "minimaxai/minimax-m2.7";
     const providerModels = MODELS_BY_PROVIDER[provider];
     return Array.isArray(providerModels) && providerModels.length > 0
       ? providerModels[0]
@@ -907,6 +907,34 @@ ${trimmedText}`;
     const target = this._getConfigTargetForKey(key);
     await cfg.update(key, value, target);
     return cfg;
+  }
+
+  _getModelConfigKey(provider) {
+    return provider === "nvidia" ? "nvidiaModel" : "model";
+  }
+
+  _normalizeModelForProvider(provider, model) {
+    const raw = typeof model === "string" ? model.trim() : "";
+    const defaultModel = this._getDefaultModelForProvider(provider);
+    if (!raw) return defaultModel;
+
+    const allowedModels = MODELS_BY_PROVIDER[provider];
+    if (Array.isArray(allowedModels) && allowedModels.length > 0) {
+      return allowedModels.includes(raw) ? raw : defaultModel;
+    }
+
+    return raw;
+  }
+
+  async _setProviderModel(provider, model) {
+    const nextModel = this._normalizeModelForProvider(provider, model);
+    await this._updateAiConfig(this._getModelConfigKey(provider), nextModel);
+
+    // Keep the generic model in sync so status UI and older code paths stay aligned.
+    await this._updateAiConfig("model", nextModel);
+
+    this._saveProviderModel(provider, nextModel);
+    return nextModel;
   }
 
   _setupMessageHandler() {
@@ -1040,6 +1068,15 @@ ${trimmedText}`;
         // Add timeout warning for slow models
         const config = await this._getEffectiveAiConfig();
         const timeoutMs = config.timeout || 300000;
+        
+        // Warn immediately for known slow models
+        if (config.model === "minimaxai/minimax-m2.7") {
+          this.panel.webview.postMessage({ 
+            type: "status", 
+            text: `⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses.` 
+          });
+        }
+        
         const warningTimer = setTimeout(() => {
           if (this.abortController && !this.abortController.signal.aborted) {
             this.panel.webview.postMessage({ 
@@ -1095,8 +1132,10 @@ ${trimmedText}`;
           }
         }
 
-        // Debug: show what was parsed
-        if (response.actions && response.actions.length > 0) {
+        const debugConfig = vscode.workspace.getConfiguration("codeJanitor.ai");
+        const showParsedActionsDebug = debugConfig.get("showParsedActionsDebug", false);
+
+        if (showParsedActionsDebug && response.actions && response.actions.length > 0) {
           const actionSummary = response.actions.map(a => {
             if (a.type === 'graphify') return 'graphify:open';
             return `${a.type}:${a.path || a.command || ''}`;
@@ -1472,17 +1511,25 @@ ${trimmedText}`;
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
-        const cfg = await this._updateAiConfig("model", message.model);
+        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
         const provider = cfg.get("provider", "ollama");
-        this._saveProviderModel(provider, message.model);
+        const nextModel = await this._setProviderModel(provider, message.model);
+        if (this.panel) {
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `Model switched to ${nextModel}.`
+          });
+        }
       } else if (message.type === "setProvider") {
         try {
           console.log("[ChatPanel] setProvider message received:", message.provider);
           await this._updateAiConfig("provider", message.provider);
           const defaultModel = this._getDefaultModelForProvider(message.provider);
           const savedModel = this._getSavedProviderModel(message.provider);
-          const nextModel = savedModel || defaultModel;
-          await this._updateAiConfig("model", nextModel);
+          const nextModel = await this._setProviderModel(
+            message.provider,
+            savedModel || defaultModel
+          );
           
           // Persist API key if provided
           if (message.apiKey && message.provider === "groq") {

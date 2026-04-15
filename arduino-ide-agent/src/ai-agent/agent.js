@@ -49,6 +49,12 @@ const STOP_WORDS = new Set([
   "with"
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
+const NVIDIA_MODELS = new Set([
+  "nvidia/minimax-m2.7",
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+  "nvidia/llama-3.1-nemotron-51b-instruct"
+])
 
 class AIAgent {
   constructor(context) {
@@ -92,25 +98,32 @@ class AIAgent {
         ? normalizedStateProvider
         : normalizedConfigProvider || normalizedStateProvider || "ollama"
 
-    const configModel = config.get(
-      "model",
-      this._getDefaultModelForProvider(provider)
-    )
+    const genericModel = String(config.get("model", "") || "").trim()
+    const nvidiaModel = String(
+      config.get("nvidiaModel", "nvidia/minimax-m2.7") || ""
+    ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
       : ""
-    const normalizedConfigModel =
-      typeof configModel === "string" ? configModel.trim() : ""
     const normalizedStateModel =
       typeof stateModel === "string" ? stateModel.trim() : ""
+    const preferredConfigModel = this._resolveConfiguredModel(
+      provider,
+      genericModel,
+      nvidiaModel
+    )
+    const stateAwareModel =
+      provider === "nvidia"
+        ? this._sanitizeNvidiaModel(normalizedStateModel)
+        : normalizedStateModel
     const model =
       normalizedStateProvider &&
       normalizedConfigProvider &&
       normalizedStateProvider !== normalizedConfigProvider &&
-      normalizedStateModel
-        ? normalizedStateModel
-        : normalizedConfigModel ||
-          normalizedStateModel ||
+      stateAwareModel
+        ? stateAwareModel
+        : preferredConfigModel ||
+          stateAwareModel ||
           this._getDefaultModelForProvider(provider)
 
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
@@ -124,6 +137,8 @@ class AIAgent {
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
+      nvidiaApiKey: config.get("nvidiaApiKey", ""),
+      nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
       timeout: config.get("timeout", 90_000)
     }
   }
@@ -132,7 +147,29 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
+    if (provider === "nvidia") return "nvidia/minimax-m2.7"
     return "qwen2.5-coder:1.5b"
+  }
+
+  _sanitizeNvidiaModel(model) {
+    const value = typeof model === "string" ? model.trim() : ""
+    if (!value) return "nvidia/minimax-m2.7"
+    if (NVIDIA_MODELS.has(value)) return value
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+      )
+    ) {
+      return "nvidia/minimax-m2.7"
+    }
+    return "nvidia/minimax-m2.7"
+  }
+
+  _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
+    if (provider === "nvidia") {
+      return this._sanitizeNvidiaModel(nvidiaModel || genericModel)
+    }
+    return genericModel || this._getDefaultModelForProvider(provider)
   }
 
   _normalizeOllamaUrl(url) {
@@ -215,6 +252,12 @@ class AIAgent {
       }
       if (/\b404\b|no endpoints found|not found/i.test(message)) {
         return `OpenRouter error: ${message}. That model currently has no available endpoint. Try another listed model.`
+      }
+    }
+
+    if (config?.provider === "nvidia") {
+      if (/\b404\b|page not found|not found/i.test(message)) {
+        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try nvidia/minimax-m2.7.`
       }
     }
 
@@ -315,6 +358,35 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
+          messages: [
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
+          ],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: maxTokens
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null
+          try {
+            return (
+              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            )
+          } catch {
+            return null
+          }
+        }
+      }
+    }
+    if (config.provider === "nvidia") {
+      return {
+        url: "https://integrate.api.nvidia.com/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.nvidiaApiKey}`
+        },
+        body: JSON.stringify({
+          model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }

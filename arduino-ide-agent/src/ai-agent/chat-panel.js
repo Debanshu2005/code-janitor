@@ -10,7 +10,8 @@ const MODELS_BY_PROVIDER = {
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free"
   ],
-  anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"]
+  anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
+  nvidia: ["nvidia/minimax-m2.7","nvidia/llama-3.1-nemotron-70b-instruct","nvidia/mistral-nemo-minitron-8b-8k-instruct","nvidia/llama-3.1-nemotron-51b-instruct"]
 };
 
 class ChatPanel {
@@ -171,6 +172,7 @@ class ChatPanel {
     if (provider === "groq") return "groqApiKey";
     if (provider === "openrouter") return "openrouterApiKey";
     if (provider === "anthropic") return "anthropicApiKey";
+    if (provider === "nvidia") return "nvidiaApiKey";
     return null;
   }
 
@@ -188,11 +190,12 @@ class ChatPanel {
 
   async _restoreApiKeys() {
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const providers = ["groq", "openrouter", "anthropic"];
+    const providers = ["groq", "openrouter", "anthropic", "nvidia"];
     const presence = {
       groq: false,
       openrouter: false,
-      anthropic: false
+      anthropic: false,
+      nvidia: false
     };
 
     for (const provider of providers) {
@@ -1612,9 +1615,11 @@ ${trimmedText}`;
           const hasGroqKey = restoredKeys.groq;
           const hasOpenrouterKey = restoredKeys.openrouter;
           const hasAnthropicKey = restoredKeys.anthropic;
+          const hasNvidiaKey = restoredKeys.nvidia;
           const hasKey = (savedConfig.provider === "groq" && hasGroqKey) ||
                          (savedConfig.provider === "openrouter" && hasOpenrouterKey) ||
-                         (savedConfig.provider === "anthropic" && hasAnthropicKey);
+                         (savedConfig.provider === "anthropic" && hasAnthropicKey) ||
+                         (savedConfig.provider === "nvidia" && hasNvidiaKey);
           const models = hasKey ? (MODELS_BY_PROVIDER[savedConfig.provider] || null) : null;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
@@ -1623,6 +1628,7 @@ ${trimmedText}`;
             hasGroqKey,
             hasOpenrouterKey,
             hasAnthropicKey,
+            hasNvidiaKey,
             models
           });
         }
@@ -1632,6 +1638,9 @@ ${trimmedText}`;
       } else if (message.type === "setModel") {
         const cfg = await this._updateAiConfig("model", message.model);
         const provider = cfg.get("provider", "ollama");
+        if (provider === "nvidia") {
+          await this._updateAiConfig("nvidiaModel", message.model);
+        }
         await this._syncAiState(provider, message.model);
         console.log(`[CodeJanitor] Model switched to: ${message.model} for provider: ${provider}`);
       } else if (message.type === "setProvider") {
@@ -1647,6 +1656,9 @@ ${trimmedText}`;
           console.log(`[CodeJanitor] Setting model to: ${nextModel}`);
 
           await this._updateAiConfig("model", nextModel);
+          if (message.provider === "nvidia") {
+            await this._updateAiConfig("nvidiaModel", nextModel);
+          }
           await this._syncAiState(message.provider, nextModel);
 
           // Save API key if provided
@@ -1659,6 +1671,9 @@ ${trimmedText}`;
             }
             if (message.provider === "anthropic") {
               await this._persistApiKey("anthropic", message.apiKey);
+            }
+            if (message.provider === "nvidia") {
+              await this._persistApiKey("nvidia", message.apiKey);
             }
             console.log(`[CodeJanitor] API key saved for ${message.provider}`);
           }
@@ -1680,7 +1695,8 @@ ${trimmedText}`;
               model: effectiveConfig.model,
               hasGroqKey: restoredKeys.groq,
               hasOpenrouterKey: restoredKeys.openrouter,
-              hasAnthropicKey: restoredKeys.anthropic
+              hasAnthropicKey: restoredKeys.anthropic,
+              hasNvidiaKey: restoredKeys.nvidia
             });
           }
           

@@ -68,6 +68,19 @@ const CONTENT_NOISE_WORDS = new Set([
   "help"
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
+const NVIDIA_MODEL_ALIASES = new Map([
+  ["nvidia/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-70b-instruct"],
+  ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
+  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+])
+const NVIDIA_MODELS = new Set([
+  "minimaxai/minimax-m2.7",
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.1-70b-instruct",
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "mistralai/mistral-nemotron"
+])
 
 class AIAgent {
   constructor() {
@@ -97,28 +110,69 @@ class AIAgent {
     const provider = config.get("provider", "ollama")
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
     const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl)
+    const genericModel = String(config.get("model", "") || "").trim()
+    const nvidiaModel = String(
+      config.get("nvidiaModel", "minimaxai/minimax-m2.7") || ""
+    ).trim()
+    const model = this._resolveConfiguredModel(
+      provider,
+      genericModel,
+      nvidiaModel
+    )
     return {
       enabled: config.get("enabled", true),
       provider,
       ollamaUrl,
-      model: config.get(
-        "model",
-        provider === "groq"
-          ? "llama-3.1-8b-instant"
-          : provider === "openrouter"
-            ? "meta-llama/llama-3.1-8b-instruct:free"
-            : provider === "anthropic"
-              ? "claude-3-5-haiku-20241022"
-              : provider === "nvidia"
-                ? "nvidia/minimax-m2.7"
-                : "qwen2.5-coder:1.5b"
-      ),
+      model,
+      nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
       timeout: config.get("timeout", 180_000)
     }
+  }
+
+  _getDefaultModelForProvider(provider) {
+    if (provider === "groq") return "llama-3.1-8b-instant"
+    if (provider === "openrouter") {
+      return "meta-llama/llama-3.1-8b-instruct:free"
+    }
+    if (provider === "anthropic") return "claude-3-5-haiku-20241022"
+    if (provider === "nvidia") return "minimaxai/minimax-m2.7"
+    return "qwen2.5-coder:1.5b"
+  }
+
+  _sanitizeNvidiaModel(model) {
+    const value = typeof model === "string" ? model.trim() : ""
+    if (!value) return "minimaxai/minimax-m2.7"
+    if (NVIDIA_MODEL_ALIASES.has(value)) return NVIDIA_MODEL_ALIASES.get(value)
+    if (NVIDIA_MODELS.has(value)) return value
+
+    // Old broken settings sometimes stored a function UUID instead of a model.
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+      )
+    ) {
+      return "minimaxai/minimax-m2.7"
+    }
+
+    return "minimaxai/minimax-m2.7"
+  }
+
+  _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
+    if (provider === "nvidia") {
+      const preferred = this._sanitizeNvidiaModel(nvidiaModel)
+      if (preferred) {
+        return preferred
+      }
+      return this._sanitizeNvidiaModel(genericModel)
+    }
+
+    const normalizedGeneric =
+      typeof genericModel === "string" ? genericModel.trim() : ""
+    return normalizedGeneric || this._getDefaultModelForProvider(provider)
   }
 
   _normalizeOllamaUrl(url) {
@@ -197,6 +251,10 @@ class AIAgent {
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
     const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
+    
+    // Optimize for MiniMax M2.7 - use lower token count for faster responses
+    const isMinimax = config.model === "minimaxai/minimax-m2.7"
+    const optimizedMaxTokens = isMinimax && mode === "fast" ? 1024 : maxTokens
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -327,14 +385,18 @@ class AIAgent {
           ],
           stream: true,
           temperature: 0.05,
-          max_tokens: maxTokens
+          max_tokens: optimizedMaxTokens
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
           try {
-            return (
-              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
-            )
+            const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            if (!token) return null
+            // Filter out <think> tags and their content
+            if (token.includes("<think>") || token.includes("</think>")) {
+              return null
+            }
+            return token
           } catch {
             return null
           }
@@ -927,7 +989,11 @@ ${resolvedMessage}`
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
         : fullResponse || this._getEmptyResponseFallback(mode)
-      let parsedResponse = this._parseResponse(finalText)
+      
+      // Remove <think> tags and their content (some models output reasoning)
+      const cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim()
+      
+      let parsedResponse = this._parseResponse(cleanedText)
       const finalIntent = this._detectIntent(userMessage)
       const requiresFileActions = this._shouldForceStructuredEdit(
         finalIntent,
@@ -1569,11 +1635,12 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast") {
     const base =
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome."
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Syntax checking and code quality analysis"
     const compactRules = `Operational rules (fast):
 - Be concise and correct.
 - Use FILE: only when the user asks to change files.
-- Avoid unrelated context or speculation.`
+- Avoid unrelated context or speculation.
+- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.`
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
@@ -1586,7 +1653,20 @@ ${resolvedMessage}`
 - When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.
 - If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.
 - When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.
-- Treat generated code as production-oriented by default: clear names, sensible structure, error handling where needed, and no unnecessary comments.`
+- CRITICAL: All generated code must be production-grade by default:
+  * Comprehensive error handling and input validation
+  * Security best practices (sanitization, authentication, authorization where applicable)
+  * Performance optimization (efficient algorithms, proper resource management)
+  * Accessibility compliance (ARIA labels, semantic HTML, keyboard navigation)
+  * Responsive design for web interfaces
+  * Proper logging and monitoring hooks
+  * Clean architecture with separation of concerns
+  * Type safety where applicable (TypeScript, type hints)
+  * No placeholder comments, TODOs, or tutorial-style code
+  * Database connections with proper pooling and error recovery
+  * API endpoints with rate limiting and proper status codes
+  * Environment-based configuration (dev/staging/prod)
+  * Graceful degradation and fallback mechanisms`
     const rules = mode === "fast" ? compactRules : operatingPrinciples
     switch (intent) {
       case "greeting":
@@ -1615,10 +1695,23 @@ Opening the codebase graph visualization panel. You'll be able to see the depend
         return `${base}
 ${rules}
 ${loc}
-Write professional, production-ready code by default:
-- Prefer maintainable structure, clear naming, and robust error handling.
-- Avoid placeholder/tutorial text and avoid toy implementations.
-- Keep code deployable and consistent with the existing project patterns.
+Write PRODUCTION-GRADE code by default:
+- Enterprise-level error handling with proper try-catch, error boundaries, and graceful failures
+- Input validation and sanitization for all user inputs and external data
+- Security: XSS prevention, CSRF tokens, SQL injection protection, secure headers
+- Performance: lazy loading, code splitting, caching strategies, optimized queries
+- Accessibility: WCAG 2.1 AA compliance, ARIA labels, keyboard navigation, screen reader support
+- Responsive design: mobile-first approach, breakpoints, touch-friendly interfaces
+- SEO optimization: meta tags, semantic HTML, structured data
+- Logging and monitoring: structured logs, error tracking integration points
+- Configuration management: environment variables, feature flags
+- Testing hooks: data-testid attributes, clear component boundaries
+- Database: connection pooling, transactions, proper indexing, migration scripts
+- API design: RESTful conventions, proper status codes, rate limiting, pagination
+- Authentication: secure token handling, session management, password hashing
+- Code quality: TypeScript/type hints, linting compliance, consistent formatting
+- Documentation: JSDoc/docstrings for complex logic only (code should be self-documenting)
+- Never use placeholders like TODO, FIXME, or "implement this later"
 - Make opinionated but reasonable engineering choices when the user has not specified low-level details.
 - If you touch multiple files, ensure imports, references, and wiring stay consistent.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
@@ -1643,16 +1736,52 @@ FILE: hello/index.html
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello</title>
+  <meta name="description" content="Hello World demonstration page" />
+  <title>Hello World</title>
   <style>
-    body { font-family: sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; }
-    h1 { color: #0f172a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: grid; 
+      place-items: center; 
+      min-height: 100vh; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      padding: 1rem;
+    }
+    h1 { 
+      font-size: clamp(2rem, 5vw, 4rem);
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+      animation: fadeIn 0.6s ease-in;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; }
+    }
   </style>
 </head>
 <body>
-  <h1>Hello World</h1>
+  <main role="main">
+    <h1 id="greeting" aria-live="polite">Hello World</h1>
+  </main>
   <script>
-    console.log("Hello from Code Janitor");
+    (function() {
+      'use strict';
+      const greeting = document.getElementById('greeting');
+      if (!greeting) {
+        console.error('Greeting element not found');
+        return;
+      }
+      console.log('Hello from Code Janitor - Page loaded successfully');
+      
+      // Example: Dynamic greeting based on time
+      const hour = new Date().getHours();
+      const timeGreeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening';
+      greeting.textContent = \`\${timeGreeting}, World!\`;
+    })();
   </script>
 </body>
 </html>
@@ -1663,31 +1792,50 @@ Now respond with executable actions only for the user's request:`
       case "explain":
         return `${base}
 ${rules}
-Give a clear, direct, technically sound explanation. Be concise but substantive. Do not output FILE: or CMD: directives unless asked.`
+Give a clear, direct, technically sound explanation with production-level insights:
+- Explain architectural decisions and trade-offs
+- Highlight security implications and best practices
+- Discuss performance considerations and optimization opportunities
+- Mention scalability and maintenance concerns
+- Reference industry standards and patterns where relevant
+Be concise but substantive. Do not output FILE: or CMD: directives unless asked.`
       case "debug":
         return `${base}
 ${rules}
-Debug like a professional engineer:
-- Identify the most likely root cause, not just the visible symptom.
-- Call out concrete failure modes, regressions, or risks when relevant.
-- Prefer fixes that are correct and durable, not merely plausible.
+Debug like a senior production engineer:
+- Identify the most likely root cause, not just the visible symptom
+- Call out concrete failure modes, regressions, or risks when relevant
+- Consider production implications: data loss, downtime, security vulnerabilities
+- Suggest monitoring and logging improvements to prevent recurrence
+- Provide fixes that are production-grade: proper error handling, rollback strategies, backward compatibility
+- Include defensive programming practices in solutions
 Use FILE: directives only if the user asks you to apply the fix.`
       case "refactor":
         return `${base}
 ${rules}
-Suggest improvements with engineering judgment:
-- Prioritize clarity, maintainability, and risk reduction.
-- Distinguish must-fix issues from optional cleanup.
-- Avoid churn that does not materially improve the code.
+Suggest production-grade improvements with senior engineering judgment:
+- Prioritize: security vulnerabilities, performance bottlenecks, scalability issues, maintainability
+- Recommend design patterns and architectural improvements
+- Identify technical debt and propose migration strategies
+- Suggest testing strategies and coverage improvements
+- Consider backward compatibility and deployment risks
+- Distinguish critical fixes from optional cleanup
+- Avoid churn that does not materially improve production readiness
 Use FILE: directives only if the user asks you to apply changes.`
       case "review":
         return `${base}
 ${rules}
-Perform a professional code review:
-- Prioritize correctness issues, regressions, security risks, missing validation, and testing gaps.
-- Lead with concrete findings rather than long summaries.
-- Cite the most relevant files, behaviors, or failure modes from the provided context.
-- Be explicit when a concern is a risk or inference rather than a confirmed bug.
+Perform a senior-level production code review:
+- CRITICAL ISSUES: Security vulnerabilities, data loss risks, authentication/authorization flaws, injection attacks
+- HIGH PRIORITY: Performance bottlenecks, memory leaks, race conditions, error handling gaps
+- PRODUCTION READINESS: Logging, monitoring, graceful degradation, rollback strategies
+- CODE QUALITY: Architecture violations, tight coupling, missing tests, poor error messages
+- SCALABILITY: Database query optimization, caching strategies, resource management
+- COMPLIANCE: Accessibility (WCAG), data privacy (GDPR), security standards (OWASP)
+- Lead with concrete findings rather than long summaries
+- Cite the most relevant files, behaviors, or failure modes from the provided context
+- Be explicit when a concern is a risk or inference rather than a confirmed bug
+- Provide severity levels: Critical, High, Medium, Low
 Use FILE: directives only if the user explicitly asks you to apply changes.`
       case "command":
         return `${base}
@@ -1710,19 +1858,21 @@ Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markd
       case "edit":
         return `${base}
 ${rules}
-The user wants to edit a file. Write professional, production-ready code by default:
-- Preserve existing architecture and style unless changes are required.
-- Prefer robust, maintainable implementations over minimal placeholders.
-- Include concrete fixes, not advisory text.
-- Make the smallest correct change that fully solves the request.
-- Preserve public behavior unless the user explicitly asks for a behavioral change.
-- Update all directly affected code paths, imports, and nearby integration points when necessary.
-- Do not silently remove logic, configuration, or content unless the request clearly calls for it.
-- Never delete or empty README.md unless the user explicitly asks you to remove it.
+The user wants to edit a file. Write PRODUCTION-GRADE code by default:
+- Preserve existing architecture and style unless changes are required
+- Apply all production-level standards: error handling, validation, security, performance, accessibility
+- Include concrete fixes with proper error boundaries and fallback mechanisms
+- Make the smallest correct change that fully solves the request at production quality
+- Preserve public behavior unless the user explicitly asks for a behavioral change
+- Update all directly affected code paths, imports, and nearby integration points when necessary
+- Add proper logging for debugging production issues
+- Ensure backward compatibility unless breaking changes are explicitly requested
+- Do not silently remove logic, configuration, or content unless the request clearly calls for it
+- Never delete or empty README.md unless the user explicitly asks you to remove it
 You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 FILE: <exact file path>
 \`\`\`
-(complete updated file content)
+(complete updated file content with production-grade quality)
 \`\`\`
 MKDIR: folder/subfolder
 CMD: <single workspace command>
@@ -1730,14 +1880,26 @@ Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markd
       case "scan":
         return `${base}
 ${rules}
-Analyze the provided codebase context like a professional reviewer:
-- Prioritize correctness, architecture, behavioral risks, and missing verification.
-- Ground conclusions in the supplied files and context rather than generic advice.
-- Be explicit when something is an inference rather than directly shown by the code.`
+Analyze the provided codebase context like a senior production engineer:
+- Assess production readiness: deployment risks, monitoring gaps, error handling coverage
+- Evaluate architecture: scalability, maintainability, technical debt, design patterns
+- Identify security concerns: authentication, authorization, input validation, data exposure
+- Review performance: bottlenecks, inefficient queries, resource leaks, caching opportunities
+- Check compliance: accessibility, data privacy, security standards
+- Prioritize correctness, architecture, behavioral risks, and missing verification
+- Ground conclusions in the supplied files and context rather than generic advice
+- Be explicit when something is an inference rather than directly shown by the code
+- Provide actionable recommendations with priority levels`
       default:
         return `${base}
 ${rules}
-Answer helpfully and professionally. Prefer direct, actionable guidance over generic coaching. Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`
+Answer helpfully and professionally with production-level insights:
+- Provide direct, actionable guidance grounded in production best practices
+- Consider real-world implications: scalability, security, maintenance, cost
+- Reference industry standards and battle-tested patterns
+- Highlight potential pitfalls and edge cases
+- Suggest monitoring and observability strategies where relevant
+Use FILE: or CMD: directives only when the user explicitly asks to create or run something.`
     }
   }
 
@@ -2449,17 +2611,8 @@ ${userMessage}`
       actions.push({ type: "mkdir", path: normalizedPath })
     }
 
-    // Match GRAPHIFY: open (case insensitive, flexible spacing)
-    // Also match variations like "GRAPHIFY:open" or "graphify: open"
+    // Match only explicit GRAPHIFY actions to avoid accidental triggers
     if (/GRAPHIFY\s*:\s*open/i.test(response)) {
-      actions.push({ type: "graphify" })
-    }
-    
-    // Fallback: if intent was show_graph but no GRAPHIFY action found, add it anyway
-    // This handles cases where the AI doesn't follow instructions perfectly
-    const hasGraphifyAction = actions.some(a => a.type === "graphify")
-    if (!hasGraphifyAction && /\b(graph|graphify|visualization|visualize|dependency|dependencies|architecture|structure)\b/i.test(response) && 
-        /\b(show|display|open|view)\b/i.test(response)) {
       actions.push({ type: "graphify" })
     }
 

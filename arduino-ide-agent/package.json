@@ -39,9 +39,15 @@
             "ollama",
             "groq",
             "openrouter",
-            "anthropic"
+            "anthropic",
+            "nvidia"
           ],
           "description": "AI provider"
+        },
+        "codeJanitor.ai.nvidiaApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "NVIDIA API key"
         },
         "codeJanitor.ai.anthropicApiKey": {
           "type": "string",
@@ -66,7 +72,18 @@
         "codeJanitor.ai.model": {
           "type": "string",
           "default": "qwen2.5-coder:1.5b",
-          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq."
+          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq, nvidia/minimax-m2.7 for NVIDIA."
+        },
+        "codeJanitor.ai.nvidiaModel": {
+          "type": "string",
+          "default": "nvidia/minimax-m2.7",
+          "enum": [
+            "nvidia/minimax-m2.7",
+            "nvidia/llama-3.1-nemotron-70b-instruct",
+            "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+            "nvidia/llama-3.1-nemotron-51b-instruct"
+          ],
+          "description": "NVIDIA model"
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
