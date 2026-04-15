@@ -1715,6 +1715,16 @@
           if (fixButton) {
             fixButton.click();
           }
+        } else if (msg.type === "prefillMessage") {
+          // Pre-fill input with message from Quick Fix
+          input.value = msg.message || "";
+          input.style.height = "38px";
+          input.style.height = Math.min(input.scrollHeight, 120) + "px";
+          input.focus();
+          // Auto-send after a brief delay
+          setTimeout(function() {
+            sendMessage();
+          }, 300);
         }
       });
 

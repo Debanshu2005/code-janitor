@@ -461,6 +461,54 @@ async function activate(context) {
     vscode.languages.createDiagnosticCollection("codeJanitor")
   context.subscriptions.push(diagnosticCollection)
 
+  // Register Code Action Provider for "Quick Fix with AI"
+  const codeActionProvider = vscode.languages.registerCodeActionsProvider(
+    ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'python', 'java', 'c', 'cpp', 'html'],
+    {
+      provideCodeActions(document, range, context) {
+        const diagnostics = context.diagnostics.filter(d => d.source === 'Code Janitor')
+        if (diagnostics.length === 0) return []
+
+        const fixes = []
+        
+        // Create "Fix with AI" action for each diagnostic
+        for (const diagnostic of diagnostics) {
+          const fix = new vscode.CodeAction(
+            `🤖 Fix with AI: ${diagnostic.message}`,
+            vscode.CodeActionKind.QuickFix
+          )
+          fix.command = {
+            command: 'codeJanitor.quickFixWithAI',
+            title: 'Fix with AI',
+            arguments: [document, diagnostic]
+          }
+          fix.diagnostics = [diagnostic]
+          fix.isPreferred = true
+          fixes.push(fix)
+        }
+
+        // Create "Fix All with AI" action if multiple issues
+        if (diagnostics.length > 1) {
+          const fixAll = new vscode.CodeAction(
+            `🤖 Fix All ${diagnostics.length} Issues with AI`,
+            vscode.CodeActionKind.QuickFix
+          )
+          fixAll.command = {
+            command: 'codeJanitor.quickFixAllWithAI',
+            title: 'Fix All with AI',
+            arguments: [document, diagnostics]
+          }
+          fixAll.diagnostics = diagnostics
+          fixes.push(fixAll)
+        }
+
+        return fixes
+      }
+    },
+    { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+  )
+  context.subscriptions.push(codeActionProvider)
+
   // 2. Lint Command
   const lintDisposable = vscode.commands.registerCommand(
     "codeJanitor.lintCode",
@@ -531,6 +579,58 @@ async function activate(context) {
     }
   )
   context.subscriptions.push(lintDisposable)
+
+  // Quick Fix with AI Command - Single issue
+  const quickFixDisposable = vscode.commands.registerCommand(
+    "codeJanitor.quickFixWithAI",
+    async (document, diagnostic) => {
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      await chatPanelInstance.show()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Build pre-filled message with error context
+      const line = diagnostic.range.start.line + 1
+      const message = `Fix this error on line ${line}:\n\n**Error:** ${diagnostic.message}\n**Rule:** ${diagnostic.code || 'N/A'}\n\nPlease fix this issue in the file.`
+      
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ 
+          type: "prefillMessage", 
+          message 
+        })
+      }
+    }
+  )
+  context.subscriptions.push(quickFixDisposable)
+
+  // Quick Fix All with AI Command - Multiple issues
+  const quickFixAllDisposable = vscode.commands.registerCommand(
+    "codeJanitor.quickFixAllWithAI",
+    async (document, diagnostics) => {
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      await chatPanelInstance.show()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Build pre-filled message with all errors
+      const errorList = diagnostics.map((d, i) => {
+        const line = d.range.start.line + 1
+        return `${i + 1}. Line ${line}: ${d.message} (${d.code || 'N/A'})`
+      }).join('\n')
+      
+      const message = `Fix these ${diagnostics.length} errors:\n\n${errorList}\n\nPlease fix all these issues in the file.`
+      
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ 
+          type: "prefillMessage", 
+          message 
+        })
+      }
+    }
+  )
+  context.subscriptions.push(quickFixAllDisposable)
 
   // 3. Frontend Validation Command
   const validateDisposable = vscode.commands.registerCommand(

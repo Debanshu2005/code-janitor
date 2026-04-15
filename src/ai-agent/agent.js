@@ -3,6 +3,8 @@ const fs = require("fs").promises
 const fsSync = require("fs")
 const path = require("path")
 const SelfDiagnosingErrorHandler = require("../self-healing/error-handler")
+const https = require("https")
+const http = require("http")
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
@@ -132,7 +134,12 @@ class AIAgent {
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
-      timeout: config.get("timeout", 300_000)
+      timeout: config.get("timeout", 300_000),
+      maxTokens: {
+        fast: Math.max(512, Math.min(4096, config.get("maxTokens.fast", 2048))),
+        heavy: Math.max(1024, Math.min(8192, config.get("maxTokens.heavy", 4096))),
+        create: Math.max(2048, Math.min(16384, config.get("maxTokens.create", 8192)))
+      }
     }
   }
 
@@ -253,14 +260,19 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
+    const baseMaxTokens = isUnlimited 
+      ? (config.maxTokens?.create || 8192)
+      : mode === "heavy" 
+        ? (config.maxTokens?.heavy || 4096)
+        : (config.maxTokens?.fast || 2048)
     
-    // Optimize for MiniMax M2.7 - aggressive token reduction for faster responses
+    // Optimize for slow models
     const isMinimax = config.model === "minimaxai/minimax-m2.7"
-    // Apply aggressive optimizations to ALL models for faster responses
+    const isNemotron = config.model === "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    
     const optimizedMaxTokens = isMinimax 
       ? (mode === "fast" ? 512 : mode === "heavy" ? 2048 : 1024)
-      : (mode === "fast" ? 1024 : mode === "heavy" ? 3072 : 1536)
+      : baseMaxTokens  // Use configured maxTokens for all other models
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -296,7 +308,7 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
-          max_tokens: maxTokens,
+          max_tokens: baseMaxTokens,
           stream: true,
           system: sysContent,
           messages: [{ role: "user", content: userContent }]
@@ -386,6 +398,13 @@ class AIAgent {
         presence_penalty: 0.1
       } : {};
       
+      // Nemotron-specific optimizations for smoother streaming
+      const nemotronOptimizations = isNemotron ? {
+        top_p: 0.95,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0
+      } : {};
+      
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
         headers: {
@@ -399,9 +418,10 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: isMinimax ? 0.3 : 0.2,
+          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : 0.2,
           max_tokens: optimizedMaxTokens,
-          ...minimaxOptimizations
+          ...minimaxOptimizations,
+          ...nemotronOptimizations
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -416,7 +436,8 @@ class AIAgent {
           } catch {
             return null
           }
-        }
+        },
+        smoothStreaming: isNemotron  // Flag for smoother streaming
       }
     }
     // Ollama — use /api/chat for proper system/user role support
@@ -768,6 +789,21 @@ class AIAgent {
 
     // Only intercept factual questions the model cannot answer
     const lowerMsg = userMessage.trim().toLowerCase()
+    
+    // Inject active file path so the model never needs to ask for it
+    let resolvedMessage = userMessage
+    
+    // For news/current affairs questions, inject a hint to use FETCH
+    if (
+      /\b(news|current (affairs|events)|happening|going on|latest|war|conflict|politics|election)\b/i.test(
+        lowerMsg
+      ) &&
+      !/\b(code|file|project|workspace|repo)\b/i.test(lowerMsg)
+    ) {
+      // Add hint to output FETCH and continue with analysis
+      resolvedMessage = `${userMessage}\n\n[SYSTEM: Output FETCH: https://www.reuters.com on first line, then continue with your analysis. Format: "FETCH: https://www.reuters.com\n\nBased on recent developments..."]`
+    }
+    
     if (
       /\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(
         lowerMsg
@@ -789,8 +825,6 @@ class AIAgent {
       return { text: reply, actions: [] }
     }
 
-    // Inject active file path so the model never needs to ask for it
-    let resolvedMessage = userMessage
     if (activeEditor && effectiveWorkspace) {
       const rel = path
         .relative(effectiveWorkspace, activeEditor.document.fileName)
@@ -1652,12 +1686,18 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast") {
     const base =
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Syntax checking and code quality analysis"
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically"
     const compactRules = `Operational rules (fast):
 - Be concise and correct.
 - Use FILE: only when the user asks to change files.
 - Avoid unrelated context or speculation.
-- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.`
+- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.
+- You have FULL internet access via FETCH: action. When users ask about current events, news, or time-sensitive topics:
+  * Output FETCH: https://www.reuters.com on its own line
+  * Then CONTINUE your response with analysis/discussion
+  * The fetch happens in the background - you won't see the results immediately
+  * Provide your best analysis based on your knowledge while the fetch completes
+  * Example: "FETCH: https://www.reuters.com\n\nBased on recent developments, the situation involves..."`
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
@@ -1670,6 +1710,14 @@ ${resolvedMessage}`
 - When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.
 - If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.
 - When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.
+- You have FULL internet access via FETCH: action. Use it when:
+  * User asks about current events, news, politics, wars, conflicts, or any time-sensitive topics
+  * Output FETCH: URL on its own line, then CONTINUE your response
+  * Format: FETCH: https://www.reuters.com\n\nYour analysis here...
+  * The fetch happens in background - provide your analysis while it completes
+  * Example: "FETCH: https://www.reuters.com\n\nRegarding the Iran situation, recent reports indicate..."
+  * User explicitly asks for current/latest information from the web
+  * You need to check documentation, API references, or package versions
 - CRITICAL: All generated code must be production-grade by default:
   * Comprehensive error handling and input validation
   * Security best practices (sanitization, authentication, authorization where applicable)
@@ -2686,6 +2734,15 @@ ${userMessage}`
       actions.push({ type: "graphify" })
     }
 
+    // Match FETCH: actions for web requests
+    const fetchRegex = /FETCH:\s*(.+)/g
+    while ((match = fetchRegex.exec(response)) !== null) {
+      const url = match[1].trim()
+      if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+        actions.push({ type: "fetch", url })
+      }
+    }
+
     return { text: response, actions, warnings }
   }
 
@@ -3131,6 +3188,49 @@ ${userMessage}`
       text.slice(0, MAX_COMMAND_OUTPUT_CHARS) +
       `\n...[output truncated to ${MAX_COMMAND_OUTPUT_CHARS} characters]`
     return { text: truncatedText, truncated: true }
+  }
+
+  async fetchFromWeb(url, options = {}) {
+    return new Promise((resolve, reject) => {
+      const maxSize = options.maxSize || 500_000 // 500KB default
+      const timeout = options.timeout || 10_000 // 10s default
+      
+      const urlObj = new URL(url)
+      const protocol = urlObj.protocol === "https:" ? https : http
+      
+      const req = protocol.get(url, { timeout }, (res) => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`))
+          return
+        }
+        
+        let data = ""
+        let size = 0
+        
+        res.on("data", (chunk) => {
+          size += chunk.length
+          if (size > maxSize) {
+            req.destroy()
+            reject(new Error(`Response too large (>${maxSize} bytes)`))
+            return
+          }
+          data += chunk.toString()
+        })
+        
+        res.on("end", () => {
+          resolve({ success: true, data, size, contentType: res.headers["content-type"] })
+        })
+      })
+      
+      req.on("error", (err) => {
+        reject(err)
+      })
+      
+      req.on("timeout", () => {
+        req.destroy()
+        reject(new Error("Request timeout"))
+      })
+    })
   }
 
   clearHistory() {

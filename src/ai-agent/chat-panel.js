@@ -242,7 +242,17 @@ class ChatPanel {
     }
 
     // Syntax errors found - use AI to fix
-    const errorOutput = syntaxCheck.error || syntaxCheck.output || "Unknown syntax error";
+    let errorOutput = syntaxCheck.error || syntaxCheck.output || "Unknown syntax error";
+    
+    // Clean up error output: remove timestamps and date/time patterns
+    errorOutput = errorOutput
+      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g, '') // YYYY-MM-DD HH:MM:SS
+      .replace(/\d{2}:\d{2}:\d{2}/g, '') // HH:MM:SS
+      .replace(/\d{2}\/\d{2}\/\d{4}/g, '') // MM/DD/YYYY
+      .replace(/\[\d{4}-\d{2}-\d{2}.*?\]/g, '') // [YYYY-MM-DD ...]
+      .replace(/\s{2,}/g, ' ') // collapse multiple spaces
+      .trim();
+    
     this.panel.webview.postMessage({
       type: "stream",
       text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
@@ -1550,6 +1560,29 @@ ${trimmedText}`;
                 this.panel.webview.postMessage({
                   type: "error",
                   text: `Failed to open Graphify: ${err.message}`
+                });
+              }
+            } else if (action.type === "fetch") {
+              this.panel.webview.postMessage({ type: "status", text: `Fetching from web: ${action.url}` });
+              try {
+                const fetchResult = await this.agent.fetchFromWeb(action.url);
+                if (fetchResult.success) {
+                  const preview = fetchResult.data.slice(0, 2000);
+                  const truncated = fetchResult.data.length > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
+                  this.panel.webview.postMessage({
+                    type: "applied",
+                    text: `\u2705 Fetched ${action.url}${truncated}:\n\n${preview}`
+                  });
+                } else {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text: `Failed to fetch ${action.url}: ${fetchResult.error}`
+                  });
+                }
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to fetch ${action.url}: ${err.message}`
                 });
               }
             } else if (action.type === "cmd") {
