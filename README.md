@@ -31,12 +31,27 @@ To install Code Janitor, follow these steps:
 
 ### Usage
 
-1. **Format Code**: Use the Command Palette to run `Code Janitor: Format Code`.
-2. **Auto-Correction**: As you type, real-time auto-correction will help you improve your code quality.
-3. **Live Preview**: Open a file in the editor and press `Ctrl + Shift + P` (Windows/Linux) or `Cmd + Shift + P` (Mac), then select `Code Janitor: Live Preview`.
+**Keyboard Shortcuts:**
+- `Alt+D` - Format Code (applies code formatting and fixes)
+- `Ctrl+Alt+C` - Open AI Chat Panel
+- `Alt+P` - Live Preview
+- `Alt+L` - Lint Code (ESLint)
+- `Alt+V` - Validate Frontend Dependencies
+- `Ctrl+Alt+G` - Visualize Codebase Graph
+
+**Commands:**
+1. **Format Code**: Use `Alt+D` or Command Palette → `Code Janitor: Format Code`
+2. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
+3. **Live Preview**: Use `Alt+P` or Command Palette → `Code Janitor: Live Preview`
    <img width="1920" height="1020" alt="Screenshot 2026-04-06 205439" src="https://github.com/user-attachments/assets/5620f974-e99d-4447-85e2-5c2ba09a14e6" />
 
-4. **AI Chat Panel**: To interact with the AI assistant, open the Command Palette and type `Code Janitor: Open AI Chat`.
+**AI Chat Features:**
+- Syntax checking for JS, TS, Python, Java, C/C++, JSON, and HTML
+- Code generation and refactoring
+- Bug fixing and debugging assistance
+- Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
+
+4. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
    <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
    
 

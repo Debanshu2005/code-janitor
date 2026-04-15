@@ -1709,6 +1709,12 @@
             if (m === current) opt.selected = true;
             sel.appendChild(opt);
           });
+        } else if (msg.type === "triggerFix") {
+          // Triggered by Alt+D - simulate clicking the Fix issues button
+          var fixButton = document.querySelector('.action-chip[data-action="fix"]');
+          if (fixButton) {
+            fixButton.click();
+          }
         }
       });
 

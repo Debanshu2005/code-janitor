@@ -1,0 +1,17 @@
+  // 1. Manual Fix Command - Opens AI Chat with Fix Action
+  const fixDisposable = vscode.commands.registerCommand(
+    "codeJanitor.fixCode",
+    async () => {
+      // Open AI chat panel
+      await vscode.commands.executeCommand("codeJanitor.openAIChat");
+      
+      // Wait for panel to initialize
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Trigger the fix action
+      if (global.aiChatPanel) {
+        global.aiChatPanel.panel.webview.postMessage({ type: "triggerFix" });
+      }
+    }
+  )
+  context.subscriptions.push(fixDisposable)

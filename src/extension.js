@@ -166,9 +166,15 @@ function isCandidateValidForLanguage(candidateCode, language, ollamaClient) {
   return ollamaClient._passesLanguageValidation(candidateCode, language)
 }
 
-function getPreferredSyntaxFixRuntimeConfig() {
+async function getPreferredSyntaxFixRuntimeConfig(context) {
   const config = vscode.workspace.getConfiguration("codeJanitor.ai")
-  const nvidiaApiKey = config.get("nvidiaApiKey", "").trim()
+  let nvidiaApiKey = config.get("nvidiaApiKey", "").trim()
+  
+  // Try to get from secrets if not in config
+  if (!nvidiaApiKey && context?.secrets) {
+    nvidiaApiKey = String((await context.secrets.get("codeJanitor.ai.nvidiaApiKey")) || "").trim()
+  }
+  
   const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434")
   const timeout = config.get("timeout", 90_000)
 
@@ -397,6 +403,7 @@ async function restorePersistedApiKeys(context) {
 }
 
 async function activate(context) {
+  globalContext = context;
   console.log("✓ Code Janitor extension is activating...")
   globalContext = context
   await restorePersistedApiKeys(context)
@@ -424,7 +431,7 @@ async function activate(context) {
   let isAutoFixing = false
   let autoFixTimeout = null
 
-  // 1. Manual Fix Command with Syntax Check
+  // 1. Manual Fix Command - Open AI chat and trigger Fix issues
   const fixDisposable = vscode.commands.registerCommand(
     "codeJanitor.fixCode",
     async () => {
@@ -433,95 +440,13 @@ async function activate(context) {
         vscode.window.showInformationMessage("No active editor found!")
         return
       }
-
-      const document = editor.document
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      const originalCode = document.getText()
-
-      console.log("🔧 Starting multi-stage fixing pipeline...")
-
-      // Step 1: Initial syntax check via CMD
-      const initialCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
-
-      if (!initialCheck.hasSyntaxErrors) {
-        vscode.window.showInformationMessage("✨ No syntax errors found!")
-        const beforeFormatting = document.getText()
-        await runFixerAndApply(document, editor)
-        const afterFormattingCheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (afterFormattingCheck.hasSyntaxErrors) {
-          await replaceDocumentText(document, beforeFormatting, true)
-          vscode.window.showWarningMessage(
-            "Formatting result was unsafe, so the original content was restored."
-          )
-        }
-        return
-      }
-
-      console.log("⚠️ Initial syntax errors:", initialCheck.output)
-
-      // Step 2: Apply rule-based fixes
-      console.log("🔧 Attempting rule-based fixes...")
-      const ruleBasedResult = await applyRuleBasedFixes(document, editor)
-      let afterRuleCheck = null
-
-      if (ruleBasedResult.success) {
-        // Cross-check after rule-based fixes
-        afterRuleCheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (!afterRuleCheck.hasSyntaxErrors) {
-          vscode.window.showInformationMessage(
-            "✅ Fixed with rule-based repairs!"
-          )
-          return
-        }
-        console.log(
-          "⚠️ Errors remain after rule-based fixes:",
-          afterRuleCheck.output
-        )
-      } else {
-        console.log("⚠️ Rule-based fixes made no changes")
-      }
-
-      // Step 3: Apply AI fixes
-      console.log("🤖 Attempting AI fixes...")
-      const beforeAI = document.getText()
-      const aiContext =
-        (ruleBasedResult.success && afterRuleCheck.output) || initialCheck.output
-      const aiResult = await applyAIFixes(document, editor, aiContext)
-      if (aiResult.applied) {
-        const afterAICheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (!afterAICheck.hasSyntaxErrors) {
-          vscode.window.showInformationMessage("✅ Fixed with AI repairs!")
-          return
-        }
-        console.log("⚠️ Errors remain after AI fixes:", afterAICheck.output)
-        await replaceDocumentText(document, beforeAI, true)
-        console.warn("Restored content after unsafe AI output")
-      } else {
-        console.log(`⚠️ AI skipped: ${aiResult.reason}`)
-      }
-
-      // Step 4: Apply formatting
-      const beforeFormatting = document.getText()
-      console.log("📝 Attempting formatting...")
-      await runFixerAndApply(document, editor)
-      const finalCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
-      if (!finalCheck.hasSyntaxErrors) {
-        vscode.window.showInformationMessage("✅ Fixed with formatting!")
-      } else {
-        await replaceDocumentText(document, beforeFormatting || originalCode, true)
-        vscode.window.showWarningMessage(
-          `⚠️ Syntax errors remain. The previous file contents were restored.`
-        )
-        console.error("Final syntax errors:", finalCheck.output)
+      // Open chat panel first
+      await chatPanel.show()
+      // Wait for panel to be ready
+      await new Promise(resolve => setTimeout(resolve, 300))
+      // Trigger Fix issues action
+      if (chatPanel.panel?.webview) {
+        chatPanel.panel.webview.postMessage({ type: "triggerFix" })
       }
     }
   )

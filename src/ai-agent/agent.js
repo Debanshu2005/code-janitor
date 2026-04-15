@@ -2283,22 +2283,80 @@ ${(rawResponse || "").slice(0, 4000)}
     if (ext === ".java") return `javac ${rel}`
     if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext))
       return `node -e "process.exit(0)" && echo "C/C++ syntax check requires a compiler - run: gcc -fsyntax-only ${rel}"`
-    if (ext === ".html") return null // HTML checked via parse5 in fixer
+    if (ext === ".json") return `node -e "JSON.parse(require('fs').readFileSync('${rel}', 'utf8'))"`
+    if (ext === ".html") return null // HTML checked via parse5 in agent
     return null
   }
 
-  async _runSyntaxCheck(relPath, workspaceFolder, streamCallback) {
+  async _runSyntaxCheck(relPath, workspaceFolder, fileContent = null) {
     const cmd = this._getSyntaxCheckCommand(relPath)
+    const ext = path.extname(relPath).toLowerCase()
+    
+    // Special handling for HTML - use parse5
+    if (ext === ".html") {
+      try {
+        const parse5 = require("parse5")
+        const fullPath = workspaceFolder ? path.join(workspaceFolder, relPath) : relPath
+        const content = fileContent || await require("fs").promises.readFile(fullPath, "utf8")
+        const document = parse5.parse(content, { sourceCodeLocationInfo: true })
+        
+        // Check for parse errors
+        const errors = []
+        const checkNode = (node) => {
+          if (node.sourceCodeLocation?.startTag?.startOffset === undefined && node.nodeName !== "#document") {
+            errors.push(`Malformed tag: ${node.nodeName}`)
+          }
+          if (node.childNodes) {
+            node.childNodes.forEach(checkNode)
+          }
+        }
+        checkNode(document)
+        
+        if (errors.length > 0) {
+          return { success: false, error: errors.join("\n"), output: errors.join("\n") }
+        }
+        return { success: true, output: "" }
+      } catch (err) {
+        return { success: false, error: `HTML parse error: ${err.message}`, output: err.message }
+      }
+    }
+    
     if (!cmd) return null
 
     // C/C++ — just report the command to run, can't execute compiler here
     if (cmd.includes("gcc -fsyntax-only")) {
       const msg = `C/C++ syntax check: run \`gcc -fsyntax-only ${relPath}\` in your terminal.`
-      if (streamCallback) streamCallback(msg)
       return { success: true, output: msg, skipped: true }
     }
 
     if (!this.validateCommand(cmd).allowed) return null
+    
+    // If fileContent provided, write to temp file for syntax check
+    if (fileContent) {
+      const os = require("os")
+      const tempExt = path.extname(relPath)
+      const tempName = `code-janitor-syntax-${Date.now()}-${Math.random().toString(16).slice(2)}${tempExt}`
+      const tempPath = path.join(os.tmpdir(), tempName)
+      try {
+        await fs.writeFile(tempPath, fileContent, "utf8")
+        const tempCmd = this._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"))
+        const result = await this.executeCommand(tempCmd, workspaceFolder)
+        await fs.unlink(tempPath).catch(() => {})
+        
+        const hasSyntaxError = !result.success || 
+                               (result.output && result.output.trim().length > 0) ||
+                               (result.error && result.error.trim().length > 0)
+        
+        return {
+          success: !hasSyntaxError,
+          output: result.output || result.error || "",
+          error: hasSyntaxError ? (result.error || result.output || "Syntax check failed") : null
+        }
+      } catch (err) {
+        return { success: false, error: `Temp file syntax check failed: ${err.message}`, output: err.message }
+      }
+    }
+    
     const result = await this.executeCommand(cmd, workspaceFolder)
     
     // For syntax checks, non-zero exit = syntax error
