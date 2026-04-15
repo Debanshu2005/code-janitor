@@ -1782,6 +1782,73 @@ ${trimmedText}`;
       } else if (message.type === "getAutoHealHistory") {
         const history = await this.performanceMonitor.getAutoHealHistory();
         this.panel.webview.postMessage({ type: "autoHealHistory", history });
+      } else if (message.type === "tutorialCompleted") {
+        // Mark tutorial as completed in global state
+        await this.context.globalState.update("codeJanitor.tutorialCompleted", true);
+        console.log("[ChatPanel] Tutorial marked as completed");
+      } else if (message.type === "webSearch") {
+        try {
+          const query = (message.query || "").trim();
+          if (!query) {
+            this.panel.webview.postMessage({ type: "searchError", error: "Search query is empty" });
+            return;
+          }
+
+          this.panel.webview.postMessage({ type: "status", text: `Searching for: ${query}` });
+          this.panel.webview.postMessage({ type: "thinking" });
+
+          // Use DuckDuckGo Instant Answer API (free, no API key required)
+          const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+          
+          const response = await fetch(searchUrl, {
+            headers: { 'User-Agent': 'Code-Janitor/1.0' },
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (!response.ok) {
+            throw new Error(`Search API returned status ${response.status}`);
+          }
+
+          const data = await response.json();
+          
+          // Format search results
+          let resultText = `🔍 Search results for "${query}":\n\n`;
+          
+          if (data.AbstractText) {
+            resultText += `📝 Summary:\n${data.AbstractText}\n\n`;
+          }
+          
+          if (data.AbstractURL) {
+            resultText += `🔗 Source: ${data.AbstractURL}\n\n`;
+          }
+
+          if (data.RelatedTopics && data.RelatedTopics.length > 0) {
+            resultText += `📚 Related Topics:\n`;
+            const topics = data.RelatedTopics.slice(0, 5);
+            for (const topic of topics) {
+              if (topic.Text && topic.FirstURL) {
+                resultText += `• ${topic.Text}\n  ${topic.FirstURL}\n\n`;
+              }
+            }
+          }
+
+          if (!data.AbstractText && (!data.RelatedTopics || data.RelatedTopics.length === 0)) {
+            resultText += `No detailed results found. Try a more specific query or visit:\nhttps://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+          }
+
+          this.panel.webview.postMessage({ type: "stream", text: resultText });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "searchComplete" });
+
+        } catch (error) {
+          console.error("[ChatPanel] Web search error:", error);
+          this.panel.webview.postMessage({ 
+            type: "error", 
+            text: `Search failed: ${error.message}. Check your internet connection.` 
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "searchError", error: error.message });
+        }
       }
     });
   }
