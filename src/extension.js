@@ -347,6 +347,7 @@ async function runFixerAndApply(document, editor = null) {
 }
 
 let globalContext // Store context globally
+let chatPanelInstance = null // Shared chat panel instance
 
 function getApiKeyConfigKey(provider) {
   if (provider === "groq") return "groqApiKey"
@@ -403,9 +404,8 @@ async function restorePersistedApiKeys(context) {
 }
 
 async function activate(context) {
-  globalContext = context;
-  console.log("✓ Code Janitor extension is activating...")
   globalContext = context
+  console.log("✓ Code Janitor extension is activating...")
   await restorePersistedApiKeys(context)
 
   // Show setup guide on first install
@@ -440,13 +440,17 @@ async function activate(context) {
         vscode.window.showInformationMessage("No active editor found!")
         return
       }
-      // Open chat panel first
-      await chatPanel.show()
-      // Wait for panel to be ready
-      await new Promise(resolve => setTimeout(resolve, 300))
+      // Always create fresh instance or reuse if panel is still open
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      // Show panel and trigger fix
+      await chatPanelInstance.show()
+      // Wait for webview to be ready
+      await new Promise(resolve => setTimeout(resolve, 500))
       // Trigger Fix issues action
-      if (chatPanel.panel?.webview) {
-        chatPanel.panel.webview.postMessage({ type: "triggerFix" })
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ type: "triggerFix" })
       }
     }
   )
@@ -603,10 +607,15 @@ async function activate(context) {
   console.log("✓ Enhanced Live Preview command registered.")
 
   // 5. AI Chat Command
-  const chatPanel = new ChatPanel(context)
   const chatDisposable = vscode.commands.registerCommand(
     "codeJanitor.openChat",
-    () => chatPanel.show()
+    () => {
+      // Always create fresh instance or reuse if panel is still open
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      chatPanelInstance.show()
+    }
   )
   context.subscriptions.push(chatDisposable)
   console.log("✓ AI Chat command registered.")
@@ -619,6 +628,21 @@ async function activate(context) {
   )
   context.subscriptions.push(graphifyDisposable)
   console.log("✓ Graphify command registered.")
+
+  // 7. Performance Report Command
+  const performanceDisposable = vscode.commands.registerCommand(
+    "codeJanitor.showPerformance",
+    () => {
+      if (chatPanelInstance && chatPanelInstance.performanceMonitor) {
+        const analysis = chatPanelInstance.performanceMonitor.analyzePerformance();
+        chatPanelInstance.performanceMonitor._showPerformanceReport(analysis);
+      } else {
+        vscode.window.showInformationMessage("Performance monitoring not available. Open AI Chat first.");
+      }
+    }
+  )
+  context.subscriptions.push(performanceDisposable)
+  console.log("✓ Performance report command registered.")
 
   // URI handler: vscode://Debanshu2005.code-janitor/check-models
   const uriHandler = vscode.window.registerUriHandler({

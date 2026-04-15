@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.8.4",
+  "version": "1.9.3",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -144,13 +144,23 @@
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 180000,
-          "description": "AI request timeout in milliseconds (default: 3 minutes, increase if using slow models like MiniMax M2.7)"
+          "default": 300000,
+          "description": "AI request timeout in milliseconds (default: 5 minutes, increase if using slow models like MiniMax M2.7)"
         },
         "codeJanitor.ai.showParsedActionsDebug": {
           "type": "boolean",
           "default": false,
           "description": "Show parsed AI actions in chat status messages for debugging"
+        },
+        "codeJanitor.ai.selfHealing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic performance monitoring and optimization (self-healing)"
+        },
+        "codeJanitor.ai.selfHealing.slowThreshold": {
+          "type": "number",
+          "default": 30000,
+          "description": "Response time threshold in milliseconds to trigger self-healing (default: 30 seconds)"
         }
       }
     },
@@ -184,6 +194,11 @@
         "command": "codeJanitor.openGraphify",
         "title": "Visualize Codebase Graph",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.showPerformance",
+        "title": "Show AI Performance Report",
+        "category": "Code Janitor"
       }
     ],
     "menus": {
@@ -205,6 +220,9 @@
         },
         {
           "command": "codeJanitor.openGraphify"
+        },
+        {
+          "command": "codeJanitor.showPerformance"
         }
       ]
     },

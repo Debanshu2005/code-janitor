@@ -1,6 +1,8 @@
 const vscode = require("vscode")
 const fs = require("fs").promises
+const fsSync = require("fs")
 const path = require("path")
+const SelfDiagnosingErrorHandler = require("../self-healing/error-handler")
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
@@ -91,6 +93,7 @@ class AIAgent {
     this.workspaceRoot = null
     this.currentEditableTargets = null
     this._lastActiveEditor = vscode.window.activeTextEditor || null
+    this.errorHandler = new SelfDiagnosingErrorHandler(this)
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
@@ -129,7 +132,7 @@ class AIAgent {
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
-      timeout: config.get("timeout", 180_000)
+      timeout: config.get("timeout", 300_000)
     }
   }
 
@@ -223,7 +226,7 @@ class AIAgent {
 
     const baseConfig = {
       ...config,
-      timeout: Math.max(config.timeout || 0, 180_000)
+      timeout: Math.max(config.timeout || 0, 300_000)
     }
 
     if (baseConfig.provider !== "ollama") {
@@ -252,9 +255,12 @@ class AIAgent {
     const isUnlimited = mode === "heavy" && intent === "create"
     const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
     
-    // Optimize for MiniMax M2.7 - use lower token count for faster responses
+    // Optimize for MiniMax M2.7 - aggressive token reduction for faster responses
     const isMinimax = config.model === "minimaxai/minimax-m2.7"
-    const optimizedMaxTokens = isMinimax && mode === "fast" ? 1024 : maxTokens
+    // Apply aggressive optimizations to ALL models for faster responses
+    const optimizedMaxTokens = isMinimax 
+      ? (mode === "fast" ? 512 : mode === "heavy" ? 2048 : 1024)
+      : (mode === "fast" ? 1024 : mode === "heavy" ? 3072 : 1536)
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -324,8 +330,10 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: optimizedMaxTokens,
+          top_p: 0.9,
+          frequency_penalty: 0.2
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -355,8 +363,9 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: optimizedMaxTokens,
+          top_p: 0.9
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -371,6 +380,12 @@ class AIAgent {
       }
     }
     if (config.provider === "nvidia") {
+      const minimaxOptimizations = isMinimax ? {
+        top_p: 0.8,
+        frequency_penalty: 0.3,
+        presence_penalty: 0.1
+      } : {};
+      
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
         headers: {
@@ -384,8 +399,9 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: optimizedMaxTokens
+          temperature: isMinimax ? 0.3 : 0.2,
+          max_tokens: optimizedMaxTokens,
+          ...minimaxOptimizations
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -415,11 +431,12 @@ class AIAgent {
         ],
         stream: true,
         options: {
-          temperature: 0.05,
+          temperature: 0.2,
           num_predict: mode === "heavy" ? 2048 : 1024,
-          top_k: 10,
-          top_p: 0.7,
-          num_ctx: 2048
+          top_k: 20,
+          top_p: 0.9,
+          num_ctx: 2048,
+          repeat_penalty: 1.1
         }
       }),
       parseChunk: (line) => {
@@ -927,7 +944,7 @@ ${resolvedMessage}`
         reqIntent === "edit" ||
         reqIntent === "debug" ||
         reqIntent === "refactor"
-          ? Math.max(config.timeout || 0, 240_000)
+          ? Math.max(config.timeout || 0, 360_000)
           : config.timeout
       const response = await fetch(reqOpts.url, {
         method: "POST",
@@ -1301,7 +1318,7 @@ ${resolvedMessage}`
             filePath.includes("extension-output") ||
             filePath.includes("AppData\\Local\\Programs") ||
             filePath.includes("AppData/Local/Programs") ||
-            !require("fs").existsSync(filePath)
+            !fsSync.existsSync(filePath)
           )
             continue
           const relativePath = this._toWorkspaceRelativePath(
@@ -2334,43 +2351,38 @@ ${(rawResponse || "").slice(0, 4000)}
     // If fileContent provided, write to temp file for syntax check
     if (fileContent) {
       const os = require("os")
+      const fsSync = require("fs")
       const tempExt = path.extname(relPath)
       const tempName = `code-janitor-syntax-${Date.now()}-${Math.random().toString(16).slice(2)}${tempExt}`
       const tempPath = path.join(os.tmpdir(), tempName)
       try {
-        await fs.writeFile(tempPath, fileContent, "utf8")
+        fsSync.writeFileSync(tempPath, fileContent, "utf8")
         const tempCmd = this._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"))
         const result = await this.executeCommand(tempCmd, workspaceFolder)
-        await fs.unlink(tempPath).catch(() => {})
+        try { fsSync.unlinkSync(tempPath) } catch (_) {}
         
-        const hasSyntaxError = !result.success || 
-                               (result.output && result.output.trim().length > 0) ||
-                               (result.error && result.error.trim().length > 0)
-        
+        // FIXED: Only consider it an error if the command failed (non-zero exit)
+        // Don't treat stdout/stderr output as errors - many tools print to stdout on success
         return {
-          success: !hasSyntaxError,
+          success: result.success,
           output: result.output || result.error || "",
-          error: hasSyntaxError ? (result.error || result.output || "Syntax check failed") : null
+          error: result.success ? null : (result.error || result.output || "Syntax check failed")
         }
       } catch (err) {
+        try { fsSync.unlinkSync(tempPath) } catch (_) {}
         return { success: false, error: `Temp file syntax check failed: ${err.message}`, output: err.message }
       }
     }
     
     const result = await this.executeCommand(cmd, workspaceFolder)
     
-    // For syntax checks, non-zero exit = syntax error
-    // Python py_compile writes errors to stderr
-    // Node --check writes errors to stderr
-    // Java javac writes errors to stderr
-    const hasSyntaxError = !result.success || 
-                           (result.output && result.output.trim().length > 0) ||
-                           (result.error && result.error.trim().length > 0)
-    
+    // FIXED: Only consider it an error if the command failed (non-zero exit)
+    // For syntax checks, success = command exited with code 0
+    // Python py_compile, node --check, javac all exit with 0 on success
     return {
-      success: !hasSyntaxError,
+      success: result.success,
       output: result.output || result.error || "",
-      error: hasSyntaxError ? (result.error || result.output || "Syntax check failed") : null
+      error: result.success ? null : (result.error || result.output || "Syntax check failed")
     }
   }
 
@@ -2754,8 +2766,10 @@ ${userMessage}`
       "dir",
       "npm install",
       "npm i",
-      "npm run ",
+      "npm run",
       "npm test",
+      "npm start",
+      "npm build",
       "npx ",
       "node --check",
       "node -e",
@@ -2880,6 +2894,25 @@ ${userMessage}`
     allowOutsideWorkspace = false,
     options = {}
   ) {
+    const context = {
+      type: "file",
+      filePath,
+      newContent,
+      allowOutsideWorkspace,
+      ...options
+    };
+    
+    // Use self-diagnosing retry
+    return await this.errorHandler.retryWithAutoFix(
+      async (ctx) => this._applyChangesInternal(ctx),
+      context,
+      3
+    );
+  }
+  
+  async _applyChangesInternal(context) {
+    const { filePath, newContent, allowOutsideWorkspace, allowEmpty, allowDocTruncate } = context;
+    
     try {
       const { workspaceRoot, fullPath, outsideWorkspace } =
         this._resolveWorkspacePath(filePath)
@@ -2901,8 +2934,6 @@ ${userMessage}`
         typeof fullPath === "string" &&
         path.basename(fullPath).toLowerCase() === "readme.md"
       const trimmedNewContent = (newContent || "").trim()
-      const allowEmpty = options && options.allowEmpty === true
-      const allowDocTruncate = options && options.allowDocTruncate === true
 
       if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
         return {
@@ -2963,11 +2994,29 @@ ${userMessage}`
         )
       }
     } catch (error) {
-      return { success: false, error: error.message }
+      // Let error handler diagnose
+      throw error;
     }
   }
 
   async createFolder(folderPath, allowOutsideWorkspace = false) {
+    const context = {
+      type: "mkdir",
+      filePath: folderPath,
+      allowOutsideWorkspace
+    };
+    
+    // Use self-diagnosing retry
+    return await this.errorHandler.retryWithAutoFix(
+      async (ctx) => this._createFolderInternal(ctx),
+      context,
+      3
+    );
+  }
+  
+  async _createFolderInternal(context) {
+    const { filePath: folderPath, allowOutsideWorkspace } = context;
+    
     try {
       const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim()
       let targetPath = normalizedFolderPath
@@ -2997,13 +3046,22 @@ ${userMessage}`
       await fs.mkdir(fullPath, { recursive: true })
       return { success: true, path: fullPath, skipped: false }
     } catch (error) {
-      return { success: false, error: error.message }
+      // Let error handler diagnose
+      throw error;
     }
   }
 
   async executeCommand(command, workspaceFolder) {
     const validation = this.validateCommand(command)
     if (!validation.allowed) {
+      // Log blocked command to performance monitor
+      if (global.performanceMonitor) {
+        global.performanceMonitor.recordIssue('blocked_command', {
+          command,
+          reason: validation.reason,
+          workspace: workspaceFolder
+        });
+      }
       return { success: false, error: validation.reason }
     }
 
@@ -3021,6 +3079,12 @@ ${userMessage}`
               /maxbuffer/i.test(error.message || ""))
 
           if (hitMaxBuffer) {
+            if (global.performanceMonitor) {
+              global.performanceMonitor.recordIssue('command_error', {
+                command,
+                error: 'Buffer limit exceeded'
+              });
+            }
             resolve({
               success: false,
               error:
@@ -3032,6 +3096,12 @@ ${userMessage}`
           }
 
           if (error) {
+            if (global.performanceMonitor) {
+              global.performanceMonitor.recordIssue('command_error', {
+                command,
+                error: error.message
+              });
+            }
             resolve({
               success: false,
               error: error.message,

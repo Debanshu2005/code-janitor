@@ -1,8 +1,10 @@
-const vscode = require("vscode");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const AIAgent = require("./agent");
+const vscode = require("vscode")
+const fs = require("fs").promises
+const fsSync = require("fs")
+const os = require("os")
+const path = require("path")
+const AIAgent = require("./agent")
+const PerformanceMonitor = require("../self-healing/performance-monitor")
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -16,12 +18,17 @@ class ChatPanel {
     this.context = context;
     this.panel = null;
     this.agent = new AIAgent();
+    this.performanceMonitor = new PerformanceMonitor(context);
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
     this._confirmResolve = null;
 
     this.agent.setActiveEditor(this.lastActiveEditor);
+    this.performanceMonitor.loadMetrics();
+    
+    // Expose performance monitor globally for agent to log issues
+    global.performanceMonitor = this.performanceMonitor;
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
@@ -74,6 +81,7 @@ class ChatPanel {
       });
     }
 
+    console.log("[ChatPanel] Creating webview panel");
     this.panel = vscode.window.createWebviewPanel(
       "codeJanitorChat",
       "Code Janitor AI",
@@ -81,10 +89,19 @@ class ChatPanel {
       { enableScripts: true, retainContextWhenHidden: true }
     );
 
-    this.panel.webview.html = this._getHtmlContent();
-    // Initial state is sent when the webview fires the "ready" message
+    console.log("[ChatPanel] Setting up message handler BEFORE setting HTML");
     this._setupMessageHandler();
-    this.panel.onDidDispose(() => { this.panel = null; });
+    
+    console.log("[ChatPanel] Setting webview HTML");
+    this.panel.webview.html = this._getHtmlContent();
+    
+    console.log("[ChatPanel] Setting up dispose handler");
+    this.panel.onDidDispose(() => { 
+      console.log("[ChatPanel] Panel disposed");
+      this.panel = null; 
+    });
+    
+    console.log("[ChatPanel] Panel created successfully");
   }
 
   async _runSyntaxScan(workspaceFolder, specificFiles) {
@@ -119,7 +136,7 @@ class ChatPanel {
         const tmpName = `code-janitor-scan-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`;
         tempPath = path.join(os.tmpdir(), tmpName);
         try {
-          fs.writeFileSync(tempPath, dirtyDoc.getText(), "utf8");
+          fsSync.writeFileSync(tempPath, dirtyDoc.getText(), "utf8");
           const cmd = this.agent._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"));
           result = cmd ? await this.agent.executeCommand(cmd, workspaceFolder) : null;
           if (result && result.success) {
@@ -133,7 +150,7 @@ class ChatPanel {
           }
         } finally {
           if (tempPath) {
-            try { fs.unlinkSync(tempPath); } catch (_) {}
+            try { fsSync.unlinkSync(tempPath); } catch (_) {}
           }
         }
       } else {
@@ -315,7 +332,33 @@ class ChatPanel {
   }
 
   _getHtmlContent() {
-    return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
+    try {
+      const htmlPath = path.join(__dirname, "chat-panel.html");
+      console.log("[ChatPanel] Loading HTML from:", htmlPath);
+      const html = require("fs").readFileSync(htmlPath, "utf8");
+      console.log("[ChatPanel] HTML loaded, length:", html.length);
+      return html;
+    } catch (error) {
+      console.error("[ChatPanel] Failed to load HTML:", error);
+      return `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { 
+      background: #1e1e1e; 
+      color: #fff; 
+      font-family: sans-serif; 
+      padding: 20px; 
+    }
+  </style>
+</head>
+<body>
+  <h1>Error Loading Chat Panel</h1>
+  <p>Failed to load chat-panel.html: ${error.message}</p>
+  <p>Path: ${path.join(__dirname, "chat-panel.html")}</p>
+</body>
+</html>`;
+    }
   }
 
   _getApiKeyConfigKey(provider) {
@@ -642,9 +685,9 @@ class ChatPanel {
   _readWorkspaceScripts(workspaceFolder) {
     if (!workspaceFolder) return {};
     const packageJsonPath = path.join(workspaceFolder, "package.json");
-    if (!fs.existsSync(packageJsonPath)) return {};
+    if (!fsSync.existsSync(packageJsonPath)) return {};
     try {
-      const raw = fs.readFileSync(packageJsonPath, "utf8");
+      const raw = fsSync.readFileSync(packageJsonPath, "utf8");
       const parsed = JSON.parse(raw);
       return parsed && typeof parsed.scripts === "object" && parsed.scripts
         ? parsed.scripts
@@ -657,16 +700,17 @@ class ChatPanel {
   _getPostEditVerificationCommands(workspaceFolder) {
     const scripts = this._readWorkspaceScripts(workspaceFolder);
     const ordered = [
-      { script: "lint", command: "npm run lint" },
-      { script: "typecheck", command: "npm run typecheck" },
-      { script: "build", command: "npm run build" },
-      { script: "test", command: "npm test" }
+      { script: "lint", command: "npm run lint", priority: 1 },
+      { script: "typecheck", command: "npm run typecheck", priority: 1 },
+      { script: "build", command: "npm run build", priority: 2 },
+      { script: "test", command: "npm test", priority: 3 }
     ];
 
+    // Return all available checks, prioritized
     return ordered
       .filter((item) => !!scripts[item.script])
-      .map((item) => item.command)
-      .slice(0, 2);
+      .sort((a, b) => a.priority - b.priority)
+      .map((item) => item.command);
   }
 
   _summarizeCommandOutput(output) {
@@ -778,51 +822,147 @@ ${trimmedText}`;
 
   async _runPostEditVerification(workspaceFolder, changedFiles) {
     if (!workspaceFolder || !Array.isArray(changedFiles) || changedFiles.length === 0) {
-      return;
+      return { success: true, checks: [] };
+    }
+
+    const results = { success: true, checks: [], errors: [] };
+
+    // Categorize changed files by type
+    const fileTypes = {
+      js: changedFiles.filter(file => /\.(js|jsx|ts|tsx)$/i.test(file)),
+      py: changedFiles.filter(file => /\.py$/i.test(file)),
+      java: changedFiles.filter(file => /\.java$/i.test(file)),
+      c: changedFiles.filter(file => /\.(c|cpp|h|hpp)$/i.test(file))
+    };
+
+    // Run syntax checks for each file type
+    if (fileTypes.py.length > 0) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `🔍 Verifying Python syntax (${fileTypes.py.length} file(s))...`
+      });
+      for (const file of fileTypes.py) {
+        const fullPath = path.join(workspaceFolder, file);
+        const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
+        if (result && !result.success && !result.skipped) {
+          results.success = false;
+          results.errors.push({ file, error: result.error || result.output, type: 'syntax' });
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `❌ Python syntax error in ${file}:\n${result.error || result.output}`
+          });
+        } else if (result && result.success) {
+          results.checks.push({ file, check: 'python-syntax', passed: true });
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `✅ Python syntax OK: ${file}`
+          });
+        }
+      }
+    }
+
+    if (fileTypes.java.length > 0) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `🔍 Verifying Java syntax (${fileTypes.java.length} file(s))...`
+      });
+      for (const file of fileTypes.java) {
+        const fullPath = path.join(workspaceFolder, file);
+        const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
+        if (result && !result.success && !result.skipped) {
+          results.success = false;
+          results.errors.push({ file, error: result.error || result.output, type: 'syntax' });
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `❌ Java syntax error in ${file}:\n${result.error || result.output}`
+          });
+        } else if (result && result.success) {
+          results.checks.push({ file, check: 'java-syntax', passed: true });
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `✅ Java syntax OK: ${file}`
+          });
+        }
+      }
+    }
+
+    if (fileTypes.c.length > 0) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `⚠️ C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler manually to verify syntax.`
+      });
+    }
+
+    // Run npm scripts only for JS/TS files
+    if (fileTypes.js.length === 0) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: "✅ Verification complete (no JS/TS files changed)"
+      });
+      return results;
     }
 
     const commands = this._getPostEditVerificationCommands(workspaceFolder);
     if (commands.length === 0) {
       this.panel.webview.postMessage({
         type: "status",
-        text: "Post-edit checks: no lint/typecheck/build/test scripts found."
+        text: "✅ Verification complete (no npm scripts configured)"
       });
-      return;
+      return results;
     }
 
     this.panel.webview.postMessage({
       type: "status",
-      text: `Post-edit checks: ${commands.join(", ")}`
+      text: `🔍 Running ${commands.length} verification check(s): ${commands.join(", ")}`
     });
 
+    // Run all checks, don't stop on first failure
     for (const command of commands) {
       const validation = this.agent.validateCommand(command);
       if (!validation.allowed) {
         this.panel.webview.postMessage({
           type: "status",
-          text: `Skipped check (${command}): ${validation.reason}`
+          text: `⚠️ Skipped check (${command}): ${validation.reason}`
         });
         continue;
       }
 
       this.panel.webview.postMessage({
         type: "status",
-        text: `Running verification: ${command}`
+        text: `Running: ${command}...`
       });
       const result = await this.agent.executeCommand(command, workspaceFolder);
       if (result.success) {
+        results.checks.push({ command, passed: true });
         this.panel.webview.postMessage({
           type: "status",
-          text: `✅ Verification passed: ${command}`
+          text: `✅ ${command} passed`
         });
       } else {
+        results.success = false;
+        results.errors.push({ command, error: result.error || result.output, type: 'npm' });
         this.panel.webview.postMessage({
           type: "status",
-          text: `❌ Verification failed: ${command}\n${this._summarizeCommandOutput(result.error || result.output)}`
+          text: `❌ ${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
         });
-        break;
+        // Continue to next check instead of breaking
       }
     }
+
+    // Summary
+    if (results.success) {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `✅ All verification checks passed (${results.checks.length} checks)`
+      });
+    } else {
+      this.panel.webview.postMessage({
+        type: "status",
+        text: `⚠️ Verification completed with ${results.errors.length} error(s). Review changes before committing.`
+      });
+    }
+
+    return results;
   }
 
   async _fetchAndSendModels(forceProvider = null) {
@@ -1087,6 +1227,7 @@ ${trimmedText}`;
         }, 30000); // Warn after 30 seconds
 
         let response;
+        const startTime = Date.now();
         try {
           console.log("[ChatPanel] Starting agent.chat with config:", {
             provider: config.provider,
@@ -1104,6 +1245,15 @@ ${trimmedText}`;
               runtimeConfig: config,
               onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
             }
+          );
+          
+          // Record performance
+          const duration = Date.now() - startTime;
+          this.performanceMonitor.recordResponse(
+            config.provider,
+            config.model,
+            duration,
+            !response.error
           );
         } catch (chatError) {
           console.error("[ChatPanel] Error in agent.chat:", chatError);
@@ -1356,6 +1506,15 @@ ${trimmedText}`;
               if (result.success && !outside) {
                 changedFiles.push(result.relativePath || action.path);
                 await this._revealWorkspaceFile(result.path);
+              } else if (!result.success) {
+                // Log file operation error to performance monitor
+                if (global.performanceMonitor) {
+                  global.performanceMonitor.recordIssue('file_error', {
+                    file: action.path,
+                    operation: result.created ? 'create' : 'update',
+                    error: result.error
+                  });
+                }
               }
               if (result.success && result.syntaxCheckCmd) {
                 const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
@@ -1584,6 +1743,12 @@ ${trimmedText}`;
             });
           }
         }
+      } else if (message.type === "showPerformanceReport") {
+        const analysis = this.performanceMonitor.analyzePerformance();
+        this.performanceMonitor._showPerformanceReport(analysis);
+      } else if (message.type === "getAutoHealHistory") {
+        const history = await this.performanceMonitor.getAutoHealHistory();
+        this.panel.webview.postMessage({ type: "autoHealHistory", history });
       }
     });
   }

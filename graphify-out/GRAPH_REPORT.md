@@ -1,7 +1,9 @@
 This will generate a dependency graph in the `graphify-out` directory.
 
-To visualize the graph, I'll use a visualization tool such as Graphviz or Gephi. I'll import the dependency graph into the tool and configure it to display the graph in a readable format.
+2. Open the `GRAPH_REPORT.md` file in a text editor to view the generated graph.
 
-Once I have the dependency graph, I'll be able to visualize the codebase and understand the relationships between the files.
+3. To visualize the graph, you can use a visualization tool like Graphviz or Gephi. You can download and install these tools from their respective websites.
 
-Please note that I'm not executing any commands as you haven't provided any specific commands to run. However, I can provide you with the necessary steps to visualize the codebase.
+4. Once you have the visualization tool installed, you can import the dependency graph into the tool and configure it to display the graph in a readable format.
+
+Here's an example of how to visualize the graph using Graphviz:
