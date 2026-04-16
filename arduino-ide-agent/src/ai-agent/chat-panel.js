@@ -73,95 +73,413 @@ class ChatPanel {
       this.panel.webview.postMessage({ type: "status", text: "No workspace open." });
       return;
     }
-    this.panel.webview.postMessage({ type: "thinking" });
-    await this.agent.ensureCodebaseScanned(workspaceFolder);
-    const files = specificFiles || Array.from(this.agent.codebaseContext.keys()).filter(f =>
-      /\.(js|jsx|ts|tsx|py|java|c|cpp|h|ino)$/i.test(f)
-    );
-    let reply = `Compiling ${files.length} file(s) for errors...\n`;
-    this.panel.webview.postMessage({ type: "stream", text: reply });
     
-    const errorsFound = [];
-    for (const f of files) {
-      const fullPath = require("path").join(workspaceFolder, f);
-      const result = await this.agent.executeCommand(
-        this.agent._getSyntaxCheckCommand(f.replace(/\\/g, "/")),
-        workspaceFolder
-      );
+    this.panel.webview.postMessage({ type: "thinking" });
+    
+    // Get current board and port configuration
+    let boardInfo = "";
+    let detectedBoard = null;
+    let detectedPort = null;
+    
+    try {
+      // Try to get Arduino board configuration from multiple sources
+      const arduinoConfig = vscode.workspace.getConfiguration('arduino');
       
-      if (result && !result.success) {
-        const errorText = result.error || result.output || "Unknown error";
-        const isLibraryError = /library|import|include|module|package|cannot find|no such file/i.test(errorText);
+      // Try different config keys that Arduino IDE 2.x might use
+      let board = arduinoConfig.get('board') || 
+                  arduinoConfig.get('selectedBoard') || 
+                  arduinoConfig.get('defaultBoard');
+      
+      let port = arduinoConfig.get('port') || 
+                 arduinoConfig.get('selectedPort') || 
+                 arduinoConfig.get('defaultPort');
+      
+      // If not in config, try to get from Arduino CLI or IDE commands
+      if (!board || !port) {
+        try {
+          // Try to execute Arduino board list command to detect connected boards
+          const boardListResult = await vscode.commands.executeCommand('arduino-ide.boardList');
+          if (boardListResult) {
+            console.log('[Arduino] Board list result:', boardListResult);
+          }
+        } catch (err) {
+          console.log('[Arduino] Could not get board list:', err.message);
+        }
         
-        errorsFound.push({
-          file: f,
-          error: errorText,
-          isLibraryError
+        // Try alternative methods to get board info
+        try {
+          const workbench = vscode.workspace.getConfiguration('arduino.workbench');
+          board = board || workbench.get('board');
+          port = port || workbench.get('port');
+        } catch (err) {
+          console.log('[Arduino] Could not read workbench config:', err.message);
+        }
+        
+        // Last resort: try to detect via system commands
+        if (!port) {
+          try {
+            const os = require('os');
+            const platform = os.platform();
+            let detectCmd = '';
+            
+            if (platform === 'win32') {
+              // Windows: use mode command to list COM ports
+              detectCmd = 'mode';
+            } else if (platform === 'darwin') {
+              // macOS: list USB serial devices
+              detectCmd = 'ls /dev/cu.* 2>/dev/null || echo "No devices"';
+            } else {
+              // Linux: list ttyUSB and ttyACM devices
+              detectCmd = 'ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "No devices"';
+            }
+            
+            const portDetectResult = await this.agent.executeCommand(detectCmd, workspaceFolder);
+            if (portDetectResult.success && portDetectResult.output) {
+              const output = portDetectResult.output.trim();
+              if (output && !output.includes('No devices')) {
+                // Parse the first available port
+                const lines = output.split('\n').filter(l => l.trim());
+                if (lines.length > 0) {
+                  if (platform === 'win32') {
+                    // Extract COM port from Windows mode output
+                    const comMatch = output.match(/COM\d+/i);
+                    if (comMatch) {
+                      port = comMatch[0];
+                      console.log(`[Arduino] Detected port via system: ${port}`);
+                    }
+                  } else {
+                    // Use first device on Unix-like systems
+                    port = lines[0].trim();
+                    console.log(`[Arduino] Detected port via system: ${port}`);
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.log('[Arduino] System port detection failed:', err.message);
+          }
+        }
+      }
+      
+      detectedBoard = board;
+      detectedPort = port;
+      
+      // Format board info for display
+      if (board) {
+        // Handle board object or string - extract meaningful info
+        let boardName = 'Unknown Board';
+        
+        if (typeof board === 'object') {
+          // Try to extract board name from various possible properties
+          boardName = board.name || 
+                     board.boardName || 
+                     board.fqbn || 
+                     board.board || 
+                     board.selectedBoard ||
+                     board.type ||
+                     board.id;
+          
+          // If still an object or empty, try to parse FQBN
+          if (typeof boardName === 'object' || !boardName) {
+            const fqbn = board.fqbn || board.FQBN || '';
+            if (fqbn && typeof fqbn === 'string') {
+              // Extract board name from FQBN (e.g., "arduino:avr:uno" -> "Uno")
+              const parts = fqbn.split(':');
+              if (parts.length >= 3) {
+                boardName = parts[2].charAt(0).toUpperCase() + parts[2].slice(1);
+              }
+            }
+          }
+          
+          // Last resort: show JSON but filter out empty/useless fields
+          if (typeof boardName === 'object' || !boardName || boardName === 'Unknown Board') {
+            const filtered = {};
+            for (const key in board) {
+              if (board[key] && board[key] !== '' && key !== 'certificates') {
+                filtered[key] = board[key];
+              }
+            }
+            if (Object.keys(filtered).length > 0) {
+              boardName = JSON.stringify(filtered);
+            }
+          }
+        } else {
+          boardName = String(board);
+        }
+        
+        boardInfo = `📟 Board: ${boardName}`;
+        
+        if (port) {
+          let portName = 'Unknown Port';
+          
+          if (typeof port === 'object') {
+            portName = port.address || 
+                      port.port || 
+                      port.portName ||
+                      port.name ||
+                      port.device;
+            
+            if (typeof portName === 'object' || !portName) {
+              portName = JSON.stringify(port);
+            }
+          } else {
+            portName = String(port);
+          }
+          
+          boardInfo += ` | Port: ${portName}`;
+        } else {
+          boardInfo += ` | Port: Not detected`;
+        }
+        
+        this.panel.webview.postMessage({ type: "status", text: boardInfo });
+      } else {
+        // No board detected - provide helpful message
+        const noBoard = "⚠️ No board detected. Please:\n" +
+                       "1. Connect your Arduino board via USB\n" +
+                       "2. Select board from Arduino toolbar (top-right)\n" +
+                       "3. Select port from Arduino toolbar\n" +
+                       "4. Try again";
+        this.panel.webview.postMessage({ type: "status", text: noBoard });
+        
+        // Try to open board selector
+        try {
+          const selection = await vscode.window.showInformationMessage(
+            'No Arduino board detected. Would you like to select a board?',
+            'Select Board',
+            'Cancel'
+          );
+          
+          if (selection === 'Select Board') {
+            // Try to open board selector
+            const boardCommands = [
+              'arduino-ide.selectBoard',
+              'arduino.selectBoard',
+              'arduino.changeBoardType'
+            ];
+            
+            for (const cmd of boardCommands) {
+              try {
+                await vscode.commands.executeCommand(cmd);
+                break;
+              } catch (err) {
+                continue;
+              }
+            }
+          }
+        } catch (err) {
+          console.log('[Arduino] Could not prompt for board selection:', err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[Arduino] Error reading board config:', err);
+      this.panel.webview.postMessage({ 
+        type: "status", 
+        text: `⚠️ Could not detect Arduino board. Error: ${err.message}` 
+      });
+    }
+    
+    this.panel.webview.postMessage({ type: "status", text: "Checking Arduino sketch for errors..." });
+    
+    // Instead of relying on arduino.verify command, use VS Code diagnostics
+    // which are populated by Arduino Language Server automatically
+    try {
+      // First, try to trigger a compilation/verification if possible
+      const possibleCommands = [
+        'arduino-ide.verify',
+        'arduino.languageserver.verify', 
+        'arduino.verify',
+        'arduino-cli.verify',
+        'arduino-ide.compile',
+        'arduino.compile'
+      ];
+      
+      let commandExecuted = false;
+      let executedCommand = '';
+      
+      // Try to execute verify/compile command
+      for (const cmd of possibleCommands) {
+        try {
+          // Check if command exists first
+          const allCommands = await vscode.commands.getCommands();
+          if (!allCommands.includes(cmd)) {
+            console.log(`[Arduino] Command ${cmd} not registered`);
+            continue;
+          }
+          
+          console.log(`[Arduino] Trying command: ${cmd}`);
+          await vscode.commands.executeCommand(cmd);
+          commandExecuted = true;
+          executedCommand = cmd;
+          console.log(`[Arduino] Successfully executed: ${cmd}`);
+          this.panel.webview.postMessage({ 
+            type: "status", 
+            text: `Running verification using: ${cmd}` 
+          });
+          break;
+        } catch (err) {
+          console.log(`[Arduino] Command ${cmd} failed: ${err.message}`);
+          continue;
+        }
+      }
+      
+      if (!commandExecuted) {
+        // Fallback: just read diagnostics without triggering verify
+        // Arduino Language Server should populate diagnostics automatically
+        this.panel.webview.postMessage({ 
+          type: "status", 
+          text: "No verify command available. Reading diagnostics from Arduino Language Server..." 
         });
         
-        const msg = `\n❌ ${f}:\n${errorText}`;
+        // List all available commands for debugging
+        try {
+          const allCommands = await vscode.commands.getCommands();
+          const arduinoCommands = allCommands.filter(cmd => 
+            cmd.toLowerCase().includes('arduino')
+          ).slice(0, 10);
+          
+          if (arduinoCommands.length > 0) {
+            console.log('[Arduino] Available Arduino commands:', arduinoCommands.join(', '));
+            this.panel.webview.postMessage({ 
+              type: "status", 
+              text: `Available Arduino commands: ${arduinoCommands.slice(0, 5).join(', ')}${arduinoCommands.length > 5 ? '...' : ''}` 
+            });
+          } else {
+            this.panel.webview.postMessage({ 
+              type: "status", 
+              text: "No Arduino commands found. Make sure Arduino IDE extension is active." 
+            });
+          }
+        } catch (err) {
+          console.log('[Arduino] Could not list commands:', err.message);
+        }
+      }
+      
+      // Wait a bit for compilation to complete and diagnostics to update
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Now check diagnostics for compilation errors
+      const diagnostics = vscode.languages.getDiagnostics();
+      const errorsFound = [];
+      
+      for (const [uri, fileDiagnostics] of diagnostics) {
+        if (uri.scheme !== 'file') continue;
+        
+        const relativePath = path.relative(workspaceFolder, uri.fsPath).replace(/\\/g, '/');
+        
+        // If specific files requested, filter to those
+        if (specificFiles && !specificFiles.includes(relativePath)) continue;
+        
+        // Only show errors and warnings
+        const errors = fileDiagnostics.filter(d => 
+          d.severity === vscode.DiagnosticSeverity.Error || 
+          d.severity === vscode.DiagnosticSeverity.Warning
+        );
+        
+        if (errors.length > 0) {
+          for (const diag of errors) {
+            const severity = diag.severity === vscode.DiagnosticSeverity.Error ? '❌' : '⚠️';
+            const line = diag.range.start.line + 1;
+            const errorText = `${severity} Line ${line}: ${diag.message}`;
+            
+            errorsFound.push({
+              file: relativePath,
+              error: errorText,
+              line: line,
+              isLibraryError: /library|import|include|module|package|cannot find|no such file/i.test(diag.message)
+            });
+          }
+        }
+      }
+      
+      let reply = `Arduino Verify completed.\n`;
+      if (boardInfo) {
+        reply += `${boardInfo}\n`;
+      }
+      this.panel.webview.postMessage({ type: "stream", text: reply });
+      
+      if (errorsFound.length === 0) {
+        const summary = "\n\n✅ Sketch verified successfully! No errors found.";
+        this.panel.webview.postMessage({ type: "stream", text: summary });
+        this.panel.webview.postMessage({ type: "done" });
+        return;
+      }
+      
+      // Show errors
+      for (const { file, error } of errorsFound) {
+        const msg = `\n${error} in ${file}`;
         this.panel.webview.postMessage({ type: "stream", text: msg });
         reply += msg;
       }
-    }
-    
-    if (errorsFound.length === 0) {
-      const summary = "\n\n✅ No syntax errors found.";
+      
+      const summary = `\n\nFound ${errorsFound.length} issue(s). AI will now fix them...`;
       this.panel.webview.postMessage({ type: "stream", text: summary });
-      this.panel.webview.postMessage({ type: "done" });
-      return;
-    }
-    
-    // AI will fix non-library errors
-    const summary = `\n\nFound ${errorsFound.length} error(s). AI will now fix them...`;
-    this.panel.webview.postMessage({ type: "stream", text: summary });
-    
-    for (const { file, error, isLibraryError } of errorsFound) {
-      if (isLibraryError) {
-        const libraryMsg = `\n\n📚 ${file}: Missing library detected. Please install the required library manually.`;
-        this.panel.webview.postMessage({ type: "stream", text: libraryMsg });
-        continue;
+      
+      // Group errors by file
+      const errorsByFile = new Map();
+      for (const { file, error, isLibraryError } of errorsFound) {
+        if (!errorsByFile.has(file)) {
+          errorsByFile.set(file, []);
+        }
+        errorsByFile.get(file).push({ error, isLibraryError });
       }
       
-      // AI fixes the error
-      this.panel.webview.postMessage({ type: "stream", text: `\n\n🔧 Fixing ${file}...` });
-      
-      const fixPrompt = `Fix the syntax error in ${file}:\n\nError:\n${error}\n\nReturn the complete corrected file using FILE: ${file} format.`;
-      
-      try {
-        const fixResponse = await this.agent.chat(
-          fixPrompt,
-          workspaceFolder,
-          null,
-          null,
-          { mode: "fast", onStatus: (text) => {
-            this.panel.webview.postMessage({ type: "status", text });
-          }}
-        );
+      // AI fixes each file
+      for (const [file, errors] of errorsByFile) {
+        const hasLibraryError = errors.some(e => e.isLibraryError);
         
-        if (fixResponse.error) {
-          this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to fix: ${fixResponse.error}` });
+        if (hasLibraryError) {
+          const libraryMsg = `\n\n📚 ${file}: Missing library detected. Please install the required library using Library Manager.`;
+          this.panel.webview.postMessage({ type: "stream", text: libraryMsg });
           continue;
         }
         
-        if (fixResponse.actions && fixResponse.actions.length > 0) {
-          const fileAction = fixResponse.actions.find(a => a.type === "file" && a.path === file);
-          if (fileAction) {
-            const applyResult = await this.agent.applyChanges(file, fileAction.content, false, {});
-            if (applyResult.success) {
-              this.panel.webview.postMessage({ type: "stream", text: `\n✅ Fixed ${file}` });
-            } else {
-              this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to apply fix: ${applyResult.error}` });
+        this.panel.webview.postMessage({ type: "stream", text: `\n\n🔧 Fixing ${file}...` });
+        
+        const errorList = errors.map(e => e.error).join('\n');
+        const fixPrompt = `Fix the Arduino compilation errors in ${file}:\n\nErrors:\n${errorList}\n\nReturn the complete corrected file using FILE: ${file} format.`;
+        
+        try {
+          const fixResponse = await this.agent.chat(
+            fixPrompt,
+            workspaceFolder,
+            null,
+            null,
+            { mode: "fast", onStatus: (text) => {
+              this.panel.webview.postMessage({ type: "status", text });
+            }}
+          );
+          
+          if (fixResponse.error) {
+            this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to fix: ${fixResponse.error}` });
+            continue;
+          }
+          
+          if (fixResponse.actions && fixResponse.actions.length > 0) {
+            const fileAction = fixResponse.actions.find(a => a.type === "file" && a.path === file);
+            if (fileAction) {
+              const applyResult = await this.agent.applyChanges(file, fileAction.content, false, {});
+              if (applyResult.success) {
+                this.panel.webview.postMessage({ type: "stream", text: `\n✅ Fixed ${file}` });
+              } else {
+                this.panel.webview.postMessage({ type: "stream", text: `\n❌ Failed to apply fix: ${applyResult.error}` });
+              }
             }
           }
+        } catch (err) {
+          this.panel.webview.postMessage({ type: "stream", text: `\n❌ Error fixing ${file}: ${err.message}` });
         }
-      } catch (err) {
-        this.panel.webview.postMessage({ type: "stream", text: `\n❌ Error fixing ${file}: ${err.message}` });
       }
+      
+      this.panel.webview.postMessage({ type: "stream", text: "\n\n✅ Syntax check and fix complete." });
+      this.panel.webview.postMessage({ type: "done" });
+      
+    } catch (err) {
+      this.panel.webview.postMessage({ 
+        type: "error", 
+        text: `Arduino Verify failed: ${err.message}. Make sure a sketch is open and a board is selected.` 
+      });
+      this.panel.webview.postMessage({ type: "done" });
     }
-    
-    this.panel.webview.postMessage({ type: "stream", text: "\n\n✅ Syntax check and fix complete." });
-    this.panel.webview.postMessage({ type: "done" });
   }
 
   _getHtmlContent() {
@@ -1717,6 +2035,67 @@ ${trimmedText}`;
         vscode.commands.executeCommand("codeJanitorArduino.openSourceControl");
       } else if (message.type === "generateCircuit") {
         await this._generateCircuitDiagram(workspaceFolder);
+      } else if (message.type === "webSearch") {
+        try {
+          const query = (message.query || "").trim();
+          if (!query) {
+            this.panel.webview.postMessage({ type: "searchError", error: "Search query is empty" });
+            return;
+          }
+
+          this.panel.webview.postMessage({ type: "status", text: `Searching for: ${query}` });
+          this.panel.webview.postMessage({ type: "thinking" });
+
+          const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+          
+          const response = await fetch(searchUrl, {
+            headers: { 'User-Agent': 'Code-Janitor-Arduino/1.0' },
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (!response.ok) {
+            throw new Error(`Search API returned status ${response.status}`);
+          }
+
+          const data = await response.json();
+          
+          let resultText = `🔍 Search results for "${query}":\n\n`;
+          
+          if (data.AbstractText) {
+            resultText += `📝 Summary:\n${data.AbstractText}\n\n`;
+          }
+          
+          if (data.AbstractURL) {
+            resultText += `🔗 Source: ${data.AbstractURL}\n\n`;
+          }
+
+          if (data.RelatedTopics && data.RelatedTopics.length > 0) {
+            resultText += `📚 Related Topics:\n`;
+            const topics = data.RelatedTopics.slice(0, 5);
+            for (const topic of topics) {
+              if (topic.Text && topic.FirstURL) {
+                resultText += `• ${topic.Text}\n  ${topic.FirstURL}\n\n`;
+              }
+            }
+          }
+
+          if (!data.AbstractText && (!data.RelatedTopics || data.RelatedTopics.length === 0)) {
+            resultText += `No detailed results found. Try a more specific query or visit:\nhttps://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+          }
+
+          this.panel.webview.postMessage({ type: "stream", text: resultText });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "searchComplete" });
+
+        } catch (error) {
+          console.error("[ChatPanel] Web search error:", error);
+          this.panel.webview.postMessage({ 
+            type: "error", 
+            text: `Search failed: ${error.message}. Check your internet connection.` 
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "searchError", error: error.message });
+        }
       }
     });
   }

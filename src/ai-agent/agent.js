@@ -76,7 +76,11 @@ const NVIDIA_MODEL_ALIASES = new Map([
   ["nvidia/minimax-m2.7", "minimaxai/minimax-m2.7"],
   ["nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-70b-instruct"],
   ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
-  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
+  ["minimaxai/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["meta/llama-3.1-8b-instruct", "meta/llama-3.1-8b-instruct"],
+  ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-70b-instruct"],
+  ["mistralai/mistral-nemotron", "mistralai/mistral-nemotron"]
 ])
 const NVIDIA_MODELS = new Set([
   "minimaxai/minimax-m2.7",

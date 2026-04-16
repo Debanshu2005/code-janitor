@@ -77,6 +77,41 @@
         gap: 4px;
       }
 
+      /* Connectivity status */
+      #connectivity-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        color: var(--muted);
+        padding: 4px 8px;
+        background: var(--panel-2);
+        border-radius: 3px;
+        border: 1px solid var(--border);
+      }
+      #connectivity-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: background 0.3s;
+      }
+      #connectivity-status.online #connectivity-dot {
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green);
+      }
+      #connectivity-status.offline #connectivity-dot {
+        background: var(--red);
+      }
+      #connectivity-status.checking #connectivity-dot {
+        background: var(--yellow);
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+
       .divider {
         width: 1px;
         height: 24px;
@@ -250,6 +285,64 @@
         color: #fff;
         border-color: var(--accent);
         transform: translateY(-1px);
+      }
+
+      /* ── Search bar ── */
+      #search-bar {
+        padding: 8px 14px;
+        background: transparent;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      #search-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      #search-input {
+        flex: 1;
+        padding: 8px 14px;
+        background: var(--panel);
+        border: 2px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        font-size: 12px;
+        font-family: inherit;
+        transition: border-color 0.2s;
+      }
+      #search-input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      #search-input::placeholder {
+        color: var(--muted);
+      }
+      #search-btn {
+        padding: 8px 18px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        transition: all 0.2s;
+      }
+      #search-btn:hover {
+        background: var(--accent-hover);
+        transform: translateY(-1px);
+      }
+      #search-btn:disabled {
+        background: var(--panel-2);
+        color: var(--muted);
+        cursor: not-allowed;
+        transform: none;
       }
       #activity-panel {
         margin: 10px 14px 0;
@@ -769,6 +862,75 @@
         cursor: not-allowed;
       }
 
+      /* Microphone button */
+      #mic-btn {
+        width: 40px;
+        height: 40px;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 2px solid var(--border);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 18px;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+      #mic-btn:hover {
+        background: var(--panel-3);
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      #mic-btn.recording {
+        background: var(--red);
+        color: #fff;
+        border-color: var(--red);
+        animation: pulse-mic 1.5s infinite;
+      }
+      #mic-btn.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      @keyframes pulse-mic {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
+      #mic-permission-badge {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--panel);
+        border: 2px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        transition: all 0.3s;
+        pointer-events: none;
+      }
+      #mic-permission-badge.granted {
+        background: var(--green-soft);
+        border-color: var(--green);
+      }
+      #mic-permission-badge.denied {
+        background: var(--red-soft);
+        border-color: var(--red);
+      }
+      #mic-permission-badge.prompt {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        animation: pulse-badge 2s infinite;
+      }
+      @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.1); opacity: 0.8; }
+      }
+
       #stop-btn {
         padding: 10px 20px;
         background: var(--red);
@@ -803,6 +965,11 @@
         <div id="header-sub">Ollama</div>
       </div>
       <div id="header-controls">
+        <div id="connectivity-status" class="checking">
+          <div id="connectivity-dot"></div>
+          <span id="connectivity-text">Checking...</span>
+        </div>
+        <div class="divider"></div>
         <select id="provider-select" title="AI Provider">
           <option value="ollama">🖥 Ollama (local)</option>
           <option value="groq">⚡ Groq (cloud)</option>
@@ -818,6 +985,9 @@
         </button>
         <button class="pill-btn" id="btn-heavy" title="Heavy mode">
           Heavy
+        </button>
+        <button class="icon-btn" id="tts-toggle" title="Toggle text-to-speech">
+          🔊
         </button>
         <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
       </div>
@@ -899,6 +1069,13 @@
       <div class="action-chip" data-action="docs">📝 Add docs</div>
     </div>
 
+    <div id="search-bar">
+      <div id="search-row">
+        <input id="search-input" type="text" placeholder="🌐 Search the web..." />
+        <button id="search-btn">🔍 Search</button>
+      </div>
+    </div>
+
     <div id="activity-panel" class="collapsed">
       <div id="activity-header">
         <div id="activity-title">Agent Activity</div>
@@ -923,6 +1100,10 @@
           rows="1"
           placeholder="Ask anything about your code..."
         ></textarea>
+        <button id="mic-btn" title="Voice input (click to start/stop recording)">
+          🎤
+          <span id="mic-permission-badge" style="display: none;">🔒</span>
+        </button>
         <button class="send-btn" id="send-btn">Send</button>
         <button id="stop-btn">Stop</button>
       </div>
@@ -948,6 +1129,258 @@
       var apiKeyLink = document.getElementById("api-key-link");
       var apiKeyStatus = document.getElementById("api-key-status");
       var apiKeyChange = document.getElementById("api-key-change");
+      var micBtn = document.getElementById("mic-btn");
+      var micPermissionBadge = document.getElementById("mic-permission-badge");
+      var ttsToggle = document.getElementById("tts-toggle");
+      var connectivityStatus = document.getElementById("connectivity-status");
+      var connectivityText = document.getElementById("connectivity-text");
+
+      // Speech recognition
+      var recognition = null;
+      var isRecording = false;
+
+      function initSpeechRecognition() {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+          console.log('[STT] Speech recognition not supported');
+          micBtn.classList.add('disabled');
+          micBtn.title = 'Speech recognition not supported in this browser';
+          return false;
+        }
+        var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = function() {
+          console.log('[STT] Recording started');
+          isRecording = true;
+          micBtn.classList.add('recording');
+          micBtn.title = 'Recording... Click to stop';
+          addRow('✅ Microphone access granted! Speak now...', 'status');
+          addActivity('Voice recording started', 'success');
+        };
+
+        recognition.onresult = function(event) {
+          var transcript = '';
+          for (var i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          input.value = transcript;
+          input.style.height = '38px';
+          input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+        };
+
+        recognition.onerror = function(event) {
+          console.error('[STT] Recognition error:', event.error);
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          micBtn.title = 'Voice input (click to start/stop recording)';
+          
+          var errorMsg = 'Voice recognition error: ' + event.error;
+          if (event.error === 'no-speech') {
+            errorMsg = 'No speech detected. Please try again.';
+          } else if (event.error === 'not-allowed') {
+            errorMsg = 'Microphone access denied. Please allow microphone access in browser settings.';
+          } else if (event.error === 'network') {
+            errorMsg = 'Network error. Check your internet connection.';
+          }
+          
+          addRow(errorMsg, 'status');
+          addActivity(errorMsg, 'error');
+        };
+
+        recognition.onend = function() {
+          console.log('[STT] Recording ended');
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          micBtn.title = 'Voice input (click to start/stop recording)';
+          addActivity('Voice recording stopped', 'info');
+        };
+
+        return true;
+      }
+
+      function updateMicPermissionBadge(state) {
+        micPermissionBadge.style.display = 'flex';
+        micPermissionBadge.className = '';
+        
+        if (state === 'granted') {
+          micPermissionBadge.classList.add('granted');
+          micPermissionBadge.textContent = '🔓';
+          micPermissionBadge.title = 'Microphone access granted';
+        } else if (state === 'denied') {
+          micPermissionBadge.classList.add('denied');
+          micPermissionBadge.textContent = '🔒';
+          micPermissionBadge.title = 'Microphone access denied - Click lock icon in address bar';
+        } else if (state === 'prompt') {
+          micPermissionBadge.classList.add('prompt');
+          micPermissionBadge.textContent = '❓';
+          micPermissionBadge.title = 'Click to request microphone access';
+        }
+      }
+
+      function checkMicPermission() {
+        if (!navigator.permissions || !navigator.permissions.query) {
+          updateMicPermissionBadge('prompt');
+          return;
+        }
+        
+        navigator.permissions.query({ name: 'microphone' })
+          .then(function(result) {
+            updateMicPermissionBadge(result.state);
+            
+            result.onchange = function() {
+              updateMicPermissionBadge(result.state);
+              if (result.state === 'granted') {
+                addRow('✅ Microphone access granted!', 'status');
+                addActivity('Microphone permission granted', 'success');
+              } else if (result.state === 'denied') {
+                addRow('🔒 Microphone access denied. Click the lock icon (🔒) in your browser address bar to allow access.', 'status');
+                addActivity('Microphone permission denied', 'error');
+              }
+            };
+          })
+          .catch(function(error) {
+            console.log('[Mic] Permission query not supported:', error);
+            updateMicPermissionBadge('prompt');
+          });
+      }
+
+      function toggleRecording() {
+        if (micBtn.classList.contains('disabled')) {
+          addRow('Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.', 'status');
+          return;
+        }
+
+        if (isRecording) {
+          if (recognition) {
+            recognition.stop();
+          }
+          return;
+        }
+
+        // Request microphone permission first using getUserMedia
+        updateMicPermissionBadge('prompt');
+        addRow('🎤 Requesting microphone access... Please allow when prompted.', 'status');
+        addActivity('Requesting microphone permission', 'info');
+
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then(function(stream) {
+            console.log('[STT] Microphone permission granted');
+            updateMicPermissionBadge('granted');
+            
+            // Stop the stream immediately - we just needed permission
+            stream.getTracks().forEach(function(track) {
+              track.stop();
+            });
+            
+            // Now initialize and start speech recognition
+            if (!recognition) {
+              if (!initSpeechRecognition()) {
+                return;
+              }
+            }
+            
+            try {
+              recognition.start();
+            } catch (error) {
+              console.error('[STT] Failed to start recognition:', error);
+              addRow('Failed to start voice recognition: ' + error.message, 'status');
+              addActivity('Failed to start voice recognition', 'error');
+            }
+          })
+          .catch(function(error) {
+            console.error('[STT] Microphone permission denied:', error);
+            updateMicPermissionBadge('denied');
+            
+            var errorMsg = '🎤 Microphone access denied.';
+            
+            if (error.name === 'NotFoundError') {
+              errorMsg = '❌ No microphone found. Please connect a microphone and try again.';
+            } else if (error.name === 'NotAllowedError') {
+              errorMsg = '🔒 Microphone access denied.\n\n' +
+                        'To allow microphone access:\n' +
+                        '1. Look for the 🔒 lock icon in your browser\'s address bar (top-left corner)\n' +
+                        '2. Click it and find "Microphone" in the dropdown\n' +
+                        '3. Change it to "Allow"\n' +
+                        '4. Reload this page (F5)\n' +
+                        '5. Click the 🎤 button again\n\n' +
+                        'The lock icon is in the address bar where you see: vscode-webview://...';
+            } else if (error.name === 'NotReadableError') {
+              errorMsg = '⚠️ Microphone is in use by another application. Close other apps using the microphone and try again.';
+            }
+            
+            addRow(errorMsg, 'status');
+            addActivity(errorMsg, 'error');
+          });
+      }
+
+      // Text-to-speech
+      var ttsEnabled = false;
+      var currentUtterance = null;
+
+      function initTextToSpeech() {
+        if (!('speechSynthesis' in window)) {
+          ttsToggle.style.display = 'none';
+          return;
+        }
+      }
+
+      function toggleTTS() {
+        ttsEnabled = !ttsEnabled;
+        ttsToggle.classList.toggle('active', ttsEnabled);
+        if (!ttsEnabled && currentUtterance) {
+          window.speechSynthesis.cancel();
+          currentUtterance = null;
+        }
+        addRow(ttsEnabled ? '🔊 Text-to-speech enabled' : '🔇 Text-to-speech disabled', 'status');
+      }
+
+      function speakText(text) {
+        if (!ttsEnabled || !text) return;
+        if (currentUtterance) {
+          window.speechSynthesis.cancel();
+        }
+        var cleanText = text
+          .replace(/```[\s\S]*?```/g, '')
+          .replace(/`[^`]+`/g, '')
+          .replace(/[#*_~\[\]()]/g, '')
+          .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+          .trim();
+        if (!cleanText) return;
+        currentUtterance = new SpeechSynthesisUtterance(cleanText);
+        currentUtterance.rate = 1.1;
+        currentUtterance.onend = function() {
+          currentUtterance = null;
+        };
+        window.speechSynthesis.speak(currentUtterance);
+      }
+
+      // Connectivity check
+      function checkConnectivity() {
+        connectivityStatus.className = 'checking';
+        connectivityText.textContent = 'Checking...';
+        fetch('https://www.google.com/favicon.ico', { mode: 'no-cors', cache: 'no-store' })
+          .then(function() {
+            connectivityStatus.className = 'online';
+            connectivityText.textContent = 'Online';
+          })
+          .catch(function() {
+            connectivityStatus.className = 'offline';
+            connectivityText.textContent = 'Offline';
+          });
+      }
+
+      // Initialize speech recognition and TTS on load
+      initSpeechRecognition();
+      initTextToSpeech();
+      checkMicPermission();
+      checkConnectivity();
+      setInterval(checkConnectivity, 30000);
+
+      micBtn.onclick = toggleRecording;
+      ttsToggle.onclick = toggleTTS;
 
       function showKeySaved() {
         apiKeyInput.style.display = "none";
@@ -1010,10 +1443,11 @@
           "claude-3-opus-20240229",
         ],
         nvidia: [
-          "nvidia/minimax-m2.7",
-          "nvidia/llama-3.1-nemotron-70b-instruct",
-          "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-          "nvidia/llama-3.1-nemotron-51b-instruct",
+          "minimaxai/minimax-m2.7",
+          "meta/llama-3.1-8b-instruct",
+          "meta/llama-3.1-70b-instruct",
+          "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "mistralai/mistral-nemotron"
         ],
       };
 
@@ -1618,6 +2052,7 @@
               bubble._rawSource = bubble._rawText;
               bubble.innerHTML = "";
               bubble.appendChild(renderContent(bubble._rawText));
+              speakText(bubble._rawText);
             }
           }
           currentMessage = null;
@@ -1807,6 +2242,47 @@
         "Ready. Select a model above, pick an action chip, or just ask.",
         "status",
       );
+
+      // Web search functionality
+      var searchInput = document.getElementById("search-input");
+      var searchBtn = document.getElementById("search-btn");
+
+      function performWebSearch() {
+        var query = searchInput.value.trim();
+        if (!query) return;
+
+        searchBtn.disabled = true;
+        searchBtn.textContent = "Searching...";
+        addActivity("Searching web for: " + query, "scan");
+        showProgress("Searching the web...", 30);
+
+        vscode.postMessage({ type: "webSearch", query: query });
+        searchInput.value = "";
+      }
+
+      searchBtn.onclick = performWebSearch;
+      searchInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          performWebSearch();
+        }
+      });
+
+      // Handle search results
+      window.addEventListener("message", function(event) {
+        var msg = event.data;
+        if (msg.type === "searchComplete") {
+          searchBtn.disabled = false;
+          searchBtn.textContent = "🔍 Search";
+          hideProgress();
+          addActivity("Search completed", "success");
+        } else if (msg.type === "searchError") {
+          searchBtn.disabled = false;
+          searchBtn.textContent = "🔍 Search";
+          hideProgress();
+          addActivity("Search failed: " + msg.error, "error");
+        }
+      });
     </script>
   </body>
 </html>

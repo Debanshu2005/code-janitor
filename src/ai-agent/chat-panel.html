@@ -285,6 +285,33 @@
         color: var(--muted);
         cursor: not-allowed;
       }
+
+      /* Voice input */
+      #voice-btn {
+        padding: 9px 14px;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        cursor: pointer;
+        font-size: 13px;
+        transition: all 0.2s;
+        white-space: nowrap;
+      }
+      #voice-btn:hover {
+        background: var(--panel-3);
+        border-color: var(--accent);
+      }
+      #voice-btn.recording {
+        background: var(--red);
+        border-color: var(--red);
+        color: #fff;
+        animation: pulse-recording 1.5s infinite;
+      }
+      @keyframes pulse-recording {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
       #activity-panel {
         margin: 10px 14px 0;
         background: linear-gradient(180deg, rgba(18, 24, 38, 0.96) 0%, rgba(15, 20, 27, 0.96) 100%);
@@ -758,6 +785,71 @@
         color: var(--muted);
       }
 
+      #mic-btn {
+        padding: 9px 12px;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        cursor: pointer;
+        font-size: 16px;
+        transition: all 0.15s;
+        white-space: nowrap;
+        flex-shrink: 0;
+        position: relative;
+      }
+      #mic-btn:hover {
+        background: var(--panel-3);
+        border-color: var(--accent);
+      }
+      #mic-btn.recording {
+        background: var(--red-soft);
+        color: var(--red);
+        border-color: var(--red);
+        animation: pulse-mic 1.5s infinite;
+      }
+      #mic-btn.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      @keyframes pulse-mic {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.8; transform: scale(1.05); }
+      }
+      #mic-permission-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--panel);
+        border: 2px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        transition: all 0.3s;
+        pointer-events: none;
+      }
+      #mic-permission-badge.granted {
+        background: var(--green-soft);
+        border-color: var(--green);
+      }
+      #mic-permission-badge.denied {
+        background: var(--red-soft);
+        border-color: var(--red);
+      }
+      #mic-permission-badge.prompt {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        animation: pulse-badge 2s infinite;
+      }
+      @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.1); opacity: 0.8; }
+      }
+
       .send-btn {
         padding: 9px 14px;
         background: var(--accent);
@@ -1174,6 +1266,21 @@
         </div>
 
         <div class="tutorial-section">
+          <h3>🎤 Voice Input & Text-to-Speech</h3>
+          <p>Use voice commands and hear AI responses:</p>
+          <ul>
+            <li><strong>Voice Input:</strong> Click the 🎤 microphone button to speak your questions (requires microphone permission)</li>
+            <li><strong>Text-to-Speech:</strong> Click 🔊 TTS button in header to enable AI response reading</li>
+            <li>Your spoken words appear in the input field in real-time</li>
+            <li>Works in Chrome, Edge, and Safari browsers</li>
+          </ul>
+          <div class="tutorial-tip">
+            <strong>💡 Pro Tip:</strong>
+            <span>Grant microphone permission once, and it will be remembered for future sessions</span>
+          </div>
+        </div>
+
+        <div class="tutorial-section">
           <h3>🌐 Web Search</h3>
           <p>Search the internet directly from Code Janitor:</p>
           <ul>
@@ -1345,6 +1452,7 @@
       </div>
       <div id="header-controls">
         <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">🎓 Tutorial</button>
+        <button class="pill-btn" id="btn-tts" title="Toggle Text-to-Speech">🔊 TTS</button>
         <select id="provider-select" title="AI Provider">
           <option value="ollama">🖥 Ollama (local)</option>
           <option value="groq">⚡ Groq (cloud)</option>
@@ -1414,6 +1522,10 @@
 
     <div id="input-area">
       <div id="input-row">
+        <button id="mic-btn" title="Voice input (click to start/stop recording)">
+          🎤
+          <span id="mic-permission-badge" style="display: none;">🔒</span>
+        </button>
         <textarea
           id="input"
           rows="1"
@@ -1434,9 +1546,12 @@
       var input = document.getElementById("input");
       var sendBtn = document.getElementById("send-btn");
       var stopBtn = document.getElementById("stop-btn");
+      var micBtn = document.getElementById("mic-btn");
+      var micPermissionBadge = document.getElementById("mic-permission-badge");
       var btnFast = document.getElementById("btn-fast");
       var btnHeavy = document.getElementById("btn-heavy");
       var btnClear = document.getElementById("btn-clear");
+      var btnTts = document.getElementById("btn-tts");
       var providerSelect = document.getElementById("provider-select");
       var apiKeyRow = document.getElementById("api-key-row");
       var apiKeyInput = document.getElementById("api-key-input");
@@ -2102,6 +2217,11 @@
               bubble._rawSource = bubble._rawText;
               bubble.innerHTML = "";
               bubble.appendChild(renderContent(bubble._rawText));
+              
+              // Speak the response if TTS is enabled
+              if (ttsEnabled) {
+                speakText(bubble._rawText);
+              }
             }
           }
           currentMessage = null;
@@ -2183,8 +2303,8 @@
           if (fixButton) {
             fixButton.click();
           }
-        } else if (msg.type === "prefillMessage") {
-          // Pre-fill input with message from Quick Fix
+        } else if (msg.type === "prefillAndSend") {
+          // Quick Fix with AI: pre-fill input and auto-send
           input.value = msg.message || "";
           input.style.height = "38px";
           input.style.height = Math.min(input.scrollHeight, 120) + "px";
@@ -2301,6 +2421,308 @@
           addActivity("Search failed: " + msg.error, "error");
         }
       });
+
+      // Speech Recognition (STT)
+      var recognition = null;
+      var isRecording = false;
+
+      // Text-to-Speech (TTS)
+      var ttsEnabled = false;
+      var currentUtterance = null;
+      var ttsVoice = null;
+
+      function initTextToSpeech() {
+        if (!('speechSynthesis' in window)) {
+          console.log('[TTS] Text-to-speech not supported');
+          btnTts.classList.add('disabled');
+          btnTts.title = 'Text-to-speech not supported in this browser';
+          return false;
+        }
+
+        // Load voices
+        function loadVoices() {
+          var voices = speechSynthesis.getVoices();
+          // Prefer English voices
+          ttsVoice = voices.find(v => v.lang.startsWith('en-')) || voices[0];
+          console.log('[TTS] Selected voice:', ttsVoice ? ttsVoice.name : 'default');
+        }
+
+        loadVoices();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+          speechSynthesis.onvoiceschanged = loadVoices;
+        }
+
+        return true;
+      }
+
+      function toggleTTS() {
+        if (btnTts.classList.contains('disabled')) {
+          addRow('Text-to-speech is not supported in this browser.', 'status');
+          return;
+        }
+
+        ttsEnabled = !ttsEnabled;
+        btnTts.classList.toggle('active', ttsEnabled);
+        
+        if (ttsEnabled) {
+          btnTts.textContent = '🔊 TTS';
+          addRow('✅ Text-to-speech enabled. AI responses will be read aloud.', 'status');
+          addActivity('TTS enabled', 'success');
+        } else {
+          btnTts.textContent = '🔇 TTS';
+          addRow('🔇 Text-to-speech disabled.', 'status');
+          addActivity('TTS disabled', 'info');
+          // Stop any ongoing speech
+          if (currentUtterance) {
+            speechSynthesis.cancel();
+            currentUtterance = null;
+          }
+        }
+      }
+
+      function speakText(text) {
+        if (!ttsEnabled || !text || !('speechSynthesis' in window)) {
+          return;
+        }
+
+        // Stop any ongoing speech
+        if (currentUtterance) {
+          speechSynthesis.cancel();
+        }
+
+        // Clean text for speech (remove code blocks, special chars, etc.)
+        var cleanText = text
+          .replace(/```[\s\S]*?```/g, ' code block ') // Replace code blocks
+          .replace(/`[^`]+`/g, ' code ') // Replace inline code
+          .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold
+          .replace(/\*([^*]+)\*/g, '$1') // Remove italic
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove markdown links
+          .replace(/#{1,6}\s+/g, '') // Remove headers
+          .replace(/[\u2705\u274c\u26a0\ufe0f\u26a1\ud83d\udd0d\ud83d\udcdd\ud83d\udd27]/g, '') // Remove emojis
+          .replace(/\s+/g, ' ') // Collapse whitespace
+          .trim();
+
+        if (!cleanText || cleanText.length < 3) {
+          return;
+        }
+
+        // Limit length to avoid very long speeches
+        if (cleanText.length > 500) {
+          cleanText = cleanText.substring(0, 500) + '... response truncated for speech.';
+        }
+
+        currentUtterance = new SpeechSynthesisUtterance(cleanText);
+        if (ttsVoice) {
+          currentUtterance.voice = ttsVoice;
+        }
+        currentUtterance.rate = 1.1; // Slightly faster
+        currentUtterance.pitch = 1.0;
+        currentUtterance.volume = 0.9;
+
+        currentUtterance.onstart = function() {
+          console.log('[TTS] Speaking:', cleanText.substring(0, 50) + '...');
+          addActivity('Speaking response', 'info');
+        };
+
+        currentUtterance.onend = function() {
+          console.log('[TTS] Speech ended');
+          currentUtterance = null;
+        };
+
+        currentUtterance.onerror = function(event) {
+          console.error('[TTS] Speech error:', event.error);
+          currentUtterance = null;
+        };
+
+        speechSynthesis.speak(currentUtterance);
+      }
+
+      btnTts.onclick = toggleTTS;
+
+      function initSpeechRecognition() {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+          console.log('[STT] Speech recognition not supported');
+          micBtn.classList.add('disabled');
+          micBtn.title = 'Speech recognition not supported in this browser';
+          return false;
+        }
+
+        var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = function() {
+          console.log('[STT] Recording started');
+          isRecording = true;
+          micBtn.classList.add('recording');
+          micBtn.title = 'Recording... Click to stop';
+          addRow('✅ Microphone access granted! Speak now...', 'status');
+          addActivity('Voice recording started', 'success');
+        };
+
+        recognition.onresult = function(event) {
+          var transcript = '';
+          for (var i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          input.value = transcript;
+          input.style.height = '38px';
+          input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+        };
+
+        recognition.onerror = function(event) {
+          console.error('[STT] Recognition error:', event.error);
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          micBtn.title = 'Voice input (click to start/stop recording)';
+          
+          var errorMsg = 'Voice recognition error: ' + event.error;
+          if (event.error === 'no-speech') {
+            errorMsg = 'No speech detected. Please try again.';
+          } else if (event.error === 'not-allowed') {
+            errorMsg = 'Microphone access denied. Please allow microphone access in browser settings.';
+          } else if (event.error === 'network') {
+            errorMsg = 'Network error. Check your internet connection.';
+          }
+          
+          addRow(errorMsg, 'status');
+          addActivity(errorMsg, 'error');
+        };
+
+        recognition.onend = function() {
+          console.log('[STT] Recording ended');
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          micBtn.title = 'Voice input (click to start/stop recording)';
+          addActivity('Voice recording stopped', 'info');
+        };
+
+        return true;
+      }
+
+      function updateMicPermissionBadge(state) {
+        micPermissionBadge.style.display = 'flex';
+        micPermissionBadge.className = '';
+        
+        if (state === 'granted') {
+          micPermissionBadge.classList.add('granted');
+          micPermissionBadge.textContent = '🔓';
+          micPermissionBadge.title = 'Microphone access granted';
+        } else if (state === 'denied') {
+          micPermissionBadge.classList.add('denied');
+          micPermissionBadge.textContent = '🔒';
+          micPermissionBadge.title = 'Microphone access denied - Click lock icon in address bar';
+        } else if (state === 'prompt') {
+          micPermissionBadge.classList.add('prompt');
+          micPermissionBadge.textContent = '❓';
+          micPermissionBadge.title = 'Click to request microphone access';
+        }
+      }
+
+      function checkMicPermission() {
+        if (!navigator.permissions || !navigator.permissions.query) {
+          updateMicPermissionBadge('prompt');
+          return;
+        }
+        
+        navigator.permissions.query({ name: 'microphone' })
+          .then(function(result) {
+            updateMicPermissionBadge(result.state);
+            
+            result.onchange = function() {
+              updateMicPermissionBadge(result.state);
+              if (result.state === 'granted') {
+                addRow('✅ Microphone access granted!', 'status');
+                addActivity('Microphone permission granted', 'success');
+              } else if (result.state === 'denied') {
+                addRow('🔒 Microphone access denied. Click the lock icon (🔒) in your browser address bar to allow access.', 'status');
+                addActivity('Microphone permission denied', 'error');
+              }
+            };
+          })
+          .catch(function(error) {
+            console.log('[Mic] Permission query not supported:', error);
+            updateMicPermissionBadge('prompt');
+          });
+      }
+
+      function toggleRecording() {
+        if (micBtn.classList.contains('disabled')) {
+          addRow('Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.', 'status');
+          return;
+        }
+
+        if (isRecording) {
+          if (recognition) {
+            recognition.stop();
+          }
+          return;
+        }
+
+        // Request microphone permission first using getUserMedia
+        updateMicPermissionBadge('prompt');
+        addRow('🎤 Requesting microphone access... Please allow when prompted.', 'status');
+        addActivity('Requesting microphone permission', 'info');
+
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then(function(stream) {
+            console.log('[STT] Microphone permission granted');
+            updateMicPermissionBadge('granted');
+            
+            // Stop the stream immediately - we just needed permission
+            stream.getTracks().forEach(function(track) {
+              track.stop();
+            });
+            
+            // Now initialize and start speech recognition
+            if (!recognition) {
+              if (!initSpeechRecognition()) {
+                return;
+              }
+            }
+            
+            try {
+              recognition.start();
+            } catch (error) {
+              console.error('[STT] Failed to start recognition:', error);
+              addRow('Failed to start voice recognition: ' + error.message, 'status');
+              addActivity('Failed to start voice recognition', 'error');
+            }
+          })
+          .catch(function(error) {
+            console.error('[STT] Microphone permission denied:', error);
+            updateMicPermissionBadge('denied');
+            
+            var errorMsg = '🎤 Microphone access denied.';
+            
+            if (error.name === 'NotFoundError') {
+              errorMsg = '❌ No microphone found. Please connect a microphone and try again.';
+            } else if (error.name === 'NotAllowedError') {
+              errorMsg = '🔒 Microphone access denied.\n\n' +
+                        'To allow microphone access:\n' +
+                        '1. Look for the 🔒 lock icon in your browser\'s address bar (top-left corner)\n' +
+                        '2. Click it and find "Microphone" in the dropdown\n' +
+                        '3. Change it to "Allow"\n' +
+                        '4. Reload this page (F5)\n' +
+                        '5. Click the 🎤 button again\n\n' +
+                        'The lock icon is in the address bar where you see: vscode-webview://...';
+            } else if (error.name === 'NotReadableError') {
+              errorMsg = '⚠️ Microphone is in use by another application. Close other apps using the microphone and try again.';
+            }
+            
+            addRow(errorMsg, 'status');
+            addActivity(errorMsg, 'error');
+          });
+      }
+
+      micBtn.onclick = toggleRecording;
+
+      // Initialize speech recognition and TTS on load
+      initSpeechRecognition();
+      initTextToSpeech();
+      checkMicPermission();
 
       // Init
       vscode.postMessage({ type: "ready" });

@@ -1786,6 +1786,14 @@ ${trimmedText}`;
         // Mark tutorial as completed in global state
         await this.context.globalState.update("codeJanitor.tutorialCompleted", true);
         console.log("[ChatPanel] Tutorial marked as completed");
+      } else if (message.type === "prefillMessage") {
+        // Quick Fix with AI: pre-fill message and auto-send
+        if (this.panel) {
+          this.panel.webview.postMessage({ 
+            type: "prefillAndSend", 
+            message: message.message 
+          });
+        }
       } else if (message.type === "webSearch") {
         try {
           const query = (message.query || "").trim();
