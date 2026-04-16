@@ -724,7 +724,10 @@ async function activate(context) {
   const graphifyPanel = new GraphifyPanel(context)
   const graphifyDisposable = vscode.commands.registerCommand(
     "codeJanitor.openGraphify",
-    () => graphifyPanel.show()
+    () => {
+      console.log("[Extension] codeJanitor.openGraphify command triggered");
+      graphifyPanel.show();
+    }
   )
   context.subscriptions.push(graphifyDisposable)
   console.log("✓ Graphify command registered.")

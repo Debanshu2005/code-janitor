@@ -2978,6 +2978,7 @@ ${userMessage}`
       const { workspaceRoot, fullPath, outsideWorkspace } =
         this._resolveWorkspacePath(filePath)
 
+      // If outside workspace and not explicitly allowed, ask for permission
       if (outsideWorkspace && !allowOutsideWorkspace) {
         return { success: false, error: "outside_workspace", path: fullPath }
       }
@@ -3088,6 +3089,8 @@ ${userMessage}`
       }
 
       const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(targetPath)
+      
+      // If outside workspace and not explicitly allowed, return error for chat panel to handle
       if (outsideWorkspace && !allowOutsideWorkspace) {
         return { success: false, error: "outside_workspace", path: fullPath }
       }

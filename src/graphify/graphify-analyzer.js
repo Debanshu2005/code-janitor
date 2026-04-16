@@ -12,6 +12,23 @@ class GraphifyAnalyzer {
 
   async generateKnowledgeGraph() {
     const outputDir = path.join(this.workspaceRoot, "graphify-out")
+    
+    // Check if we're writing outside workspace
+    const workspaceFolders = vscode.workspace.workspaceFolders
+    if (!workspaceFolders || !outputDir.startsWith(workspaceFolders[0].uri.fsPath)) {
+      // Ask for permission to write outside workspace
+      const answer = await vscode.window.showWarningMessage(
+        `Graphify wants to create files outside the workspace at:\n${outputDir}\n\nAllow this operation?`,
+        { modal: true },
+        "Allow",
+        "Deny"
+      )
+      
+      if (answer !== "Allow") {
+        throw new Error("User denied permission to write outside workspace")
+      }
+    }
+    
     await fs.mkdir(outputDir, { recursive: true })
 
     // Analyze codebase
@@ -282,12 +299,49 @@ Before searching raw files, consult this report to understand:
   }
 
   async generateAgentConfigs() {
+    // Verify all paths are within workspace
+    const workspaceFolders = vscode.workspace.workspaceFolders
+    if (!workspaceFolders) {
+      throw new Error("No workspace folder open")
+    }
+    const workspaceRoot = workspaceFolders[0].uri.fsPath
+    
     const configs = {
       claude: this.generateClaudeConfig(),
       cursor: this.generateCursorConfig(),
       gemini: this.generateGeminiConfig(),
       antigravity: this.generateAntigravityConfig(),
       agents: this.generateAgentsConfig()
+    }
+
+    // Collect all files that will be written outside workspace
+    const outsideFiles = []
+    const filesToWrite = [
+      { path: path.join(this.workspaceRoot, "CLAUDE.md"), name: "CLAUDE.md" },
+      { path: path.join(this.workspaceRoot, ".cursor", "rules", "graphify.mdc"), name: ".cursor/rules/graphify.mdc" },
+      { path: path.join(this.workspaceRoot, "GEMINI.md"), name: "GEMINI.md" },
+      { path: path.join(this.workspaceRoot, ".agent", "rules", "graphify.md"), name: ".agent/rules/graphify.md" },
+      { path: path.join(this.workspaceRoot, "AGENTS.md"), name: "AGENTS.md" }
+    ]
+
+    for (const file of filesToWrite) {
+      if (!file.path.startsWith(workspaceRoot)) {
+        outsideFiles.push(file.name)
+      }
+    }
+
+    // Ask for permission if any files are outside workspace
+    if (outsideFiles.length > 0) {
+      const answer = await vscode.window.showWarningMessage(
+        `Graphify wants to create/modify these files outside the workspace:\n\n${outsideFiles.join('\n')}\n\nAllow this operation?`,
+        { modal: true },
+        "Allow",
+        "Deny"
+      )
+      
+      if (answer !== "Allow") {
+        throw new Error("User denied permission to write outside workspace")
+      }
     }
 
     // Write CLAUDE.md

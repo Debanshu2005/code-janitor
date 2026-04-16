@@ -1549,17 +1549,31 @@ ${trimmedText}`;
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
             } else if (action.type === "graphify") {
+              console.log("[ChatPanel] Executing graphify action");
+              
+              // Check if workspace is open
+              if (!workspaceFolder) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: "Cannot open Graphify: No workspace folder is open. Please open a folder or workspace first."
+                });
+                continue;
+              }
+              
               this.panel.webview.postMessage({ type: "status", text: "Opening Graphify visualization..." });
               try {
+                console.log("[ChatPanel] Calling vscode.commands.executeCommand('codeJanitor.openGraphify')");
                 await vscode.commands.executeCommand("codeJanitor.openGraphify");
+                console.log("[ChatPanel] Graphify command executed successfully");
                 this.panel.webview.postMessage({
                   type: "applied",
                   text: "\u2705 Graphify panel opened. You can now visualize the codebase structure."
                 });
               } catch (err) {
+                console.error("[ChatPanel] Graphify command failed:", err);
                 this.panel.webview.postMessage({
                   type: "error",
-                  text: `Failed to open Graphify: ${err.message}`
+                  text: `Failed to open Graphify: ${err.message}\n\nStack: ${err.stack}`
                 });
               }
             } else if (action.type === "fetch") {
