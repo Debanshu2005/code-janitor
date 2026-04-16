@@ -45,22 +45,30 @@ To install Code Janitor, follow these steps:
 1. **Format Code**: Use `Alt+D` or Command Palette → `Code Janitor: Format Code`
 2. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
 3. **Live Preview**: Use `Alt+P` or Command Palette → `Code Janitor: Live Preview`
-4. **Graphify**: Use `Ctrl+Alt+G` or Command Palette → `Code Janitor: Graphify`
-`Code Janitor: Live Preview`
+
 
    <img width="1920" height="1020" alt="Screenshot 2026-04-06 205439" src="https://github.com/user-attachments/assets/5620f974-e99d-4447-85e2-5c2ba09a14e6" />
 
+   
+4. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
+
+   
+   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
+
+   
+5. **Graphify**: Use `Ctrl+Alt+G` or Command Palette → `Code Janitor: Graphify`
+   
+   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/2e7276ec-4fdf-4745-8fe3-83da20377be6" />
+
 **AI Chat Features:**
+
+
 - Syntax checking for JS, TS, Python, Java, C/C++, JSON, and HTML
 - Code generation and refactoring
 - Bug fixing and debugging assistance
 - Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
 - **Self-Healing**: Automatically detects slow models and switches to faster alternatives
-
-4. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
-   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
-
-5. **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
+- **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
    - Track response times
    - Monitor model performance
    - View auto-heal history
