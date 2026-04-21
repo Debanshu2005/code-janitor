@@ -220,6 +220,16 @@
         "command": "codeJanitor.showPerformance",
         "title": "Show AI Performance Report",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.quickFixWithAI",
+        "title": "Quick Fix with AI",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.quickFixAllWithAI",
+        "title": "Quick Fix All with AI",
+        "category": "Code Janitor"
       }
     ],
     "menus": {

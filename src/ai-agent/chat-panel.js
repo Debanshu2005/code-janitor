@@ -1688,6 +1688,9 @@ ${trimmedText}`;
         await this._runSyntaxScan(workspaceFolder, files);
       } else if (message.type === "fixActive") {
         await this._runActiveSyntaxFix(workspaceFolder);
+      } else if (message.type === "quickFixActive") {
+        // Quick Fix from chat panel - lint and fix with AI
+        await this._runActiveSyntaxFix(workspaceFolder);
       } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {

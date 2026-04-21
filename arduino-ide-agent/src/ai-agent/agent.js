@@ -50,10 +50,11 @@ const STOP_WORDS = new Set([
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
 const NVIDIA_MODELS = new Set([
-  "nvidia/minimax-m2.7",
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.1-70b-instruct",
   "nvidia/llama-3.1-nemotron-70b-instruct",
-  "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-  "nvidia/llama-3.1-nemotron-51b-instruct"
+  "mistralai/mistral-7b-instruct-v0.3",
+  "minimaxi/minimax-m2.7"
 ])
 
 class AIAgent {
@@ -83,7 +84,7 @@ class AIAgent {
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai")
 
-    const configProvider = config.get("provider", "ollama")
+    const configProvider = config.get("provider", "nvidia")
     const stateProvider = this.context
       ? this.context.globalState.get("codeJanitor.ai.provider", "")
       : ""
@@ -96,11 +97,11 @@ class AIAgent {
       normalizedConfigProvider &&
       normalizedStateProvider !== normalizedConfigProvider
         ? normalizedStateProvider
-        : normalizedConfigProvider || normalizedStateProvider || "ollama"
+        : normalizedConfigProvider || normalizedStateProvider || "nvidia"
 
     const genericModel = String(config.get("model", "") || "").trim()
     const nvidiaModel = String(
-      config.get("nvidiaModel", "nvidia/minimax-m2.7") || ""
+      config.get("nvidiaModel", "meta/llama-3.1-8b-instruct") || ""
     ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
@@ -147,22 +148,22 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
-    if (provider === "nvidia") return "nvidia/minimax-m2.7"
+    if (provider === "nvidia") return "meta/llama-3.1-8b-instruct"
     return "qwen2.5-coder:1.5b"
   }
 
   _sanitizeNvidiaModel(model) {
     const value = typeof model === "string" ? model.trim() : ""
-    if (!value) return "nvidia/minimax-m2.7"
+    if (!value) return "meta/llama-3.1-8b-instruct"
     if (NVIDIA_MODELS.has(value)) return value
     if (
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
         value
       )
     ) {
-      return "nvidia/minimax-m2.7"
+      return "meta/llama-3.1-8b-instruct"
     }
-    return "nvidia/minimax-m2.7"
+    return "meta/llama-3.1-8b-instruct"
   }
 
   _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
@@ -215,12 +216,12 @@ class AIAgent {
 
   async _prepareRuntimeConfig(config, reportStatus) {
     if (!config || config.provider !== "ollama") {
-      return config
+      return { ...config }
     }
 
     const models = await this._fetchOllamaModelNames(config.ollamaUrl)
     if (models.length === 0) {
-      return config
+      return { ...config }
     }
 
     const resolvedModel = this._pickOllamaModel(models, config.model)
@@ -256,8 +257,14 @@ class AIAgent {
     }
 
     if (config?.provider === "nvidia") {
+      if (/\b429\b|rate limit|quota|too many requests/i.test(message)) {
+        return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
+      }
       if (/\b404\b|page not found|not found/i.test(message)) {
-        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try nvidia/minimax-m2.7.`
+        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxi/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
+      }
+      if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
+        return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`
       }
     }
 
@@ -379,6 +386,8 @@ class AIAgent {
       }
     }
     if (config.provider === "nvidia") {
+      const maskedKey = config.nvidiaApiKey ? `${config.nvidiaApiKey.slice(0, 8)}...${config.nvidiaApiKey.slice(-4)}` : "(none)";
+      console.log(`[CodeJanitor] Using NVIDIA API key: ${maskedKey}`);
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
         headers: {
@@ -1003,6 +1012,9 @@ ${resolvedMessage}`
         prompt,
         mode,
         reqIntent
+      )
+      console.log(
+        `[CodeJanitor] Sending request to: ${reqOpts.url} with provider: ${runtimeConfig.provider}`
       )
       const response = await fetch(reqOpts.url, {
         method: "POST",

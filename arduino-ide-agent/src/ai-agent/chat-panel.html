@@ -962,7 +962,7 @@
     <div id="header">
       <div id="header-left">
         <div id="header-title">Code Janitor AI</div>
-        <div id="header-sub">Ollama</div>
+        <div id="header-sub">NVIDIA</div>
       </div>
       <div id="header-controls">
         <div id="connectivity-status" class="checking">
@@ -971,11 +971,11 @@
         </div>
         <div class="divider"></div>
         <select id="provider-select" title="AI Provider">
+          <option value="nvidia">🚀 NVIDIA NIM</option>
           <option value="ollama">🖥 Ollama (local)</option>
           <option value="groq">⚡ Groq (cloud)</option>
           <option value="openrouter">🌐 OpenRouter</option>
           <option value="anthropic">🤖 Anthropic (Claude)</option>
-          <option value="nvidia">🚀 NVIDIA NIM</option>
         </select>
         <select id="model-select" title="Switch model">
           <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
@@ -1443,11 +1443,11 @@
           "claude-3-opus-20240229",
         ],
         nvidia: [
-          "minimaxai/minimax-m2.7",
           "meta/llama-3.1-8b-instruct",
           "meta/llama-3.1-70b-instruct",
-          "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-          "mistralai/mistral-nemotron"
+          "nvidia/llama-3.1-nemotron-70b-instruct",
+          "mistralai/mistral-7b-instruct-v0.3",
+          "minimaxi/minimax-m2.7"
         ],
       };
 

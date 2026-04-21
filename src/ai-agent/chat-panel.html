@@ -1540,6 +1540,7 @@
         <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
         <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
         <div class="action-chip" data-action="graphify">📊 Graphify</div>
+        <div class="action-chip" data-action="quickfix">🔧 Quick Fix</div>
         <div class="action-chip" data-action="explain">💡 Explain file</div>
         <div class="action-chip" data-action="fix">🔧 Fix issues</div>
         <div class="action-chip" data-action="refactor">♻️ Refactor</div>
@@ -2210,6 +2211,11 @@
           }
           if (action === "scan") {
             vscode.postMessage({ type: "syntaxScan", activeOnly: false });
+            return;
+          }
+          // Quick Fix - lint and fix errors with AI
+          if (action === "quickfix") {
+            vscode.postMessage({ type: "quickFixActive" });
             return;
           }
           // Graphify opens the visualization and tells AI to use the graph
