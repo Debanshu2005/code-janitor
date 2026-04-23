@@ -428,7 +428,7 @@ class ChatPanel {
         const hasLibraryError = errors.some(e => e.isLibraryError);
         
         if (hasLibraryError) {
-          const libraryMsg = `\n\n📚 ${file}: Missing library detected. Please install the required library using Library Manager.`;
+          const libraryMsg = `\n\n📚 ${file}: Missing library detected. Use "📚 Check libraries" to compare imports vs installed and get install commands.`;
           this.panel.webview.postMessage({ type: "stream", text: libraryMsg });
           continue;
         }
@@ -480,6 +480,351 @@ class ChatPanel {
       });
       this.panel.webview.postMessage({ type: "done" });
     }
+  }
+
+  _isLibraryAuditRequest(message) {
+    const text = message || "";
+    return (
+      /\b(check|scan|find|compare|audit|verify)\b.*\b(librar(?:y|ies)|#include|import(?:ed|s)?)\b/i.test(text) &&
+      /\b(installed|missing|not installed|install|imported|included)\b/i.test(text)
+    ) || /\bwhich libraries are installed\b/i.test(text);
+  }
+
+  _extractIncludeHeaders(content) {
+    const headers = new Set();
+    const includeRegex = /^\s*#include\s*[<"]([^">]+)[">]/gm;
+    let match;
+    while ((match = includeRegex.exec(content || "")) !== null) {
+      const header = (match[1] || "").trim();
+      if (header) headers.add(header);
+    }
+    return Array.from(headers);
+  }
+
+  _normalizeLibraryToken(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  _isCoreOrSystemHeader(header) {
+    const normalized = String(header || "").trim().toLowerCase();
+    const base = path.basename(normalized).replace(/\.(h|hpp)$/i, "");
+    const coreHeaders = new Set([
+      "arduino",
+      "binary",
+      "ctype",
+      "errno",
+      "float",
+      "limits",
+      "math",
+      "new",
+      "pgmspace",
+      "pins_arduino",
+      "stdbool",
+      "stdint",
+      "stdio",
+      "stdlib",
+      "stream",
+      "string",
+      "time",
+      "utility",
+      "vector",
+      "wiring_private"
+    ]);
+    return (
+      coreHeaders.has(base) ||
+      normalized.startsWith("avr/") ||
+      normalized.startsWith("sys/") ||
+      normalized.startsWith("bits/")
+    );
+  }
+
+  async _collectArduinoImports(workspaceFolder) {
+    const files = await vscode.workspace.findFiles(
+      "**/*.{ino,pde,h,hpp,c,cpp,cc,cxx}",
+      "**/{.git,node_modules,build,dist,out,.arduinoIDE,.pio}/**"
+    );
+
+    const imports = new Map();
+    for (const uri of files) {
+      if (uri.scheme !== "file") continue;
+      const relativePath = path.relative(workspaceFolder, uri.fsPath).replace(/\\/g, "/");
+      try {
+        const content = await fs.promises.readFile(uri.fsPath, "utf8");
+        imports.set(relativePath, this._extractIncludeHeaders(content));
+      } catch (_) {
+        // Ignore unreadable files; audit should continue.
+      }
+    }
+    return imports;
+  }
+
+  _parseInstalledLibraries(listOutput) {
+    const names = new Set();
+    const raw = (listOutput || "").trim();
+    if (!raw) return [];
+
+    try {
+      const parsed = JSON.parse(raw);
+      const queue = Array.isArray(parsed) ? parsed.slice() : [parsed];
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (!item) continue;
+        if (Array.isArray(item)) {
+          queue.push(...item);
+          continue;
+        }
+        if (typeof item === "object") {
+          const candidateName =
+            item.name ||
+            item.library?.name ||
+            item.Library?.Name ||
+            item.Name;
+          if (candidateName && typeof candidateName === "string") {
+            names.add(candidateName.trim());
+          }
+          for (const value of Object.values(item)) {
+            if (value && typeof value === "object") queue.push(value);
+          }
+        }
+      }
+    } catch (_) {
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || /^name\s+/i.test(trimmed) || /^[-=]{3,}/.test(trimmed)) continue;
+        const columnSplit = trimmed.split(/\s{2,}/);
+        const candidate = columnSplit[0]?.trim();
+        if (candidate && !/^library$/i.test(candidate)) {
+          names.add(candidate);
+        }
+      }
+    }
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+
+  async _searchArduinoLibraryCandidates(workspaceFolder, term) {
+    const safeTerm = String(term || "").replace(/"/g, "").trim();
+    if (!safeTerm) return [];
+
+    const searchCommand = `arduino-cli lib search "${safeTerm}" --format json`;
+    const result = await this.agent.executeCommand(searchCommand, workspaceFolder);
+    if (!result.success) return [];
+
+    try {
+      const parsed = JSON.parse(result.output || "{}");
+      const items = Array.isArray(parsed?.libraries)
+        ? parsed.libraries
+        : Array.isArray(parsed)
+          ? parsed
+          : [];
+      return items
+        .map((entry) => entry?.name || entry?.library?.name || entry?.Name)
+        .filter((name) => typeof name === "string" && name.trim().length > 0)
+        .slice(0, 3);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  _looksLikeConfidentLibraryMatch(header, candidateName) {
+    const baseName = path.basename(String(header || "")).replace(/\.(h|hpp)$/i, "");
+    const headerToken = this._normalizeLibraryToken(baseName);
+    const candidateToken = this._normalizeLibraryToken(candidateName || "");
+    if (!headerToken || !candidateToken) return false;
+    return (
+      candidateToken.includes(headerToken) ||
+      headerToken.includes(candidateToken)
+    );
+  }
+
+  async _fetchInternetLibraryGuidance(libraryOrHeader) {
+    if (typeof fetch !== "function") return null;
+    const baseName = path.basename(String(libraryOrHeader || "")).replace(/\.(h|hpp)$/i, "");
+    if (!baseName) return null;
+
+    const query = `Arduino IDE 2 install library ${baseName}`;
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    try {
+      const timeoutSignal =
+        typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(12000)
+          : undefined;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Code-Janitor-Arduino/1.0" },
+        signal: timeoutSignal
+      });
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const summary = (data?.AbstractText || "").trim();
+      const sourceUrl = (data?.AbstractURL || "").trim();
+
+      const related = [];
+      const collectRelated = (items) => {
+        if (!Array.isArray(items)) return;
+        for (const item of items) {
+          if (!item) continue;
+          if (Array.isArray(item.Topics)) {
+            collectRelated(item.Topics);
+            continue;
+          }
+          const text = (item.Text || "").trim();
+          const link = (item.FirstURL || "").trim();
+          if (text && link) related.push({ text, link });
+          if (related.length >= 3) return;
+        }
+      };
+      collectRelated(data?.RelatedTopics);
+
+      if (!summary && !sourceUrl && related.length === 0) {
+        return null;
+      }
+
+      return { summary, sourceUrl, related };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async _runArduinoLibraryAudit(workspaceFolder) {
+    if (!workspaceFolder) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Open a sketch/workspace first so I can inspect imports and installed libraries."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    this.panel.webview.postMessage({ type: "thinking" });
+    this.panel.webview.postMessage({
+      type: "status",
+      text: "Auditing Arduino libraries (imports vs installed)..."
+    });
+
+    const importMap = await this._collectArduinoImports(workspaceFolder);
+    const importedHeaders = new Set();
+    for (const headers of importMap.values()) {
+      for (const header of headers) {
+        importedHeaders.add(header);
+      }
+    }
+
+    if (importedHeaders.size === 0) {
+      this.panel.webview.postMessage({
+        type: "stream",
+        text: "No `#include` imports were found in Arduino source files."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    const installedResult = await this.agent.executeCommand("arduino-cli lib list --format json", workspaceFolder);
+    if (!installedResult.success) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: `Could not list installed Arduino libraries. ${installedResult.error || "Run \`arduino-cli lib list\` manually."}`
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    const installedLibraries = this._parseInstalledLibraries(installedResult.output);
+    const installedTokens = new Set(
+      installedLibraries.map((name) => this._normalizeLibraryToken(name)).filter(Boolean)
+    );
+
+    const matched = [];
+    const missing = [];
+    const ignoredCore = [];
+
+    for (const header of Array.from(importedHeaders).sort((a, b) => a.localeCompare(b))) {
+      if (this._isCoreOrSystemHeader(header)) {
+        ignoredCore.push(header);
+        continue;
+      }
+
+      const baseName = path.basename(header).replace(/\.(h|hpp)$/i, "");
+      const token = this._normalizeLibraryToken(baseName);
+      const isInstalled = Array.from(installedTokens).some((installedToken) =>
+        installedToken.includes(token) || token.includes(installedToken)
+      );
+
+      if (isInstalled) {
+        matched.push(header);
+      } else {
+        missing.push(header);
+      }
+    }
+
+    let report = `📚 Arduino Library Audit\n\n`;
+    report += `Imported headers: ${importedHeaders.size}\n`;
+    report += `Installed libraries detected: ${installedLibraries.length}\n`;
+    report += `Matched imports: ${matched.length}\n`;
+    report += `Missing imports: ${missing.length}\n`;
+
+    if (matched.length > 0) {
+      report += `\n✅ Matched imports:\n`;
+      for (const header of matched.slice(0, 10)) {
+        report += `- ${header}\n`;
+      }
+    }
+
+    if (ignoredCore.length > 0) {
+      report += `\nℹ️ Ignored core/system headers:\n`;
+      for (const header of ignoredCore.slice(0, 8)) {
+        report += `- ${header}\n`;
+      }
+    }
+
+    if (missing.length === 0) {
+      report += `\n✅ No missing libraries detected from your imports.\n`;
+      this.panel.webview.postMessage({ type: "stream", text: report });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    report += `\n❌ Missing library candidates:\n`;
+    this.panel.webview.postMessage({
+      type: "status",
+      text: "Checking internet guidance for uncertain library matches..."
+    });
+    for (const header of missing) {
+      const baseName = path.basename(header).replace(/\.(h|hpp)$/i, "");
+      const suggestions = await this._searchArduinoLibraryCandidates(workspaceFolder, baseName);
+      const suggestedName = suggestions[0] || baseName;
+      const searchQuery = encodeURIComponent(`Arduino ${baseName} library install`);
+      const confident = this._looksLikeConfidentLibraryMatch(header, suggestedName);
+      const webGuidance = confident
+        ? null
+        : await this._fetchInternetLibraryGuidance(baseName);
+      report += `\nHeader: ${header}\n`;
+      report += `Try install: arduino-cli lib install "${suggestedName}"\n`;
+      report += `Search command: arduino-cli lib search "${baseName}"\n`;
+      report += `Library Manager: Sketch > Include Library > Manage Libraries...\n`;
+      report += `Web search: https://duckduckgo.com/?q=${searchQuery}\n`;
+      if (!confident) {
+        report += `Confidence: low (name match uncertain)\n`;
+      }
+      if (webGuidance?.summary) {
+        report += `Internet guidance: ${webGuidance.summary}\n`;
+      }
+      if (webGuidance?.sourceUrl) {
+        report += `Internet source: ${webGuidance.sourceUrl}\n`;
+      }
+      if (Array.isArray(webGuidance?.related) && webGuidance.related.length > 0) {
+        report += `Related references:\n`;
+        for (const item of webGuidance.related) {
+          report += `- ${item.text}: ${item.link}\n`;
+        }
+      }
+    }
+
+    report += `\nOfficial docs:\n`;
+    report += `- Arduino CLI lib install: https://arduino.github.io/arduino-cli/latest/commands/arduino-cli_lib_install/\n`;
+    report += `- Arduino IDE library install guide: https://support.arduino.cc/hc/en-us/articles/5145457742236-Add-libraries-to-Arduino-IDE\n`;
+    this.panel.webview.postMessage({ type: "stream", text: report });
+    this.panel.webview.postMessage({ type: "done" });
   }
 
   _getHtmlContent() {
@@ -1516,6 +1861,11 @@ ${trimmedText}`;
           return;
         }
 
+        if (this._isLibraryAuditRequest(trimmedText)) {
+          await this._runArduinoLibraryAudit(workspaceFolder);
+          return;
+        }
+
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         if (workspaceFolder && (this.chatMode === "heavy" || ["edit", "debug", "refactor", "scan"].includes(intent))) {
           const forcePrep = this.chatMode === "heavy" || intent === "scan";
@@ -1925,6 +2275,8 @@ ${trimmedText}`;
           ? (this.lastActiveEditor ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")] : [])
           : null;
         await this._runSyntaxScan(workspaceFolder, files);
+      } else if (message.type === "libraryAudit") {
+        await this._runArduinoLibraryAudit(workspaceFolder);
       } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {

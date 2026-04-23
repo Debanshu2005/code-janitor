@@ -15,6 +15,139 @@ try {
 }
 
 let currentPanel
+let currentChangeListener
+let currentMessageListener
+let currentPreviewState
+
+function clonePreviewDiagnostics(diagnostics) {
+  return diagnostics ? JSON.parse(JSON.stringify(diagnostics)) : null
+}
+
+function createPreviewDiagnostics(documentPath, languageId, sessionId) {
+  return {
+    documentPath,
+    languageId,
+    sessionId,
+    ready: false,
+    title: "",
+    bodyTextExcerpt: "",
+    logs: [],
+    warnings: [],
+    errors: [],
+    resourceFailures: [],
+    readyAt: null
+  }
+}
+
+function pushPreviewEntry(list, entry) {
+  list.push(entry)
+  if (list.length > 20) {
+    list.shift()
+  }
+}
+
+function withPreviewInstrumentation(html, sessionId) {
+  const script = `
+<script>
+  (function () {
+    const vscode = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+    const sessionId = ${JSON.stringify(sessionId)};
+
+    function send(type, payload) {
+      if (!vscode) return;
+      vscode.postMessage(Object.assign({ type: type, sessionId: sessionId }, payload || {}));
+    }
+
+    function truncate(value, maxLength) {
+      const text = String(value == null ? "" : value);
+      return text.length > maxLength ? text.slice(0, maxLength) + "..." : text;
+    }
+
+    function stringifyArg(value) {
+      try {
+        if (typeof value === "string") return value;
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+
+    const originalConsole = {
+      log: console.log.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console)
+    };
+
+    console.log = function (...args) {
+      originalConsole.log(...args);
+      send("previewLog", { level: "log", message: truncate(args.map(stringifyArg).join(" "), 400) });
+    };
+
+    console.warn = function (...args) {
+      originalConsole.warn(...args);
+      send("previewLog", { level: "warn", message: truncate(args.map(stringifyArg).join(" "), 400) });
+    };
+
+    console.error = function (...args) {
+      originalConsole.error(...args);
+      send("previewLog", { level: "error", message: truncate(args.map(stringifyArg).join(" "), 400) });
+    };
+
+    window.addEventListener("error", function (event) {
+      const target = event && event.target;
+      if (target && target !== window) {
+        send("previewResourceError", {
+          tagName: target.tagName || "",
+          url: truncate(target.currentSrc || target.src || target.href || "", 500),
+          message: truncate("Failed to load resource", 400)
+        });
+        return;
+      }
+
+      send("previewError", {
+        message: truncate((event && (event.message || event.error && event.error.message)) || "Unknown runtime error", 600),
+        stack: truncate(event && event.error && event.error.stack ? event.error.stack : "", 2000),
+        source: truncate(event && event.filename ? event.filename : "", 500),
+        line: event && event.lineno ? event.lineno : null,
+        column: event && event.colno ? event.colno : null
+      });
+    }, true);
+
+    window.addEventListener("unhandledrejection", function (event) {
+      const reason = event && event.reason;
+      send("previewError", {
+        message: truncate(reason && reason.message ? reason.message : String(reason || "Unhandled promise rejection"), 600),
+        stack: truncate(reason && reason.stack ? reason.stack : "", 2000),
+        source: "unhandledrejection"
+      });
+    });
+
+    function reportReady() {
+      const bodyText = document.body && document.body.innerText
+        ? truncate(document.body.innerText.replace(/\\s+/g, " ").trim(), 500)
+        : "";
+      send("previewReady", {
+        title: truncate(document.title || "", 200),
+        bodyTextExcerpt: bodyText
+      });
+    }
+
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+      setTimeout(reportReady, 150);
+    } else {
+      window.addEventListener("DOMContentLoaded", function () {
+        setTimeout(reportReady, 150);
+      }, { once: true });
+    }
+  })();
+</script>`
+
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${script}</body>`)
+  }
+
+  return `${html}${script}`
+}
 
 function escapeHTML(str) {
   return str
@@ -540,7 +673,7 @@ function getLocalResourceRoots(documentPath) {
   return roots
 }
 
-function livePreviewer(context) {
+async function livePreviewer(context, options = {}) {
   const editor = vscode.window.activeTextEditor
   if (!editor) {
     return vscode.window.showInformationMessage(
@@ -596,6 +729,15 @@ function livePreviewer(context) {
     currentPanel.onDidDispose(
       () => {
         currentPanel = undefined
+        currentPreviewState = undefined
+        if (currentChangeListener) {
+          currentChangeListener.dispose()
+          currentChangeListener = undefined
+        }
+        if (currentMessageListener) {
+          currentMessageListener.dispose()
+          currentMessageListener = undefined
+        }
       },
       null,
       context.subscriptions
@@ -603,6 +745,41 @@ function livePreviewer(context) {
   }
 
   const panel = currentPanel
+  panel.title = `Live Preview: ${path.basename(document.fileName)}`
+  const inspectMode = options.inspect === true
+  const inspectTimeoutMs = Number.isFinite(options.timeoutMs)
+    ? Math.max(500, options.timeoutMs)
+    : 2500
+  const sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  currentPreviewState = createPreviewDiagnostics(
+    document.fileName,
+    languageId,
+    sessionId
+  )
+
+  let resolveInspect
+  let inspectResolved = false
+  let inspectTimeout
+  let inspectReadyDelay
+  const finishInspect = () => {
+    if (!inspectMode || inspectResolved) return
+    inspectResolved = true
+    clearTimeout(inspectTimeout)
+    clearTimeout(inspectReadyDelay)
+    resolveInspect({
+      success: true,
+      diagnostics: clonePreviewDiagnostics(currentPreviewState)
+    })
+  }
+  const inspectPromise = inspectMode
+    ? new Promise((resolve) => {
+        resolveInspect = resolve
+        inspectTimeout = setTimeout(() => finishInspect(), inspectTimeoutMs)
+      })
+    : Promise.resolve({
+        success: true,
+        diagnostics: clonePreviewDiagnostics(currentPreviewState)
+      })
 
   const updateWebview = async () => {
     const rawCode = document.getText()
@@ -621,29 +798,94 @@ function livePreviewer(context) {
           )
         : fixedCode
 
-    panel.webview.html = getWebviewContent(
-      languageId,
-      processedCode,
-      hasError,
-      document.fileName
+    panel.webview.html = withPreviewInstrumentation(
+      getWebviewContent(languageId, processedCode, hasError, document.fileName),
+      sessionId
     )
   }
 
-  updateWebview()
+  if (currentChangeListener) {
+    currentChangeListener.dispose()
+    currentChangeListener = undefined
+  }
 
-  const changeListener = vscode.workspace.onDidChangeTextDocument((event) => {
+  if (currentMessageListener) {
+    currentMessageListener.dispose()
+    currentMessageListener = undefined
+  }
+
+  currentMessageListener = panel.webview.onDidReceiveMessage((message) => {
+    if (!currentPreviewState || message?.sessionId !== currentPreviewState.sessionId) {
+      return
+    }
+
+    if (message.type === "previewReady") {
+      currentPreviewState.ready = true
+      currentPreviewState.title = message.title || ""
+      currentPreviewState.bodyTextExcerpt = message.bodyTextExcerpt || ""
+      currentPreviewState.readyAt = new Date().toISOString()
+      if (inspectMode) {
+        clearTimeout(inspectReadyDelay)
+        inspectReadyDelay = setTimeout(() => finishInspect(), 400)
+      }
+      return
+    }
+
+    if (message.type === "previewLog") {
+      const entry = {
+        level: message.level || "log",
+        message: message.message || ""
+      }
+      pushPreviewEntry(currentPreviewState.logs, entry)
+      if (entry.level === "warn") {
+        pushPreviewEntry(currentPreviewState.warnings, entry)
+      }
+      if (entry.level === "error") {
+        pushPreviewEntry(currentPreviewState.errors, entry)
+      }
+      return
+    }
+
+    if (message.type === "previewError") {
+      pushPreviewEntry(currentPreviewState.errors, {
+        message: message.message || "Unknown preview error",
+        stack: message.stack || "",
+        source: message.source || "",
+        line: message.line || null,
+        column: message.column || null
+      })
+      return
+    }
+
+    if (message.type === "previewResourceError") {
+      pushPreviewEntry(currentPreviewState.resourceFailures, {
+        tagName: message.tagName || "",
+        url: message.url || "",
+        message: message.message || "Failed to load resource"
+      })
+    }
+  })
+
+  await updateWebview()
+
+  currentChangeListener = vscode.workspace.onDidChangeTextDocument((event) => {
     if (event.document === document) {
       updateWebview()
     }
   })
 
-  panel.onDidDispose(
-    () => {
-      changeListener.dispose()
-    },
-    null,
-    context.subscriptions
-  )
+  if (!inspectMode) {
+    return {
+      success: true,
+      diagnostics: clonePreviewDiagnostics(currentPreviewState)
+    }
+  }
+
+  return inspectPromise
+}
+
+livePreviewer.getLastDiagnostics = function () {
+  return clonePreviewDiagnostics(currentPreviewState)
 }
 
 module.exports = livePreviewer

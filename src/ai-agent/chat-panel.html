@@ -139,6 +139,10 @@
       #api-key-row.visible {
         display: flex;
       }
+      #provider-add-btn {
+        border-radius: 10px;
+        padding: 4px 10px;
+      }
       #api-key-input {
         flex: 1;
         padding: 4px 8px;
@@ -160,6 +164,116 @@
         border-radius: 6px;
         font-size: 11px;
         cursor: pointer;
+      }
+
+      #custom-provider-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(4, 8, 14, 0.72);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 2500;
+        padding: 18px;
+      }
+      #custom-provider-overlay.visible {
+        display: flex;
+      }
+      #custom-provider-dialog {
+        width: min(560px, 100%);
+        background: linear-gradient(180deg, rgba(18, 26, 35, 0.98), rgba(11, 15, 20, 0.98));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        padding: 18px;
+      }
+      .provider-dialog-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .provider-dialog-head h3 {
+        font-size: 15px;
+        margin-bottom: 4px;
+      }
+      .provider-dialog-head p {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .provider-dialog-close {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 999px;
+        width: 30px;
+        height: 30px;
+        cursor: pointer;
+      }
+      .provider-form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .provider-form-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .provider-form-field.full {
+        grid-column: 1 / -1;
+      }
+      .provider-form-field label {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .provider-form-field input,
+      .provider-form-field textarea {
+        width: 100%;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 12px;
+      }
+      .provider-form-field textarea {
+        min-height: 72px;
+        resize: vertical;
+      }
+      .provider-form-field input:focus,
+      .provider-form-field textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .provider-form-help {
+        font-size: 10px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .provider-dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .provider-dialog-actions button {
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #custom-provider-cancel {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      #custom-provider-save {
+        background: var(--accent);
+        border: 1px solid rgba(88, 166, 255, 0.45);
+        color: #fff;
       }
 
       .pill-btn {
@@ -1504,6 +1618,7 @@
           <option value="anthropic">🤖 Anthropic (Claude)</option>
           <option value="nvidia">🚀 NVIDIA NIM</option>
         </select>
+        <button class="pill-btn" id="provider-add-btn" title="Add a custom provider">Add New</button>
         <select id="model-select" title="Switch model">
           <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
         </select>
@@ -1524,6 +1639,49 @@
       <button id="api-key-save" style="padding:4px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;">Save</button>
       <button id="api-key-change" style="font-size:11px;color:#3b82f6;background:none;border:none;cursor:pointer;text-decoration:underline;display:none;">Change</button>
       <a id="api-key-link" href="" style="font-size:10px;color:#3b82f6;white-space:nowrap;">Get key</a>
+    </div>
+
+    <div id="custom-provider-overlay">
+      <div id="custom-provider-dialog">
+        <div class="provider-dialog-head">
+          <div>
+            <h3>Add Custom Provider</h3>
+            <p>Add an OpenAI-compatible chat provider with its base URL, model, and API key. It will appear in the provider dropdown immediately.</p>
+          </div>
+          <button class="provider-dialog-close" id="custom-provider-close" title="Close">×</button>
+        </div>
+        <div class="provider-form-grid">
+          <div class="provider-form-field">
+            <label for="custom-provider-name">Provider Name</label>
+            <input id="custom-provider-name" type="text" placeholder="My Provider" />
+          </div>
+          <div class="provider-form-field">
+            <label for="custom-provider-model">Default Model</label>
+            <input id="custom-provider-model" type="text" placeholder="gpt-4o-mini" />
+          </div>
+          <div class="provider-form-field full">
+            <label for="custom-provider-url">Base URL</label>
+            <input id="custom-provider-url" type="text" placeholder="https://api.example.com" />
+          </div>
+          <div class="provider-form-field full">
+            <label for="custom-provider-models">Additional Models</label>
+            <textarea id="custom-provider-models" placeholder="gpt-4o-mini, gpt-4.1-mini"></textarea>
+            <div class="provider-form-help">Optional. Separate models with commas or new lines.</div>
+          </div>
+          <div class="provider-form-field full">
+            <label for="custom-provider-key">API Key</label>
+            <input id="custom-provider-key" type="password" placeholder="Paste the provider API key" />
+          </div>
+          <div class="provider-form-field full">
+            <label for="custom-provider-link">Docs / Get Key Link</label>
+            <input id="custom-provider-link" type="text" placeholder="https://provider.example.com/keys" />
+          </div>
+        </div>
+        <div class="provider-dialog-actions">
+          <button id="custom-provider-cancel">Cancel</button>
+          <button id="custom-provider-save">Save Provider</button>
+        </div>
+      </div>
     </div>
 
     <div id="progress-bar-wrap">
@@ -1605,12 +1763,23 @@
       var btnClear = document.getElementById("btn-clear");
       var btnTts = document.getElementById("btn-tts");
       var providerSelect = document.getElementById("provider-select");
+      var providerAddBtn = document.getElementById("provider-add-btn");
       var apiKeyRow = document.getElementById("api-key-row");
       var apiKeyInput = document.getElementById("api-key-input");
       var apiKeySave = document.getElementById("api-key-save");
       var apiKeyLink = document.getElementById("api-key-link");
       var apiKeyStatus = document.getElementById("api-key-status");
       var apiKeyChange = document.getElementById("api-key-change");
+      var customProviderOverlay = document.getElementById("custom-provider-overlay");
+      var customProviderName = document.getElementById("custom-provider-name");
+      var customProviderUrl = document.getElementById("custom-provider-url");
+      var customProviderModel = document.getElementById("custom-provider-model");
+      var customProviderModels = document.getElementById("custom-provider-models");
+      var customProviderKey = document.getElementById("custom-provider-key");
+      var customProviderLink = document.getElementById("custom-provider-link");
+      var customProviderSave = document.getElementById("custom-provider-save");
+      var customProviderCancel = document.getElementById("custom-provider-cancel");
+      var customProviderClose = document.getElementById("custom-provider-close");
 
       function showKeySaved() {
         apiKeyInput.style.display = "none";
@@ -1648,19 +1817,41 @@
         }, 600);
       }
 
-      var providerLinks = {
-        groq: "https://console.groq.com/keys",
-        openrouter: "https://openrouter.ai/keys",
-        anthropic: "https://console.anthropic.com/settings/keys",
-        nvidia: "https://build.nvidia.com/explore/discover"
+      var builtInProviderMeta = {
+        ollama: { id: "ollama", label: "🖥 Ollama (local)", requiresKey: false, models: [] },
+        groq: { id: "groq", label: "⚡ Groq (cloud)", requiresKey: true, apiKeyLink: "https://console.groq.com/keys", models: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"] },
+        openrouter: { id: "openrouter", label: "🌐 OpenRouter", requiresKey: true, apiKeyLink: "https://openrouter.ai/keys", models: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"] },
+        anthropic: { id: "anthropic", label: "🤖 Anthropic (Claude)", requiresKey: true, apiKeyLink: "https://console.anthropic.com/settings/keys", models: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"] },
+        nvidia: { id: "nvidia", label: "🚀 NVIDIA NIM", requiresKey: true, apiKeyLink: "https://build.nvidia.com/explore/discover", models: ["minimaxai/minimax-m2.7","meta/llama-3.1-8b-instruct","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5","mistralai/mistral-nemotron"] }
+      };
+      var customProviderMeta = {};
+      var currentKeyPresence = {
+        groq: false,
+        openrouter: false,
+        anthropic: false,
+        nvidia: false
       };
 
-      var modelsByProvider = {
-        groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
-        openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
-        anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
-        nvidia: ["minimaxai/minimax-m2.7","meta/llama-3.1-8b-instruct","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5","mistralai/mistral-nemotron"]
-      };
+      function getProviderMeta(provider) {
+        return customProviderMeta[provider] || builtInProviderMeta[provider] || null;
+      }
+
+      function rebuildProviderOptions(selectedProvider) {
+        providerSelect.innerHTML = "";
+        Object.keys(builtInProviderMeta).forEach(function(providerId) {
+          var opt = document.createElement("option");
+          opt.value = providerId;
+          opt.textContent = builtInProviderMeta[providerId].label;
+          providerSelect.appendChild(opt);
+        });
+        Object.keys(customProviderMeta).forEach(function(providerId) {
+          var opt = document.createElement("option");
+          opt.value = providerId;
+          opt.textContent = "✨ " + (customProviderMeta[providerId].name || providerId.replace(/^custom:/, ""));
+          providerSelect.appendChild(opt);
+        });
+        if (selectedProvider) providerSelect.value = selectedProvider;
+      }
 
       function populateModels(models) {
         modelSelect.innerHTML = "";
@@ -1679,27 +1870,23 @@
         modelSelect.appendChild(opt);
       }
 
-      // Track whether keys are saved
-      var currentHasGroqKey = false;
-      var currentHasOpenrouterKey = false;
-      var currentHasAnthropicKey = false;
-      var currentHasNvidiaKey = false;
-
       function providerHasSavedKey(provider) {
-        return (provider === "groq" && currentHasGroqKey) ||
-               (provider === "openrouter" && currentHasOpenrouterKey) ||
-               (provider === "anthropic" && currentHasAnthropicKey) ||
-               (provider === "nvidia" && currentHasNvidiaKey);
+        return !!currentKeyPresence[provider];
       }
 
       function syncProviderUi(provider, selectedModel, models) {
-        var needsKey = provider === "groq" || provider === "openrouter" || provider === "anthropic" || provider === "nvidia";
+        var meta = getProviderMeta(provider);
+        var needsKey = !!(meta && meta.requiresKey);
         var hasKey = providerHasSavedKey(provider);
 
         apiKeyRow.classList.toggle("visible", needsKey);
-        if (needsKey && providerLinks[provider]) {
-          apiKeyLink.href = providerLinks[provider];
-          apiKeyLink.textContent = "Get " + provider + " key";
+        if (needsKey && meta && meta.apiKeyLink) {
+          apiKeyLink.href = meta.apiKeyLink;
+          apiKeyLink.textContent = "Get " + (meta.name || provider) + " key";
+          apiKeyLink.style.display = "";
+        } else {
+          apiKeyLink.removeAttribute("href");
+          apiKeyLink.style.display = needsKey ? "none" : "";
         }
 
         if (needsKey) {
@@ -1709,9 +1896,11 @@
 
         if (models && models.length) {
           populateModels(models);
-        } else if (modelsByProvider[provider]) {
-          if (hasKey) populateModels(modelsByProvider[provider]);
+        } else if (meta && meta.models && meta.models.length) {
+          if (hasKey || !needsKey) populateModels(meta.models);
           else showNoModels("Save an API key to see models");
+        } else if (provider === "ollama") {
+          showNoModels("Loading models...");
         } else {
           showNoModels("Loading models...");
         }
@@ -1740,12 +1929,54 @@
         vscode.postMessage({ type: "setProvider", provider: p, apiKey: key });
         apiKeyInput.value = "";
         showKeySaved();
-        if (p === "groq") currentHasGroqKey = true;
-        if (p === "openrouter") currentHasOpenrouterKey = true;
-        if (p === "anthropic") currentHasAnthropicKey = true;
-        if (p === "nvidia") currentHasNvidiaKey = true;
-        if (modelsByProvider[p]) populateModels(modelsByProvider[p]);
+        currentKeyPresence[p] = true;
+        var meta = getProviderMeta(p);
+        if (meta && meta.models && meta.models.length) populateModels(meta.models);
         addRow("API key saved for " + p + ".", "status");
+      };
+
+      function resetCustomProviderForm() {
+        customProviderName.value = "";
+        customProviderUrl.value = "";
+        customProviderModel.value = "";
+        customProviderModels.value = "";
+        customProviderKey.value = "";
+        customProviderLink.value = "";
+      }
+
+      function openCustomProviderDialog() {
+        customProviderOverlay.classList.add("visible");
+        customProviderName.focus();
+      }
+
+      function closeCustomProviderDialog() {
+        customProviderOverlay.classList.remove("visible");
+        resetCustomProviderForm();
+      }
+
+      providerAddBtn.onclick = function() {
+        openCustomProviderDialog();
+      };
+      customProviderCancel.onclick = closeCustomProviderDialog;
+      customProviderClose.onclick = closeCustomProviderDialog;
+      customProviderOverlay.onclick = function(event) {
+        if (event.target === customProviderOverlay) closeCustomProviderDialog();
+      };
+      customProviderSave.onclick = function() {
+        var provider = {
+          name: customProviderName.value.trim(),
+          baseUrl: customProviderUrl.value.trim(),
+          defaultModel: customProviderModel.value.trim(),
+          models: customProviderModels.value.trim(),
+          apiKeyLink: customProviderLink.value.trim()
+        };
+        var apiKey = customProviderKey.value.trim();
+        if (!provider.name || !provider.baseUrl || !provider.defaultModel || !apiKey) {
+          addRow("Please fill in provider name, base URL, default model, and API key.", "status");
+          return;
+        }
+        vscode.postMessage({ type: "addCustomProvider", provider: provider, apiKey: apiKey });
+        closeCustomProviderDialog();
       };
       var currentMessage = null;
       var chatMode = "fast";
@@ -2178,6 +2409,20 @@
       var actionsDropdownMenu = document.getElementById("actions-dropdown-menu");
       var dropdownArrow = document.getElementById("dropdown-arrow");
 
+      // Ensure library audit action exists even in older bundled HTML builds.
+      if (actionsDropdownMenu && !actionsDropdownMenu.querySelector('[data-action="libraries"]')) {
+        var libraryChip = document.createElement("div");
+        libraryChip.className = "action-chip";
+        libraryChip.dataset.action = "libraries";
+        libraryChip.textContent = "📚 Check libraries";
+        var scanChip = actionsDropdownMenu.querySelector('[data-action="scan"]');
+        if (scanChip) {
+          actionsDropdownMenu.insertBefore(libraryChip, scanChip);
+        } else {
+          actionsDropdownMenu.appendChild(libraryChip);
+        }
+      }
+
       actionsDropdownBtn.onclick = function(e) {
         e.stopPropagation();
         var isOpen = actionsDropdownMenu.classList.toggle("open");
@@ -2211,6 +2456,10 @@
           }
           if (action === "scan") {
             vscode.postMessage({ type: "syntaxScan", activeOnly: false });
+            return;
+          }
+          if (action === "libraries") {
+            vscode.postMessage({ type: "libraryAudit" });
             return;
           }
           // Quick Fix - lint and fix errors with AI
@@ -2362,12 +2611,28 @@
           addActivity(msg.text, "success");
           addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
         } else if (msg.type === "setCurrentProvider") {
+          if (msg.providers && msg.providers.length) {
+            customProviderMeta = {};
+            msg.providers.forEach(function(provider) {
+              if (!provider || !provider.id) return;
+              if (!builtInProviderMeta[provider.id]) {
+                customProviderMeta[provider.id] = {
+                  id: provider.id,
+                  name: provider.name || provider.id,
+                  label: provider.name || provider.id,
+                  requiresKey: provider.requiresKey !== false,
+                  apiKeyLink: provider.apiKeyLink || "",
+                  models: provider.models || []
+                };
+              }
+            });
+            rebuildProviderOptions(msg.provider || providerSelect.value);
+          }
+          if (msg.keyPresence) {
+            currentKeyPresence = msg.keyPresence || {};
+          }
           if (msg.provider) {
             providerSelect.value = msg.provider;
-            currentHasGroqKey = !!msg.hasGroqKey;
-            currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
-            currentHasAnthropicKey = !!msg.hasAnthropicKey;
-            currentHasNvidiaKey = !!msg.hasNvidiaKey;
             syncProviderUi(msg.provider, msg.model, msg.models || null);
           }
         } else if (msg.type === "setModelOptions") {

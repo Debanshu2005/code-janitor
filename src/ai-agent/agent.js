@@ -264,19 +264,31 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    const baseMaxTokens = isUnlimited 
-      ? (config.maxTokens?.create || 8192)
-      : mode === "heavy" 
-        ? (config.maxTokens?.heavy || 4096)
-        : (config.maxTokens?.fast || 2048)
     
-    // Optimize for slow models
-    const isMinimax = config.model === "minimaxai/minimax-m2.7"
-    const isNemotron = config.model === "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-    
-    const optimizedMaxTokens = isMinimax 
-      ? (mode === "fast" ? 512 : mode === "heavy" ? 2048 : 1024)
-      : baseMaxTokens  // Use configured maxTokens for all other models
+    // NVIDIA NIM: Use maximum possible tokens (no artificial limits)
+    if (config.provider === "nvidia") {
+      const nvidiaMaxTokens = isUnlimited ? 32768 : mode === "heavy" ? 16384 : 8192;
+      console.log(`[Agent] NVIDIA NIM: Using ${nvidiaMaxTokens} max tokens (no artificial limits)`);
+      
+      const baseMaxTokens = nvidiaMaxTokens;
+      const optimizedMaxTokens = baseMaxTokens;
+      
+      // Continue with NVIDIA-specific logic below...
+    } else {
+      // Other providers: Use configurable limits
+      const baseMaxTokens = isUnlimited 
+        ? (config.maxTokens?.create || 16384)
+        : mode === "heavy" 
+          ? (config.maxTokens?.heavy || 8192)
+          : (config.maxTokens?.fast || 4096)
+      
+      // Optimize for slow models
+      const isMinimax = config.model === "minimaxai/minimax-m2.7"
+      
+      var optimizedMaxTokens = isMinimax 
+        ? (mode === "fast" ? 1024 : mode === "heavy" ? 4096 : 2048)
+        : baseMaxTokens;
+    }
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -301,6 +313,37 @@ class AIAgent {
             .replace(/\nAssistant:$/, "")
             .trim()
         : prompt
+
+    if (config.customProvider?.protocol === "openai") {
+      return {
+        url: config.customProvider.chatCompletionsUrl,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.customProvider.apiKey}`
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
+          ],
+          stream: true,
+          temperature: 0.2,
+          max_tokens: optimizedMaxTokens,
+          top_p: 0.9
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null
+          try {
+            return (
+              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            )
+          } catch {
+            return null
+          }
+        }
+      }
+    }
 
     if (config.provider === "anthropic") {
       return {
@@ -396,6 +439,13 @@ class AIAgent {
       }
     }
     if (config.provider === "nvidia") {
+      // NVIDIA NIM: Use high token limits for complete code generation
+      const nvidiaMaxTokens = isUnlimited ? 32768 : mode === "heavy" ? 16384 : 8192;
+      console.log(`[Agent] NVIDIA NIM: Using ${nvidiaMaxTokens} max tokens`);
+      
+      const isMinimax = config.model === "minimaxai/minimax-m2.7"
+      const isNemotron = config.model === "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      
       const minimaxOptimizations = isMinimax ? {
         top_p: 0.8,
         frequency_penalty: 0.3,
@@ -423,7 +473,7 @@ class AIAgent {
           ],
           stream: true,
           temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : 0.2,
-          max_tokens: optimizedMaxTokens,
+          max_tokens: nvidiaMaxTokens,
           ...minimaxOptimizations,
           ...nemotronOptimizations
         }),
@@ -992,7 +1042,25 @@ ${resolvedMessage}`
       })
 
       if (!response.ok) {
-        throw new Error(await this._buildHttpError(response, "AI request failed with status"))
+        const errorDetails = await this._buildHttpError(response, "AI request failed with status");
+        
+        // Special handling for NVIDIA token limit errors
+        if (config.provider === "nvidia" && response.status === 400) {
+          if (/max.*token|token.*limit|context.*length|too.*long/i.test(errorDetails)) {
+            throw new Error(
+              `NVIDIA NIM: Response was truncated due to token limit.\n\n` +
+              `The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n` +
+              `Solutions:\n` +
+              `1. Break the request into smaller parts\n` +
+              `2. Use Heavy mode (/heavy) for larger token limits\n` +
+              `3. Try a different model like meta/llama-3.1-70b-instruct\n` +
+              `4. Simplify the request to generate less code\n\n` +
+              `Original error: ${errorDetails}`
+            );
+          }
+        }
+        
+        throw new Error(errorDetails);
       }
 
       let fullResponse = ""
@@ -1231,11 +1299,15 @@ ${resolvedMessage}`
     if (!workspaceFolder) return ""
 
     // Only load graph for code-related intents where location matters
-    const shouldLoadGraph = 
-      intent === "scan" || 
-      intent === "debug" || 
+    const shouldLoadGraph =
+      intent === "scan" ||
+      intent === "debug" ||
       intent === "refactor" ||
-      /\b(where is|where's|locate|find|location|which file|what file)\b/i.test(userMessage)
+      intent === "edit" ||
+      intent === "show_graph" ||
+      /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
+        userMessage
+      )
     
     if (!shouldLoadGraph) return ""
 
@@ -1243,14 +1315,35 @@ ${resolvedMessage}`
       const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
       const graphReport = await fs.readFile(graphReportPath, "utf8")
       
-      // Extract only first 3 god nodes for speed
+      const overviewMatch = graphReport.match(/## Overview[\s\S]*?(?=##|$)/)
       const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
-      
-      if (godNodesMatch) {
-        const firstThreeNodes = godNodesMatch[0].split('###').slice(0, 4).join('###')
-        return `\n**Knowledge Graph (Top 3 Central Files):**\n${firstThreeNodes.slice(0, 800)}\n`
+      const directoryMatch = graphReport.match(/## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/)
+      const insightsMatch = graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/)
+
+      const sections = []
+
+      if (overviewMatch) {
+        sections.push(overviewMatch[0].trim())
       }
-      
+
+      if (godNodesMatch) {
+        const firstThreeNodes = godNodesMatch[0].split("###").slice(0, 4).join("###").trim()
+        sections.push(firstThreeNodes)
+      }
+
+      if (directoryMatch) {
+        const topDirectories = directoryMatch[0].split("###").slice(0, 7).join("###").trim()
+        sections.push(topDirectories)
+      }
+
+      if (insightsMatch) {
+        sections.push(insightsMatch[0].trim())
+      }
+
+      if (sections.length > 0) {
+        return `\n**Knowledge Graph Context**\nA Graphify knowledge-graph report is available at \`graphify-out/GRAPH_REPORT.md\`. Use it first for architecture, codebase navigation, multi-file debugging, and refactors.\n${sections.join("\n\n").slice(0, 1800)}\n`
+      }
+
       return ""
     } catch (err) {
       return ""
@@ -1690,52 +1783,64 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast") {
     const base =
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically"
-    const compactRules = `Operational rules (fast):
-- Be concise and correct.
-- Use FILE: only when the user asks to change files.
-- Avoid unrelated context or speculation.
-- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.
-- You have FULL internet access via FETCH: action. When users ask about current events, news, or time-sensitive topics:
-  * Output FETCH: https://www.reuters.com on its own line
-  * Then CONTINUE your response with analysis/discussion
-  * The fetch happens in the background - you won't see the results immediately
-  * Provide your best analysis based on your knowledge while the fetch completes
-  * Example: "FETCH: https://www.reuters.com\n\nBased on recent developments, the situation involves..."`
-    const operatingPrinciples = `Operational rules:
-- Be precise and minimal: use only the actions required to solve the request.
-- Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
-- Never claim a command/check was run unless it is actually in your action list.
-- If external or time-sensitive facts are required, say verification is needed instead of guessing.
-- If a command is likely to fail, propose a corrected safer command immediately.
-- Preserve user intent, existing features, and project conventions unless the request requires a change.
-- Favor robust, maintainable solutions over shortcuts, placeholders, or tutorial-style output.
-- Before changing code, infer the smallest correct scope from the provided context and avoid unrelated edits.
-- When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.
-- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.
-- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.
-- You have FULL internet access via FETCH: action. Use it when:
-  * User asks about current events, news, politics, wars, conflicts, or any time-sensitive topics
-  * Output FETCH: URL on its own line, then CONTINUE your response
-  * Format: FETCH: https://www.reuters.com\n\nYour analysis here...
-  * The fetch happens in background - provide your analysis while it completes
-  * Example: "FETCH: https://www.reuters.com\n\nRegarding the Iran situation, recent reports indicate..."
-  * User explicitly asks for current/latest information from the web
-  * You need to check documentation, API references, or package versions
-- CRITICAL: All generated code must be production-grade by default:
-  * Comprehensive error handling and input validation
-  * Security best practices (sanitization, authentication, authorization where applicable)
-  * Performance optimization (efficient algorithms, proper resource management)
-  * Accessibility compliance (ARIA labels, semantic HTML, keyboard navigation)
-  * Responsive design for web interfaces
-  * Proper logging and monitoring hooks
-  * Clean architecture with separation of concerns
-  * Type safety where applicable (TypeScript, type hints)
-  * No placeholder comments, TODOs, or tutorial-style code
-  * Database connections with proper pooling and error recovery
-  * API endpoints with rate limiting and proper status codes
-  * Environment-based configuration (dev/staging/prod)
-  * Graceful degradation and fallback mechanisms`
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically"
+    const compactRules = [
+      "Operational rules (fast):",
+      "- Be concise and correct.",
+      "- Use FILE: only when the user asks to change files.",
+      "- Avoid unrelated context or speculation.",
+      "- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.",
+      "- You have FULL internet access via FETCH: action. When users ask about current events, news, or time-sensitive topics:",
+      "  * Output FETCH: https://www.reuters.com on its own line",
+      "  * Then CONTINUE your response with analysis/discussion",
+      "  * The fetch happens in the background - you won't see the results immediately",
+      "  * Provide your best analysis based on your knowledge while the fetch completes",
+      '  * Example: "FETCH: https://www.reuters.com\\n\\nBased on recent developments, the situation involves..."'
+    ].join("\n")
+    const operatingPrinciples = [
+      "Operational rules:",
+      "- Be precise and minimal: use only the actions required to solve the request.",
+      "- Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.",
+      "- Never claim a command/check was run unless it is actually in your action list.",
+      "- If external or time-sensitive facts are required, say verification is needed instead of guessing.",
+      "- If a command is likely to fail, propose a corrected safer command immediately.",
+      "- Preserve user intent, existing features, and project conventions unless the request requires a change.",
+      "- Favor robust, maintainable solutions over shortcuts, placeholders, or tutorial-style output.",
+      "- Before changing code, infer the smallest correct scope from the provided context and avoid unrelated edits.",
+      "- When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.",
+      "- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.",
+      "- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.",
+      "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
+      "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
+      "- If the user wants to visualize architecture, dependencies, or the project graph, use the `GRAPHIFY: open` action instead of only describing it.",
+      "- If the user wants lint results for the active JavaScript file, use `LINT: active`.",
+      "- If the user wants frontend dependency checks for the active HTML/CSS/JS file, use `VALIDATE: frontend`.",
+      "- If the user wants a live preview of the active previewable file, use `PREVIEW: open`.",
+      "- If the user wants you to inspect/study/analyze the live preview, detect render/runtime issues, or fix problems found from the preview, use `PREVIEW: inspect`.",
+      "- If the user asks for the extension's AI performance report or self-healing/performance diagnostics, use `PERFORMANCE: show`.",
+      "- You have FULL internet access via FETCH: action. Use it when:",
+      "  * User asks about current events, news, politics, wars, conflicts, or any time-sensitive topics",
+      "  * Output FETCH: URL on its own line, then CONTINUE your response",
+      "  * Format: FETCH: https://www.reuters.com\\n\\nYour analysis here...",
+      "  * The fetch happens in background - provide your analysis while it completes",
+      '  * Example: "FETCH: https://www.reuters.com\\n\\nRegarding the Iran situation, recent reports indicate..."',
+      "  * User explicitly asks for current/latest information from the web",
+      "  * You need to check documentation, API references, or package versions",
+      "- CRITICAL: All generated code must be production-grade by default:",
+      "  * Comprehensive error handling and input validation",
+      "  * Security best practices (sanitization, authentication, authorization where applicable)",
+      "  * Performance optimization (efficient algorithms, proper resource management)",
+      "  * Accessibility compliance (ARIA labels, semantic HTML, keyboard navigation)",
+      "  * Responsive design for web interfaces",
+      "  * Proper logging and monitoring hooks",
+      "  * Clean architecture with separation of concerns",
+      "  * Type safety where applicable (TypeScript, type hints)",
+      "  * No placeholder comments, TODOs, or tutorial-style code",
+      "  * Database connections with proper pooling and error recovery",
+      "  * API endpoints with rate limiting and proper status codes",
+      "  * Environment-based configuration (dev/staging/prod)",
+      "  * Graceful degradation and fallback mechanisms"
+    ].join("\n")
     const rules = mode === "fast" ? compactRules : operatingPrinciples
     switch (intent) {
       case "greeting":
@@ -1938,10 +2043,13 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Ensure backward compatibility unless breaking changes are explicitly requested
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
+
+CRITICAL: When outputting FILE actions, you MUST include the ENTIRE file from start to finish. DO NOT truncate, abbreviate, or use placeholders like "... rest of file ...". Include EVERY SINGLE LINE of the complete file.
+
 You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 FILE: <exact file path>
 \`\`\`
-(complete updated file content with production-grade quality)
+(COMPLETE file content - EVERY line from start to finish, no truncation)
 \`\`\`
 MKDIR: folder/subfolder
 CMD: <single workspace command>
@@ -2738,6 +2846,26 @@ ${userMessage}`
       actions.push({ type: "graphify" })
     }
 
+    if (/LINT\s*:\s*active/i.test(response)) {
+      actions.push({ type: "lint" })
+    }
+
+    if (/VALIDATE\s*:\s*frontend/i.test(response)) {
+      actions.push({ type: "validate_frontend" })
+    }
+
+    if (/PREVIEW\s*:\s*inspect/i.test(response)) {
+      actions.push({ type: "preview_inspect" })
+    }
+
+    if (/PREVIEW\s*:\s*open/i.test(response)) {
+      actions.push({ type: "preview" })
+    }
+
+    if (/PERFORMANCE\s*:\s*show/i.test(response)) {
+      actions.push({ type: "performance" })
+    }
+
     // Match FETCH: actions for web requests
     const fetchRegex = /FETCH:\s*(.+)/g
     while ((match = fetchRegex.exec(response)) !== null) {
@@ -2852,6 +2980,8 @@ ${userMessage}`
       "eslint ",
       "javac ",
       "java ",
+      "arduino-cli lib list",
+      "arduino-cli lib search",
       ".\\node_modules\\.bin\\",
       "./node_modules/.bin/"
     ]

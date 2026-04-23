@@ -3,32 +3,66 @@ const ChatPanel = require("./ai-agent/chat-panel")
 const GitPanel = require("./source-control/git-panel")
 const GraphifyPanel = require("./graphify/graphify-panel")
 
+function registerLegacyAlias(context, alias, handler) {
+  const disposable = vscode.commands.registerCommand(alias, async () => {
+    console.log(`[Code Janitor Arduino] Legacy command triggered: ${alias}`)
+    return handler()
+  })
+
+  context.subscriptions.push(disposable)
+  console.log(`[Code Janitor Arduino] Legacy alias registered: ${alias}`)
+}
+
 function activate(context) {
+  console.log("[Code Janitor Arduino] Extension activation started...")
+  
   const chatPanel = new ChatPanel(context)
   const gitPanel = new GitPanel(context)
   const graphifyPanel = new GraphifyPanel(context)
 
+  console.log("[Code Janitor Arduino] Registering commands...")
+  
   const openChatCommand = vscode.commands.registerCommand(
     "codeJanitorArduino.openChat",
-    () => chatPanel.show()
+    () => {
+      console.log("[Code Janitor Arduino] openChat command triggered")
+      chatPanel.show()
+    }
   )
 
   const openGitCommand = vscode.commands.registerCommand(
     "codeJanitorArduino.openSourceControl",
-    () => gitPanel.show()
+    () => {
+      console.log("[Code Janitor Arduino] openSourceControl command triggered")
+      gitPanel.show()
+    }
   )
 
   const openGraphifyCommand = vscode.commands.registerCommand(
     "codeJanitorArduino.openGraphify",
-    () => graphifyPanel.show()
+    () => {
+      console.log("[Code Janitor Arduino] openGraphify command triggered")
+      graphifyPanel.show()
+    }
   )
 
   context.subscriptions.push(openChatCommand)
   context.subscriptions.push(openGitCommand)
   context.subscriptions.push(openGraphifyCommand)
 
+  // Keep older command ids working so stale keybindings or UI actions in VS Code
+  // continue to open the Arduino panels after the command namespace change.
+  registerLegacyAlias(context, "codeJanitor.openChat", () => chatPanel.show())
+  registerLegacyAlias(context, "codeJanitor.openSourceControl", () =>
+    gitPanel.show()
+  )
+  registerLegacyAlias(context, "codeJanitor.openGraphify", () =>
+    graphifyPanel.show()
+  )
+
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
+      console.log("[Code Janitor Arduino] URI handler triggered:", uri.path)
       if (uri.path === "/open-chat") {
         chatPanel.show()
       } else if (uri.path === "/open-git") {
@@ -40,7 +74,15 @@ function activate(context) {
   })
 
   context.subscriptions.push(uriHandler)
-  console.log("Code Janitor Arduino AI Agent activated")
+  console.log("[Code Janitor Arduino] Extension activated successfully!")
+  console.log("[Code Janitor Arduino] Commands registered:")
+  console.log("  - codeJanitorArduino.openChat")
+  console.log("  - codeJanitorArduino.openSourceControl")
+  console.log("  - codeJanitorArduino.openGraphify")
+  console.log("  - codeJanitor.openChat (legacy alias)")
+  console.log("  - codeJanitor.openSourceControl (legacy alias)")
+  console.log("  - codeJanitor.openGraphify (legacy alias)")
+  console.log("[Code Janitor Arduino] Use Ctrl+Alt+A to open AI Chat")
 }
 
 function deactivate() {}

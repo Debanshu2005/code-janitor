@@ -1067,6 +1067,7 @@
       <div class="action-chip" data-action="refactor">♻️ Refactor</div>
       <div class="action-chip" data-action="tests">🧪 Generate tests</div>
       <div class="action-chip" data-action="docs">📝 Add docs</div>
+      <div class="action-chip" data-action="libraries">📚 Check libraries</div>
     </div>
 
     <div id="search-bar">
@@ -1971,6 +1972,10 @@
           }
           if (action === "scan") {
             vscode.postMessage({ type: "syntaxScan", activeOnly: false });
+            return;
+          }
+          if (action === "libraries") {
+            vscode.postMessage({ type: "libraryAudit" });
             return;
           }
           var prompts = {

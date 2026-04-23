@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.10.7",
+  "version": "1.11.7",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -164,24 +164,24 @@
         },
         "codeJanitor.ai.maxTokens.fast": {
           "type": "number",
-          "default": 2048,
-          "description": "Maximum tokens for fast mode responses (default: 2048, range: 512-4096)",
+          "default": 4096,
+          "description": "Maximum tokens for fast mode responses (default: 4096, range: 512-8192)",
           "minimum": 512,
-          "maximum": 4096
+          "maximum": 8192
         },
         "codeJanitor.ai.maxTokens.heavy": {
           "type": "number",
-          "default": 4096,
-          "description": "Maximum tokens for heavy mode responses (default: 4096, range: 1024-8192)",
+          "default": 8192,
+          "description": "Maximum tokens for heavy mode responses (default: 8192, range: 1024-16384)",
           "minimum": 1024,
-          "maximum": 8192
+          "maximum": 16384
         },
         "codeJanitor.ai.maxTokens.create": {
           "type": "number",
-          "default": 8192,
-          "description": "Maximum tokens for create mode (file generation) responses (default: 8192, range: 2048-16384)",
+          "default": 16384,
+          "description": "Maximum tokens for create mode (file generation) responses (default: 16384, range: 2048-32768)",
           "minimum": 2048,
-          "maximum": 16384
+          "maximum": 32768
         }
       }
     },

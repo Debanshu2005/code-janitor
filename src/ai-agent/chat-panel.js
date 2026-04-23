@@ -12,6 +12,7 @@ const MODELS_BY_PROVIDER = {
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: ["minimaxai/minimax-m2.7","meta/llama-3.1-8b-instruct","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5","mistralai/mistral-nemotron"]
 };
+const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
   constructor(context) {
@@ -36,17 +37,21 @@ class ChatPanel {
   }
 
   async show() {
-    this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
-    this.agent.setActiveEditor(this.lastActiveEditor);
+    try {
+      console.log("[ChatPanel] show() called");
+      this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
+      this.agent.setActiveEditor(this.lastActiveEditor);
 
-    if (this.panel) {
-      this.panel.reveal();
-      return;
-    }
+      if (this.panel) {
+        console.log("[ChatPanel] Panel already exists, revealing");
+        this.panel.reveal();
+        return;
+      }
 
-    // CRITICAL FIX: Force provider to ollama if no API keys are configured
+      console.log("[ChatPanel] Creating new panel");
+      // CRITICAL FIX: Force provider to ollama if no API keys are configured
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const currentProvider = cfg.get("provider", "ollama");
+    const currentProvider = this._getSelectedProviderId() || cfg.get("provider", "ollama");
     const groqKey = cfg.get("groqApiKey", "");
     const openrouterKey = cfg.get("openrouterApiKey", "");
     const anthropicKey = cfg.get("anthropicApiKey", "");
@@ -102,6 +107,12 @@ class ChatPanel {
     });
     
     console.log("[ChatPanel] Panel created successfully");
+    } catch (error) {
+      console.error("[ChatPanel] CRITICAL ERROR in show():", error);
+      console.error("[ChatPanel] Error stack:", error.stack);
+      vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}`);
+      throw error;
+    }
   }
 
   async _runSyntaxScan(workspaceFolder, specificFiles) {
@@ -184,8 +195,525 @@ class ChatPanel {
     this.panel.webview.postMessage({ type: "done" });
   }
 
+  async _runLibraryAudit(workspaceFolder) {
+    if (!workspaceFolder) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: "Open a workspace first so imports and installed libraries can be audited."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    this.panel.webview.postMessage({ type: "thinking" });
+    this.panel.webview.postMessage({
+      type: "status",
+      text: "Auditing libraries across all supported languages..."
+    });
+
+    const importMap = await this._collectLibraryImports(workspaceFolder);
+    const importsByLanguage = new Map();
+    
+    for (const [filePath, imports] of importMap.entries()) {
+      const ext = path.extname(filePath).toLowerCase();
+      let lang = 'unknown';
+      if (['.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.ino', '.pde'].includes(ext)) lang = 'C/C++';
+      else if (ext === '.py') lang = 'Python';
+      else if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) lang = 'JavaScript/TypeScript';
+      else if (ext === '.java') lang = 'Java';
+      else if (ext === '.go') lang = 'Go';
+      else if (ext === '.rs') lang = 'Rust';
+      else if (ext === '.rb') lang = 'Ruby';
+      else if (ext === '.php') lang = 'PHP';
+      
+      if (!importsByLanguage.has(lang)) importsByLanguage.set(lang, new Set());
+      imports.forEach(imp => importsByLanguage.get(lang).add(imp));
+    }
+
+    if (importsByLanguage.size === 0) {
+      this.panel.webview.postMessage({
+        type: "stream",
+        text: "No library imports found in supported languages."
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
+    let report = `Library Audit Report\n\n`;
+    report += `Languages detected: ${Array.from(importsByLanguage.keys()).join(', ')}\n\n`;
+
+    // Check C/C++ libraries with arduino-cli
+    if (importsByLanguage.has('C/C++')) {
+      const importedHeaders = importsByLanguage.get('C/C++');
+      report += `=== C/C++/Arduino Libraries ===\n`;
+      report += `Imported headers: ${importedHeaders.size}\n\n`;
+
+      const installedResult = await this.agent.executeCommand("arduino-cli lib list --format json", workspaceFolder);
+      if (!installedResult.success) {
+        report += `⚠️ Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n`;
+      } else {
+
+        const installedLibraries = this._parseInstalledLibraries(installedResult.output);
+        const installedTokens = new Set(
+          installedLibraries.map((name) => this._normalizeLibraryToken(name)).filter(Boolean)
+        );
+
+        const matched = [];
+        const missing = [];
+        const ignoredCore = [];
+
+        for (const header of Array.from(importedHeaders).sort((a, b) => a.localeCompare(b))) {
+          if (this._isCoreOrSystemHeader(header)) {
+            ignoredCore.push(header);
+            continue;
+          }
+
+          const baseName = path.basename(header).replace(/\.(h|hpp)$/i, "");
+          const token = this._normalizeLibraryToken(baseName);
+          const isInstalled = Array.from(installedTokens).some((installedToken) =>
+            installedToken.includes(token) || token.includes(installedToken)
+          );
+
+          if (isInstalled) {
+            matched.push(header);
+          } else {
+            missing.push(header);
+          }
+        }
+
+        report += `Installed libraries: ${installedLibraries.length}\n`;
+        report += `Matched imports: ${matched.length}\n`;
+        report += `Missing imports: ${missing.length}\n`;
+
+        if (matched.length > 0) {
+          report += `\nMatched imports:\n`;
+          for (const header of matched.slice(0, 10)) report += `- ${header}\n`;
+        }
+
+        if (ignoredCore.length > 0) {
+          report += `\nIgnored core/system headers:\n`;
+          for (const header of ignoredCore.slice(0, 10)) report += `- ${header}\n`;
+        }
+
+        if (missing.length === 0) {
+          report += `\n✅ All C/C++ libraries are installed.\n\n`;
+        } else {
+
+          report += `\nMissing C/C++ library candidates:\n`;
+          for (const header of missing.slice(0, 5)) {
+            const baseName = path.basename(header).replace(/\.(h|hpp)$/i, "");
+            report += `\n- ${header}\n`;
+            report += `  Install: arduino-cli lib install "${baseName}"\n`;
+            report += `  Search: arduino-cli lib search "${baseName}"\n`;
+          }
+          if (missing.length > 5) report += `\n... and ${missing.length - 5} more\n`;
+          report += `\nArduino docs: https://support.arduino.cc/hc/en-us/articles/5145457742236\n\n`;
+        }
+      }
+    }
+
+    // Check Python packages
+    if (importsByLanguage.has('Python')) {
+      const imports = importsByLanguage.get('Python');
+      report += `=== Python Packages ===\n`;
+      report += `Imported modules: ${imports.size}\n`;
+      const pipResult = await this.agent.executeCommand("pip list --format=json", workspaceFolder);
+      if (pipResult.success) {
+        try {
+          const installed = JSON.parse(pipResult.output).map(p => p.name.toLowerCase());
+          const missing = Array.from(imports).filter(m => !installed.includes(m.toLowerCase()));
+          report += `Installed packages: ${installed.length}\n`;
+          report += `Missing packages: ${missing.length}\n`;
+          if (missing.length > 0) {
+            report += `\nInstall missing packages:\n`;
+            for (const pkg of missing.slice(0, 10)) report += `  pip install ${pkg}\n`;
+          } else {
+            report += `✅ All Python packages are installed.\n`;
+          }
+        } catch (_) {
+          report += `⚠️ Could not parse pip output.\n`;
+        }
+      } else {
+        report += `⚠️ Could not check installed packages. Run 'pip list' manually.\n`;
+      }
+      report += `\n`;
+    }
+
+    // Check Node.js packages
+    if (importsByLanguage.has('JavaScript/TypeScript')) {
+      const imports = importsByLanguage.get('JavaScript/TypeScript');
+      report += `=== Node.js Packages ===\n`;
+      report += `Imported modules: ${imports.size}\n`;
+      const pkgJsonPath = path.join(workspaceFolder, 'package.json');
+      if (fsSync.existsSync(pkgJsonPath)) {
+        try {
+          const pkgJson = JSON.parse(fsSync.readFileSync(pkgJsonPath, 'utf8'));
+          const deps = { ...pkgJson.dependencies, ...pkgJson.devDependencies };
+          const missing = Array.from(imports).filter(m => !deps[m]);
+          report += `Declared in package.json: ${Object.keys(deps).length}\n`;
+          report += `Missing from package.json: ${missing.length}\n`;
+          if (missing.length > 0) {
+            report += `\nAdd missing packages:\n`;
+            for (const pkg of missing.slice(0, 10)) report += `  npm install ${pkg}\n`;
+          } else {
+            report += `✅ All imports are in package.json.\n`;
+          }
+        } catch (_) {
+          report += `⚠️ Could not parse package.json.\n`;
+        }
+      } else {
+        report += `⚠️ No package.json found.\n`;
+      }
+      report += `\n`;
+    }
+
+    // Check Java packages
+    if (importsByLanguage.has('Java')) {
+      const imports = importsByLanguage.get('Java');
+      report += `=== Java Packages ===\n`;
+      report += `Imported packages: ${imports.size}\n`;
+      report += `Top imports: ${Array.from(imports).slice(0, 10).join(', ')}\n`;
+      report += `\nCheck Maven/Gradle dependencies manually.\n\n`;
+    }
+
+    // Check Go modules
+    if (importsByLanguage.has('Go')) {
+      const imports = importsByLanguage.get('Go');
+      report += `=== Go Modules ===\n`;
+      report += `Imported packages: ${imports.size}\n`;
+      const goModPath = path.join(workspaceFolder, 'go.mod');
+      if (fsSync.existsSync(goModPath)) {
+        report += `✅ go.mod found. Run 'go mod tidy' to sync dependencies.\n`;
+      } else {
+        report += `⚠️ No go.mod found. Run 'go mod init' to create one.\n`;
+      }
+      report += `\n`;
+    }
+
+    // Check Rust crates
+    if (importsByLanguage.has('Rust')) {
+      const imports = importsByLanguage.get('Rust');
+      report += `=== Rust Crates ===\n`;
+      report += `Imported crates: ${imports.size}\n`;
+      const cargoPath = path.join(workspaceFolder, 'Cargo.toml');
+      if (fsSync.existsSync(cargoPath)) {
+        report += `✅ Cargo.toml found. Run 'cargo build' to fetch dependencies.\n`;
+      } else {
+        report += `⚠️ No Cargo.toml found.\n`;
+      }
+      report += `\n`;
+    }
+
+    // Check Ruby gems
+    if (importsByLanguage.has('Ruby')) {
+      const imports = importsByLanguage.get('Ruby');
+      report += `=== Ruby Gems ===\n`;
+      report += `Required gems: ${imports.size}\n`;
+      const gemfilePath = path.join(workspaceFolder, 'Gemfile');
+      if (fsSync.existsSync(gemfilePath)) {
+        report += `✅ Gemfile found. Run 'bundle install' to install gems.\n`;
+      } else {
+        report += `⚠️ No Gemfile found.\n`;
+      }
+      report += `\n`;
+    }
+
+    // Check PHP packages
+    if (importsByLanguage.has('PHP')) {
+      const imports = importsByLanguage.get('PHP');
+      report += `=== PHP Packages ===\n`;
+      report += `Imported namespaces: ${imports.size}\n`;
+      const composerPath = path.join(workspaceFolder, 'composer.json');
+      if (fsSync.existsSync(composerPath)) {
+        report += `✅ composer.json found. Run 'composer install' to install packages.\n`;
+      } else {
+        report += `⚠️ No composer.json found.\n`;
+      }
+      report += `\n`;
+    }
+
+    this.panel.webview.postMessage({ type: "stream", text: report });
+    this.panel.webview.postMessage({ type: "done" });
+  }
+
+  async _collectLibraryImports(workspaceFolder) {
+    const files = await vscode.workspace.findFiles(
+      "**/*.{ino,pde,h,hpp,c,cpp,cc,cxx,py,js,jsx,ts,tsx,java,go,rs,rb,php}",
+      "**/{.git,node_modules,build,dist,out,.arduinoIDE,.pio,__pycache__,target,vendor}/**"
+    );
+    const imports = new Map();
+    for (const uri of files) {
+      if (uri.scheme !== "file") continue;
+      const relativePath = path.relative(workspaceFolder, uri.fsPath).replace(/\\/g, "/");
+      try {
+        const content = await fs.readFile(uri.fsPath, "utf8");
+        const ext = path.extname(uri.fsPath).toLowerCase();
+        imports.set(relativePath, this._extractImports(content, ext));
+      } catch (_) {
+        // Ignore unreadable files so the audit can continue.
+      }
+    }
+    return imports;
+  }
+
+  _extractImports(content, ext) {
+    const imports = new Set();
+    const text = content || "";
+    
+    if (['.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.ino', '.pde'].includes(ext)) {
+      // C/C++/Arduino: #include <Library.h> or #include "Library.h"
+      const includeRegex = /^\s*#include\s*[<"]([^">]+)[">]/gm;
+      let match;
+      while ((match = includeRegex.exec(text)) !== null) {
+        const header = (match[1] || "").trim();
+        if (header) imports.add(header);
+      }
+    } else if (ext === '.py') {
+      // Python: import module, from module import x, import module as alias
+      const importRegex = /^\s*(?:from\s+([\w.]+)\s+)?import\s+([\w.,\s*]+)/gm;
+      let match;
+      while ((match = importRegex.exec(text)) !== null) {
+        const fromModule = (match[1] || "").trim();
+        const importedItems = (match[2] || "").trim();
+        if (fromModule) imports.add(fromModule.split('.')[0]);
+        if (importedItems && !fromModule) {
+          importedItems.split(',').forEach(item => {
+            const module = item.trim().split(/\s+as\s+/)[0].trim();
+            if (module && module !== '*') imports.add(module);
+          });
+        }
+      }
+    } else if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) {
+      // JavaScript/TypeScript: import x from 'module', require('module')
+      const importRegex = /(?:import\s+.*?from\s+['"]([^'"]+)['"]|require\s*\(['"]([^'"]+)['"]\))/g;
+      let match;
+      while ((match = importRegex.exec(text)) !== null) {
+        const module = (match[1] || match[2] || "").trim();
+        if (module && !module.startsWith('.') && !module.startsWith('/')) {
+          imports.add(module.split('/')[0]);
+        }
+      }
+    } else if (ext === '.java') {
+      // Java: import package.Class;
+      const importRegex = /^\s*import\s+([\w.]+);/gm;
+      let match;
+      while ((match = importRegex.exec(text)) !== null) {
+        const pkg = (match[1] || "").trim();
+        if (pkg && !pkg.startsWith('java.')) {
+          imports.add(pkg.split('.')[0]);
+        }
+      }
+    } else if (ext === '.go') {
+      // Go: import "package" or import ("package1" "package2")
+      const importRegex = /import\s+(?:\(([^)]+)\)|"([^"]+)")/g;
+      let match;
+      while ((match = importRegex.exec(text)) !== null) {
+        const block = match[1];
+        const single = match[2];
+        if (block) {
+          block.split('\n').forEach(line => {
+            const pkgMatch = line.match(/"([^"]+)"/);
+            if (pkgMatch) imports.add(pkgMatch[1].split('/').pop());
+          });
+        } else if (single) {
+          imports.add(single.split('/').pop());
+        }
+      }
+    } else if (ext === '.rs') {
+      // Rust: use crate::module or extern crate name
+      const useRegex = /(?:use\s+([\w:]+)|extern\s+crate\s+(\w+))/g;
+      let match;
+      while ((match = useRegex.exec(text)) !== null) {
+        const module = (match[1] || match[2] || "").trim();
+        if (module) imports.add(module.split('::')[0]);
+      }
+    } else if (ext === '.rb') {
+      // Ruby: require 'gem' or gem 'name'
+      const requireRegex = /(?:require|gem)\s+['"]([^'"]+)['"]/g;
+      let match;
+      while ((match = requireRegex.exec(text)) !== null) {
+        const gem = (match[1] || "").trim();
+        if (gem) imports.add(gem.split('/')[0]);
+      }
+    } else if (ext === '.php') {
+      // PHP: use Namespace\Class or require/include
+      const useRegex = /(?:use\s+([\w\\]+)|(?:require|include)(?:_once)?\s*\(?['"]([^'"]+)['"])/g;
+      let match;
+      while ((match = useRegex.exec(text)) !== null) {
+        const ns = (match[1] || match[2] || "").trim();
+        if (ns) imports.add(ns.split('\\')[0].split('/')[0]);
+      }
+    }
+    
+    return Array.from(imports);
+  }
+
+  _parseInstalledLibraries(listOutput) {
+    const names = new Set();
+    const raw = (listOutput || "").trim();
+    if (!raw) return [];
+
+    try {
+      const parsed = JSON.parse(raw);
+      const queue = Array.isArray(parsed) ? parsed.slice() : [parsed];
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (!item) continue;
+        if (Array.isArray(item)) {
+          queue.push(...item);
+          continue;
+        }
+        if (typeof item === "object") {
+          const candidateName =
+            item.name ||
+            item.library?.name ||
+            item.Library?.Name ||
+            item.Name;
+          if (candidateName && typeof candidateName === "string") {
+            names.add(candidateName.trim());
+          }
+          for (const value of Object.values(item)) {
+            if (value && typeof value === "object") queue.push(value);
+          }
+        }
+      }
+    } catch (_) {
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || /^name\s+/i.test(trimmed) || /^[-=]{3,}/.test(trimmed)) continue;
+        const columnSplit = trimmed.split(/\s{2,}/);
+        const candidate = columnSplit[0]?.trim();
+        if (candidate && !/^library$/i.test(candidate)) names.add(candidate);
+      }
+    }
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+
+  _normalizeLibraryToken(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  _isCoreOrSystemHeader(header) {
+    const normalized = String(header || "").trim().toLowerCase();
+    const base = path.basename(normalized).replace(/\.(h|hpp)$/i, "");
+    const coreHeaders = new Set([
+      "arduino",
+      "binary",
+      "ctype",
+      "errno",
+      "float",
+      "limits",
+      "math",
+      "new",
+      "pgmspace",
+      "pins_arduino",
+      "stdbool",
+      "stdint",
+      "stdio",
+      "stdlib",
+      "stream",
+      "string",
+      "time",
+      "utility",
+      "vector",
+      "wiring_private"
+    ]);
+    return (
+      coreHeaders.has(base) ||
+      normalized.startsWith("avr/") ||
+      normalized.startsWith("sys/") ||
+      normalized.startsWith("bits/")
+    );
+  }
+
+  async _searchArduinoLibraryCandidates(workspaceFolder, term) {
+    const safeTerm = String(term || "").replace(/"/g, "").trim();
+    if (!safeTerm) return [];
+    const searchCommand = `arduino-cli lib search "${safeTerm}" --format json`;
+    const result = await this.agent.executeCommand(searchCommand, workspaceFolder);
+    if (!result.success) return [];
+
+    try {
+      const parsed = JSON.parse(result.output || "{}");
+      const items = Array.isArray(parsed?.libraries)
+        ? parsed.libraries
+        : Array.isArray(parsed)
+          ? parsed
+          : [];
+      return items
+        .map((entry) => entry?.name || entry?.library?.name || entry?.Name)
+        .filter((name) => typeof name === "string" && name.trim().length > 0)
+        .slice(0, 3);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  _looksLikeConfidentLibraryMatch(header, candidateName) {
+    const baseName = path.basename(String(header || "")).replace(/\.(h|hpp)$/i, "");
+    const headerToken = this._normalizeLibraryToken(baseName);
+    const candidateToken = this._normalizeLibraryToken(candidateName || "");
+    if (!headerToken || !candidateToken) return false;
+    return candidateToken.includes(headerToken) || headerToken.includes(candidateToken);
+  }
+
+  async _fetchInternetLibraryGuidance(libraryOrHeader) {
+    if (typeof fetch !== "function") return null;
+    const baseName = path.basename(String(libraryOrHeader || "")).replace(/\.(h|hpp)$/i, "");
+    if (!baseName) return null;
+    const query = `Arduino IDE 2 install library ${baseName}`;
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    try {
+      const timeoutSignal =
+        typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(12000)
+          : undefined;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Code-Janitor/1.0" },
+        signal: timeoutSignal
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      const summary = (data?.AbstractText || "").trim();
+      const sourceUrl = (data?.AbstractURL || "").trim();
+      const related = [];
+      const collectRelated = (items) => {
+        if (!Array.isArray(items)) return;
+        for (const item of items) {
+          if (!item) continue;
+          if (Array.isArray(item.Topics)) {
+            collectRelated(item.Topics);
+            continue;
+          }
+          const text = (item.Text || "").trim();
+          const link = (item.FirstURL || "").trim();
+          if (text && link) related.push({ text, link });
+          if (related.length >= 3) return;
+        }
+      };
+      collectRelated(data?.RelatedTopics);
+      if (!summary && !sourceUrl && related.length === 0) return null;
+      return { summary, sourceUrl, related };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _getCurrentFileEditor() {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor && activeEditor.document.uri.scheme === "file") {
+      this.lastActiveEditor = activeEditor;
+      return activeEditor;
+    }
+    if (this.lastActiveEditor && this.lastActiveEditor.document.uri.scheme === "file") {
+      return this.lastActiveEditor;
+    }
+    return null;
+  }
+
   async _runActiveSyntaxFix(workspaceFolder) {
-    const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+    const activeEditor = this._getCurrentFileEditor();
     if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
       this.panel.webview.postMessage({
         type: "error",
@@ -383,6 +911,116 @@ class ChatPanel {
     return `codeJanitor.ai.${provider}.apiKey`;
   }
 
+  _getCustomProvidersStateKey() {
+    return "codeJanitor.ai.customProviders";
+  }
+
+  _getSelectedProviderStateKey() {
+    return "codeJanitor.ai.selectedProvider";
+  }
+
+  _isBuiltInProvider(provider) {
+    return BUILT_IN_PROVIDERS.has(provider);
+  }
+
+  _slugifyProviderName(name) {
+    return String(name || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  _normalizeCustomProvider(input) {
+    const name = String(input?.name || "").trim();
+    const baseUrl = String(input?.baseUrl || "").trim().replace(/\/+$/, "");
+    const defaultModel = String(input?.defaultModel || input?.model || "").trim();
+    const apiKeyLink = String(input?.apiKeyLink || "").trim();
+    const extraModels = Array.isArray(input?.models)
+      ? input.models
+      : String(input?.models || "")
+          .split(/[\n,]/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+    const models = Array.from(new Set([defaultModel, ...extraModels].filter(Boolean)));
+    const slugBase = this._slugifyProviderName(name);
+
+    if (!name || !baseUrl || !defaultModel || !slugBase) {
+      return null;
+    }
+
+    return {
+      id: input?.id || `custom:${slugBase}`,
+      name,
+      baseUrl,
+      defaultModel,
+      models,
+      apiKeyLink,
+      protocol: "openai"
+    };
+  }
+
+  _getCustomProviders() {
+    const providers = this.context.globalState.get(this._getCustomProvidersStateKey(), []);
+    return Array.isArray(providers) ? providers.filter(Boolean) : [];
+  }
+
+  async _saveCustomProviders(providers) {
+    await this.context.globalState.update(this._getCustomProvidersStateKey(), providers);
+  }
+
+  _getCustomProviderById(providerId) {
+    return this._getCustomProviders().find((provider) => provider.id === providerId) || null;
+  }
+
+  _getSelectedProviderId() {
+    return this.context.globalState.get(this._getSelectedProviderStateKey(), "");
+  }
+
+  async _setSelectedProviderId(provider) {
+    await this.context.globalState.update(this._getSelectedProviderStateKey(), provider || "");
+  }
+
+  _resolveCustomProviderChatUrl(baseUrl) {
+    const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!normalized) return "";
+    if (/\/chat\/completions$/i.test(normalized)) return normalized;
+    if (/\/v1$/i.test(normalized)) return `${normalized}/chat/completions`;
+    return `${normalized}/v1/chat/completions`;
+  }
+
+  async _getProviderPresence() {
+    const builtInPresence = await this._restoreApiKeys();
+    const customPresence = {};
+    for (const provider of this._getCustomProviders()) {
+      const key = this._sanitizeApiKey(
+        await this.context.secrets.get(this._getApiSecretKey(provider.id))
+      );
+      customPresence[provider.id] = !!key;
+    }
+    return { ...builtInPresence, ...customPresence };
+  }
+
+  _buildProviderCatalog() {
+    return [
+      { id: "ollama", name: "Ollama", builtin: true, requiresKey: false, models: [] },
+      { id: "groq", name: "Groq", builtin: true, requiresKey: true, models: MODELS_BY_PROVIDER.groq || [] },
+      { id: "openrouter", name: "OpenRouter", builtin: true, requiresKey: true, models: MODELS_BY_PROVIDER.openrouter || [] },
+      { id: "anthropic", name: "Anthropic", builtin: true, requiresKey: true, models: MODELS_BY_PROVIDER.anthropic || [] },
+      { id: "nvidia", name: "NVIDIA NIM", builtin: true, requiresKey: true, models: MODELS_BY_PROVIDER.nvidia || [] },
+      ...this._getCustomProviders().map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        builtin: false,
+        requiresKey: true,
+        apiKeyLink: provider.apiKeyLink || "",
+        models: provider.models || [],
+        defaultModel: provider.defaultModel,
+        protocol: provider.protocol || "openai"
+      }))
+    ];
+  }
+
   _sanitizeApiKey(value) {
     const raw = typeof value === "string" ? value.trim() : "";
     if (!raw) return "";
@@ -398,7 +1036,11 @@ class ChatPanel {
 
   async _getStoredApiKey(provider) {
     const configKey = this._getApiKeyConfigKey(provider);
-    if (!configKey) return "";
+    if (!configKey) {
+      return this._sanitizeApiKey(
+        await this.context.secrets.get(this._getApiSecretKey(provider))
+      );
+    }
 
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     const configValue = this._sanitizeApiKey(cfg.get(configKey, ""));
@@ -412,8 +1054,12 @@ class ChatPanel {
 
   async _getEffectiveAiConfig() {
     const config = this.agent.getConfig();
+    const selectedProvider = this._getSelectedProviderId() || config.provider;
+    const customProvider = this._isBuiltInProvider(selectedProvider)
+      ? null
+      : this._getCustomProviderById(selectedProvider);
     console.log("[ChatPanel] Base config from agent:", {
-      provider: config.provider,
+      provider: selectedProvider,
       model: config.model,
       hasGroqKey: !!config.groqApiKey,
       hasOpenrouterKey: !!config.openrouterApiKey,
@@ -437,24 +1083,28 @@ class ChatPanel {
 
     // CRITICAL FIX: If using cloud provider without API key, force to ollama
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    if (config.provider === "groq" && !groqApiKey) {
+    if (selectedProvider === "groq" && !groqApiKey) {
       console.log("[ChatPanel] CRITICAL: Groq selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = "qwen2.5-coder:1.5b";
-    } else if (config.provider === "openrouter" && !openrouterApiKey) {
+    } else if (selectedProvider === "openrouter" && !openrouterApiKey) {
       console.log("[ChatPanel] CRITICAL: OpenRouter selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = "qwen2.5-coder:1.5b";
-    } else if (config.provider === "anthropic" && !anthropicApiKey) {
+    } else if (selectedProvider === "anthropic" && !anthropicApiKey) {
       console.log("[ChatPanel] CRITICAL: Anthropic selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = "qwen2.5-coder:1.5b";
-    } else if (config.provider === "nvidia" && !nvidiaApiKey) {
+    } else if (selectedProvider === "nvidia" && !nvidiaApiKey) {
       console.log("[ChatPanel] CRITICAL: NVIDIA selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = "qwen2.5-coder:1.5b";
     }
@@ -477,8 +1127,24 @@ class ChatPanel {
       await cfg.update("nvidiaApiKey", nvidiaApiKey, target);
     }
 
+    if (customProvider) {
+      const customApiKey = await this._getStoredApiKey(customProvider.id);
+      const savedModel = this._getSavedProviderModel(customProvider.id);
+      return {
+        ...config,
+        provider: customProvider.id,
+        model: savedModel || customProvider.defaultModel,
+        customProvider: {
+          ...customProvider,
+          apiKey: customApiKey,
+          chatCompletionsUrl: this._resolveCustomProviderChatUrl(customProvider.baseUrl)
+        }
+      };
+    }
+
     const effectiveConfig = {
       ...config,
+      provider: selectedProvider,
       groqApiKey,
       openrouterApiKey,
       anthropicApiKey,
@@ -499,7 +1165,7 @@ class ChatPanel {
     try {
       const configKey = this._getApiKeyConfigKey(provider);
       const sanitized = this._sanitizeApiKey(apiKey);
-      if (!configKey || !sanitized) {
+      if (!sanitized) {
         console.log(`[ChatPanel] Skipping persist for ${provider}: configKey=${configKey}, sanitized=${!!sanitized}`);
         return;
       }
@@ -510,6 +1176,10 @@ class ChatPanel {
       await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
       console.log(`[ChatPanel] Stored in secrets: ${this._getApiSecretKey(provider)}`);
       
+      if (!configKey) {
+        return;
+      }
+
       // CRITICAL: Validate settings.json before writing to it
       const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
       
@@ -570,6 +1240,25 @@ class ChatPanel {
     }
 
     return presence;
+  }
+
+  async _addCustomProvider(definition, apiKey) {
+    const normalized = this._normalizeCustomProvider(definition);
+    const sanitizedKey = this._sanitizeApiKey(apiKey);
+    if (!normalized) {
+      throw new Error("Provider name, base URL, and default model are required.");
+    }
+    if (!sanitizedKey) {
+      throw new Error("An API key is required for a custom provider.");
+    }
+
+    const providers = this._getCustomProviders().filter((provider) => provider.id !== normalized.id);
+    providers.push(normalized);
+    await this._saveCustomProviders(providers);
+    await this._persistApiKey(normalized.id, sanitizedKey);
+    await this._setSelectedProviderId(normalized.id);
+    this._saveProviderModel(normalized.id, normalized.defaultModel);
+    return normalized;
   }
 
   _getLanguageIdForPath(filePath) {
@@ -648,6 +1337,133 @@ class ChatPanel {
       success: true,
       path: document.fileName,
       relativePath: path.basename(document.fileName)
+    };
+  }
+
+  _shouldInspectPreviewRequest(message) {
+    const text = String(message || "");
+    return /\b(preview|render|runtime|page|ui)\b/i.test(text) &&
+      /\b(inspect|study|analy[sz]e|check|debug|fix|issue|problem|error|broken)\b/i.test(text);
+  }
+
+  _previewDiagnosticsHasIssues(diagnostics) {
+    if (!diagnostics) return false;
+    return (
+      (diagnostics.errors?.length || 0) > 0 ||
+      (diagnostics.warnings?.length || 0) > 0 ||
+      (diagnostics.resourceFailures?.length || 0) > 0
+    );
+  }
+
+  _summarizePreviewDiagnostics(diagnostics) {
+    if (!diagnostics) {
+      return "Preview inspection finished, but no diagnostics were returned.";
+    }
+
+    const parts = [];
+    if (diagnostics.ready) {
+      parts.push("preview loaded");
+    } else {
+      parts.push("preview did not confirm readiness");
+    }
+
+    if (diagnostics.title) {
+      parts.push(`title: ${diagnostics.title}`);
+    }
+
+    if (diagnostics.bodyTextExcerpt) {
+      parts.push(`content sample: ${diagnostics.bodyTextExcerpt}`);
+    }
+
+    const errorCount = diagnostics.errors?.length || 0;
+    const warningCount = diagnostics.warnings?.length || 0;
+    const resourceCount = diagnostics.resourceFailures?.length || 0;
+    parts.push(
+      `issues: ${errorCount} error(s), ${warningCount} warning(s), ${resourceCount} resource failure(s)`
+    );
+
+    const samples = [
+      ...(diagnostics.errors || []).slice(0, 2).map((entry) => entry.message || entry.stack || "Unknown error"),
+      ...(diagnostics.resourceFailures || []).slice(0, 2).map((entry) => entry.url ? `${entry.message}: ${entry.url}` : entry.message)
+    ].filter(Boolean);
+
+    if (samples.length > 0) {
+      parts.push(`sample: ${samples.join(" | ")}`);
+    }
+
+    return `Preview inspection summary: ${parts.join(". ")}.`;
+  }
+
+  async _fixActiveFileFromPreviewDiagnostics(userRequest, workspaceFolder, diagnostics, runtimeConfig) {
+    const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+    if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
+      return { success: false, error: "Open the file you want me to repair before preview inspection." };
+    }
+
+    const document = activeEditor.document;
+    const relativePath = workspaceFolder
+      ? path.relative(workspaceFolder, document.fileName).replace(/\\/g, "/")
+      : path.basename(document.fileName);
+    const language = this._getLanguageIdForPath(document.fileName);
+    const diagnosticsJson = JSON.stringify(diagnostics, null, 2).slice(0, 8000);
+
+    const fixPrompt = `The user asked: "${userRequest}".
+
+You inspected the live preview for "${relativePath}" and collected runtime/render diagnostics. Fix the active file so the preview loads cleanly and preserves the user's intent. Return exactly one FILE action for "${relativePath}" with the complete updated file. Do not output explanations.
+
+Preview diagnostics:
+\`\`\`json
+${diagnosticsJson}
+\`\`\`
+
+Current file content:
+\`\`\`${language}
+${document.getText()}
+\`\`\``;
+
+    const response = await this.agent.chat(
+      fixPrompt,
+      workspaceFolder,
+      null,
+      null,
+      { mode: "heavy", runtimeConfig }
+    );
+
+    if (response.error) {
+      return { success: false, error: response.error };
+    }
+
+    const fileAction = (response.actions || []).find((action) =>
+      action.type === "file" &&
+      typeof action.content === "string" &&
+      action.content.trim().length > 0
+    );
+
+    if (!fileAction) {
+      return {
+        success: false,
+        error: "AI did not return a file update after preview inspection."
+      };
+    }
+
+    const result = await this._applyToEditor(activeEditor, fileAction.content);
+    if (!result.success) {
+      return result;
+    }
+
+    await document.save();
+
+    let verification = null;
+    try {
+      verification = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+    } catch (error) {
+      verification = { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      path: relativePath,
+      verification
     };
   }
 
@@ -750,6 +1566,14 @@ class ChatPanel {
       /\b(syntax error|syntax errors|syntax issue|syntax issues|parse error|compile error|compile errors)\b/i.test(text) &&
       /\b(is there|are there|check|do we have|does this have|does the file have|any)\b/i.test(text)
     ) || /\b(check|scan|look for|find)\b.*\bsyntax errors?\b/i.test(text);
+  }
+
+  _isLibraryAuditRequest(message) {
+    const text = message || "";
+    return (
+      /\b(check|scan|find|compare|audit|verify)\b.*\b(librar(?:y|ies)|#include|import(?:ed|s)?)\b/i.test(text) &&
+      /\b(installed|missing|not installed|install|imported|included)\b/i.test(text)
+    ) || /\bwhich libraries are installed\b/i.test(text);
   }
 
   _isSyntaxFixRequest(message) {
@@ -1017,6 +1841,8 @@ ${trimmedText}`;
   _getDefaultModelForProvider(provider) {
     if (provider === "ollama") return "qwen2.5-coder:1.5b";
     if (provider === "nvidia") return "minimaxai/minimax-m2.7";
+    const customProvider = this._getCustomProviderById(provider);
+    if (customProvider?.defaultModel) return customProvider.defaultModel;
     const providerModels = MODELS_BY_PROVIDER[provider];
     return Array.isArray(providerModels) && providerModels.length > 0
       ? providerModels[0]
@@ -1068,7 +1894,10 @@ ${trimmedText}`;
     const defaultModel = this._getDefaultModelForProvider(provider);
     if (!raw) return defaultModel;
 
-    const allowedModels = MODELS_BY_PROVIDER[provider];
+    const customProvider = this._getCustomProviderById(provider);
+    const allowedModels = customProvider?.models?.length
+      ? customProvider.models
+      : MODELS_BY_PROVIDER[provider];
     if (Array.isArray(allowedModels) && allowedModels.length > 0) {
       return allowedModels.includes(raw) ? raw : defaultModel;
     }
@@ -1078,10 +1907,12 @@ ${trimmedText}`;
 
   async _setProviderModel(provider, model) {
     const nextModel = this._normalizeModelForProvider(provider, model);
-    await this._updateAiConfig(this._getModelConfigKey(provider), nextModel);
+    if (this._isBuiltInProvider(provider)) {
+      await this._updateAiConfig(this._getModelConfigKey(provider), nextModel);
 
-    // Keep the generic model in sync so status UI and older code paths stay aligned.
-    await this._updateAiConfig("model", nextModel);
+      // Keep the generic model in sync so status UI and older code paths stay aligned.
+      await this._updateAiConfig("model", nextModel);
+    }
 
     this._saveProviderModel(provider, nextModel);
     return nextModel;
@@ -1170,14 +2001,20 @@ ${trimmedText}`;
         if (this._isSyntaxQuestion(trimmedText)) {
           const activeOnly = /\b(active|current|open|this)\s+(file|tab|editor)\b/i.test(trimmedText) ||
             !/\b(workspace|repo|repository|project|codebase|all files|entire project)\b/i.test(trimmedText);
+          const activeEditor = this._getCurrentFileEditor();
           const activeFiles =
-            activeOnly && workspaceFolder && this.lastActiveEditor
-              ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")]
+            activeOnly && workspaceFolder && activeEditor
+              ? [path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/")]
               : null;
           await this._runSyntaxScan(
             workspaceFolder,
             activeFiles
           );
+          return;
+        }
+
+        if (this._isLibraryAuditRequest(trimmedText)) {
+          await this._runLibraryAudit(workspaceFolder);
           return;
         }
 
@@ -1298,6 +2135,7 @@ ${trimmedText}`;
         if (showParsedActionsDebug && response.actions && response.actions.length > 0) {
           const actionSummary = response.actions.map(a => {
             if (a.type === 'graphify') return 'graphify:open';
+            if (a.type === 'preview_inspect') return 'preview:inspect';
             return `${a.type}:${a.path || a.command || ''}`;
           }).join(", ");
           this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
@@ -1310,7 +2148,13 @@ ${trimmedText}`;
               typeof action.content === "string" &&
               action.content.trim().length > 0
           );
-          if (isEditLikeIntent && !hasFileAction) {
+          const hasPreviewInspectionAction = response.actions.some(
+            (action) => action.type === "preview_inspect"
+          ) || (
+            response.actions.some((action) => action.type === "preview") &&
+            this._shouldInspectPreviewRequest(trimmedText)
+          );
+          if (isEditLikeIntent && !hasFileAction && !hasPreviewInspectionAction) {
             this.panel.webview.postMessage({
               type: "status",
               text: "Blocked execution: edit requests must include at least one FILE action."
@@ -1576,6 +2420,169 @@ ${trimmedText}`;
                   text: `Failed to open Graphify: ${err.message}\n\nStack: ${err.stack}`
                 });
               }
+            } else if (action.type === "lint") {
+              this.panel.webview.postMessage({ type: "status", text: "Running Code Janitor lint on the active file..." });
+              try {
+                await vscode.commands.executeCommand("codeJanitor.lintCode");
+                this.panel.webview.postMessage({
+                  type: "applied",
+                  text: "✅ Lint command executed. Check the Problems panel and notifications for results."
+                });
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to run lint: ${err.message}`
+                });
+              }
+            } else if (action.type === "validate_frontend") {
+              this.panel.webview.postMessage({ type: "status", text: "Running frontend dependency validation..." });
+              try {
+                await vscode.commands.executeCommand("codeJanitor.validateFrontend");
+                this.panel.webview.postMessage({
+                  type: "applied",
+                  text: "✅ Frontend validation command executed."
+                });
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to validate frontend dependencies: ${err.message}`
+                });
+              }
+} else if (action.type === "preview") {
+              const shouldInspectPreview = this._shouldInspectPreviewRequest(trimmedText);
+              if (shouldInspectPreview) {
+                this.panel.webview.postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
+                try {
+                  const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+                  const diagnostics = inspection?.diagnostics || null;
+                  this.panel.webview.postMessage({
+                    type: "applied",
+                    text: this._summarizePreviewDiagnostics(diagnostics)
+                  });
+
+                  if (isEditLikeIntent && this._previewDiagnosticsHasIssues(diagnostics)) {
+                    this.panel.webview.postMessage({
+                      type: "status",
+                      text: "Preview issues found. Generating a fix for the active file..."
+                    });
+                    const runtimeConfig = await this._getEffectiveAiConfig();
+                    const fixResult = await this._fixActiveFileFromPreviewDiagnostics(
+                      trimmedText,
+                      workspaceFolder,
+                      diagnostics,
+                      runtimeConfig
+                    );
+
+                    if (!fixResult.success) {
+                      this.panel.webview.postMessage({
+                        type: "error",
+                        text: fixResult.error
+                      });
+                    } else {
+                      this.panel.webview.postMessage({
+                        type: "applied",
+                        text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                      });
+
+                      const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                      if (verificationDiagnostics) {
+                        const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
+                        this.panel.webview.postMessage({
+                          type: cleanPreview ? "applied" : "status",
+                          text: cleanPreview
+                            ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                            : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                        });
+                      }
+                    }
+                  }
+                } catch (err) {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text: `Failed to inspect live preview: ${err.message}`
+                  });
+                }
+              } else {
+                this.panel.webview.postMessage({ type: "status", text: "Opening live preview..." });
+                try {
+                  await vscode.commands.executeCommand("codeJanitor.livePreview");
+                  this.panel.webview.postMessage({
+                    type: "applied",
+                    text: "✅ Live preview command executed."
+                  });
+                } catch (err) {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text: `Failed to open live preview: ${err.message}`
+                  });
+                }
+              }
+            } else if (action.type === "preview_inspect") {
+              this.panel.webview.postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
+              try {
+                const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+                const diagnostics = inspection?.diagnostics || null;
+                this.panel.webview.postMessage({
+                  type: "applied",
+                  text: this._summarizePreviewDiagnostics(diagnostics)
+                });
+
+                if (isEditLikeIntent && this._previewDiagnosticsHasIssues(diagnostics)) {
+                  this.panel.webview.postMessage({
+                    type: "status",
+                    text: "Preview issues found. Generating a fix for the active file..."
+                  });
+                  const runtimeConfig = await this._getEffectiveAiConfig();
+                  const fixResult = await this._fixActiveFileFromPreviewDiagnostics(
+                    trimmedText,
+                    workspaceFolder,
+                    diagnostics,
+                    runtimeConfig
+                  );
+
+                  if (!fixResult.success) {
+                    this.panel.webview.postMessage({
+                      type: "error",
+                      text: fixResult.error
+                    });
+                  } else {
+                    this.panel.webview.postMessage({
+                      type: "applied",
+                      text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                    });
+
+                    const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                    if (verificationDiagnostics) {
+                      const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
+                      this.panel.webview.postMessage({
+                        type: cleanPreview ? "applied" : "status",
+                        text: cleanPreview
+                          ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                          : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                      });
+                    }
+                  }
+                }
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to inspect live preview: ${err.message}`
+                });
+              }
+            } else if (action.type === "performance") {
+              this.panel.webview.postMessage({ type: "status", text: "Opening AI performance report..." });
+              try {
+                await vscode.commands.executeCommand("codeJanitor.showPerformance");
+                this.panel.webview.postMessage({
+                  type: "applied",
+                  text: "✅ AI performance report command executed."
+                });
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to open AI performance report: ${err.message}`
+                });
+              }
             } else if (action.type === "fetch") {
               this.panel.webview.postMessage({ type: "status", text: `Fetching from web: ${action.url}` });
               try {
@@ -1682,10 +2689,13 @@ ${trimmedText}`;
         this.panel.webview.postMessage({ type: "done" });
       } else if (message.type === "syntaxScan") {
         // Triggered by action chip — run directly without model
+        const activeEditor = this._getCurrentFileEditor();
         const files = message.activeOnly
-          ? (this.lastActiveEditor ? [path.relative(workspaceFolder, this.lastActiveEditor.document.fileName).replace(/\\/g, "/")] : [])
+          ? (activeEditor ? [path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/")] : [])
           : null;
         await this._runSyntaxScan(workspaceFolder, files);
+      } else if (message.type === "libraryAudit") {
+        await this._runLibraryAudit(workspaceFolder);
       } else if (message.type === "fixActive") {
         await this._runActiveSyntaxFix(workspaceFolder);
       } else if (message.type === "quickFixActive") {
@@ -1694,25 +2704,24 @@ ${trimmedText}`;
       } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
-          const restoredKeys = await this._restoreApiKeys();
+          const keyPresence = await this._getProviderPresence();
           const savedConfig = this.agent.getConfig();
-          const hasGroqKey = restoredKeys.groq;
-          const hasOpenrouterKey = restoredKeys.openrouter;
-          const hasAnthropicKey = restoredKeys.anthropic;
-          const hasNvidiaKey = restoredKeys.nvidia;
-          const hasKey = (savedConfig.provider === "groq" && hasGroqKey) ||
-                         (savedConfig.provider === "openrouter" && hasOpenrouterKey) ||
-                         (savedConfig.provider === "anthropic" && hasAnthropicKey) ||
-                         (savedConfig.provider === "nvidia" && hasNvidiaKey);
-          const models = hasKey ? (MODELS_BY_PROVIDER[savedConfig.provider] || null) : null;
+          const selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+          const customProvider = this._getCustomProviderById(selectedProvider);
+          const hasKey = selectedProvider === "ollama" || !!keyPresence[selectedProvider];
+          const models = selectedProvider === "ollama"
+            ? null
+            : customProvider?.models?.length
+              ? customProvider.models
+              : hasKey
+                ? (MODELS_BY_PROVIDER[selectedProvider] || null)
+                : null;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
-            provider: savedConfig.provider,
-            model: savedConfig.model,
-            hasGroqKey,
-            hasOpenrouterKey,
-            hasAnthropicKey,
-            hasNvidiaKey,
+            provider: selectedProvider,
+            model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+            providers: this._buildProviderCatalog(),
+            keyPresence,
             models
           });
         }
@@ -1720,8 +2729,7 @@ ${trimmedText}`;
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
-        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-        const provider = cfg.get("provider", "ollama");
+        const provider = this._getSelectedProviderId() || vscode.workspace.getConfiguration("codeJanitor.ai").get("provider", "ollama");
         const nextModel = await this._setProviderModel(provider, message.model);
         if (this.panel) {
           this.panel.webview.postMessage({
@@ -1732,7 +2740,10 @@ ${trimmedText}`;
       } else if (message.type === "setProvider") {
         try {
           console.log("[ChatPanel] setProvider message received:", message.provider);
-          await this._updateAiConfig("provider", message.provider);
+          if (this._isBuiltInProvider(message.provider)) {
+            await this._updateAiConfig("provider", message.provider);
+          }
+          await this._setSelectedProviderId(message.provider);
           const defaultModel = this._getDefaultModelForProvider(message.provider);
           const savedModel = this._getSavedProviderModel(message.provider);
           const nextModel = await this._setProviderModel(
@@ -1741,40 +2752,29 @@ ${trimmedText}`;
           );
           
           // Persist API key if provided
-          if (message.apiKey && message.provider === "groq") {
-            console.log("[ChatPanel] Persisting Groq API key...");
-            await this._persistApiKey("groq", message.apiKey);
-          }
-          if (message.apiKey && message.provider === "openrouter") {
-            console.log("[ChatPanel] Persisting OpenRouter API key...");
-            await this._persistApiKey("openrouter", message.apiKey);
-          }
-          if (message.apiKey && message.provider === "anthropic") {
-            console.log("[ChatPanel] Persisting Anthropic API key...");
-            await this._persistApiKey("anthropic", message.apiKey);
-          }
-          if (message.apiKey && message.provider === "nvidia") {
-            console.log("[ChatPanel] Persisting NVIDIA API key...");
-            await this._persistApiKey("nvidia", message.apiKey);
+          if (message.apiKey) {
+            await this._persistApiKey(message.provider, message.apiKey);
           }
           
           // Wait for config to persist before fetching models
           await new Promise(r => setTimeout(r, 300));
-          const restoredKeys = await this._restoreApiKeys();
+          const keyPresence = await this._getProviderPresence();
+          const customProvider = this._getCustomProviderById(message.provider);
           if (this.panel) {
-            const hasKey = (message.provider === "groq" && restoredKeys.groq) ||
-                           (message.provider === "openrouter" && restoredKeys.openrouter) ||
-                           (message.provider === "anthropic" && restoredKeys.anthropic) ||
-                           (message.provider === "nvidia" && restoredKeys.nvidia);
+            const hasKey = message.provider === "ollama" || !!keyPresence[message.provider];
             this.panel.webview.postMessage({
               type: "setCurrentProvider",
               provider: message.provider,
               model: nextModel,
-              hasGroqKey: restoredKeys.groq,
-              hasOpenrouterKey: restoredKeys.openrouter,
-              hasAnthropicKey: restoredKeys.anthropic,
-              hasNvidiaKey: restoredKeys.nvidia,
-              models: hasKey ? (MODELS_BY_PROVIDER[message.provider] || null) : null
+              providers: this._buildProviderCatalog(),
+              keyPresence,
+              models: message.provider === "ollama"
+                ? null
+                : customProvider?.models?.length
+                  ? customProvider.models
+                  : hasKey
+                    ? (MODELS_BY_PROVIDER[message.provider] || null)
+                    : null
             });
           }
           if (this.panel) {
@@ -1790,6 +2790,32 @@ ${trimmedText}`;
             this.panel.webview.postMessage({
               type: "error",
               text: `Failed to switch provider: ${error.message}`
+            });
+          }
+        }
+      } else if (message.type === "addCustomProvider") {
+        try {
+          const provider = await this._addCustomProvider(message.provider || {}, message.apiKey || "");
+          const keyPresence = await this._getProviderPresence();
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "setCurrentProvider",
+              provider: provider.id,
+              model: provider.defaultModel,
+              providers: this._buildProviderCatalog(),
+              keyPresence,
+              models: provider.models
+            });
+            this.panel.webview.postMessage({
+              type: "status",
+              text: `Custom provider ${provider.name} added and selected.`
+            });
+          }
+        } catch (error) {
+          if (this.panel) {
+            this.panel.webview.postMessage({
+              type: "error",
+              text: `Failed to add custom provider: ${error.message}`
             });
           }
         }

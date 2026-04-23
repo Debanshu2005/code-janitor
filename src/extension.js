@@ -181,8 +181,8 @@ async function getPreferredSyntaxFixRuntimeConfig(context) {
   if (nvidiaApiKey) {
     return {
       provider: "nvidia",
-      model: config.get("nvidiaModel", "nvidia/minimax-m2.7"),
-      nvidiaModel: config.get("nvidiaModel", "nvidia/minimax-m2.7"),
+      model: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
+      nvidiaModel: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
       nvidiaApiKey,
       timeout
     }
@@ -704,17 +704,32 @@ async function activate(context) {
     () => livePreviewer(context)
   )
   context.subscriptions.push(previewDisposable)
+  const inspectPreviewDisposable = vscode.commands.registerCommand(
+    "codeJanitor.inspectLivePreview",
+    () => livePreviewer(context, { inspect: true })
+  )
+  context.subscriptions.push(inspectPreviewDisposable)
   console.log("✓ Enhanced Live Preview command registered.")
 
   // 5. AI Chat Command
   const chatDisposable = vscode.commands.registerCommand(
     "codeJanitor.openChat",
-    () => {
-      // Always create fresh instance or reuse if panel is still open
-      if (!chatPanelInstance || !chatPanelInstance.panel) {
-        chatPanelInstance = new ChatPanel(context)
+    async () => {
+      try {
+        console.log("[Extension] codeJanitor.openChat command triggered");
+        // Always create fresh instance or reuse if panel is still open
+        if (!chatPanelInstance || !chatPanelInstance.panel) {
+          console.log("[Extension] Creating new ChatPanel instance");
+          chatPanelInstance = new ChatPanel(context);
+        }
+        console.log("[Extension] Calling chatPanelInstance.show()");
+        await chatPanelInstance.show();
+        console.log("[Extension] ChatPanel shown successfully");
+      } catch (error) {
+        console.error("[Extension] CRITICAL ERROR in openChat command:", error);
+        console.error("[Extension] Error stack:", error.stack);
+        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}\n\nCheck Developer Console (Help → Toggle Developer Tools) for details.`);
       }
-      chatPanelInstance.show()
     }
   )
   context.subscriptions.push(chatDisposable)
@@ -751,7 +766,10 @@ async function activate(context) {
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
       if (uri.path === "/check-models") {
-        chatPanel.show()
+        if (!chatPanelInstance || !chatPanelInstance.panel) {
+          chatPanelInstance = new ChatPanel(context)
+        }
+        chatPanelInstance.show()
       }
     }
   })

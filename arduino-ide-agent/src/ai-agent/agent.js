@@ -1204,11 +1204,15 @@ ${resolvedMessage}`
     if (!workspaceFolder) return ""
 
     // Only load graph for code-related intents where location matters
-    const shouldLoadGraph = 
-      intent === "scan" || 
-      intent === "debug" || 
+    const shouldLoadGraph =
+      intent === "scan" ||
+      intent === "debug" ||
       intent === "refactor" ||
-      /\b(where is|where's|locate|find|location|which file|what file)\b/i.test(userMessage)
+      intent === "edit" ||
+      intent === "show_graph" ||
+      /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
+        userMessage
+      )
     
     if (!shouldLoadGraph) return ""
 
@@ -1216,14 +1220,35 @@ ${resolvedMessage}`
       const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
       const graphReport = await fs.readFile(graphReportPath, "utf8")
       
-      // Extract only first 3 god nodes for speed
+      const overviewMatch = graphReport.match(/## Overview[\s\S]*?(?=##|$)/)
       const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
-      
-      if (godNodesMatch) {
-        const firstThreeNodes = godNodesMatch[0].split('###').slice(0, 4).join('###')
-        return `\n**Knowledge Graph (Top 3 Central Files):**\n${firstThreeNodes.slice(0, 800)}\n`
+      const directoryMatch = graphReport.match(/## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/)
+      const insightsMatch = graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/)
+
+      const sections = []
+
+      if (overviewMatch) {
+        sections.push(overviewMatch[0].trim())
       }
-      
+
+      if (godNodesMatch) {
+        const firstThreeNodes = godNodesMatch[0].split("###").slice(0, 4).join("###").trim()
+        sections.push(firstThreeNodes)
+      }
+
+      if (directoryMatch) {
+        const topDirectories = directoryMatch[0].split("###").slice(0, 7).join("###").trim()
+        sections.push(topDirectories)
+      }
+
+      if (insightsMatch) {
+        sections.push(insightsMatch[0].trim())
+      }
+
+      if (sections.length > 0) {
+        return `\n**Knowledge Graph Context**\nA Graphify knowledge-graph report is available at \`graphify-out/GRAPH_REPORT.md\`. Use it first for architecture, codebase navigation, multi-file debugging, and refactors.\n${sections.join("\n\n").slice(0, 1800)}\n`
+      }
+
       return ""
     } catch (err) {
       return ""
@@ -1612,13 +1637,16 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder) {
     const base =
-      "You are a coding assistant embedded in Arduino IDE ,named Code Janitor."
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Source control integration, including branch, commit, push, pull, and status workflows"
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
-- If a command is likely to fail, propose a corrected safer command immediately.`
+- If a command is likely to fail, propose a corrected safer command immediately.
+- When the workspace contains \`graphify-out/GRAPH_REPORT.md\`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.
+- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.
+- If the user wants to visualize architecture, dependencies, or the project graph, use the \`GRAPHIFY: open\` action instead of only describing it.`
     switch (intent) {
       case "greeting":
         return `${base}
@@ -2493,8 +2521,15 @@ ${userMessage}`
       "wmic path win32_pnpentity",
       "mode",
       "arduino-cli board list",
+      "arduino-cli lib list",
+      "arduino-cli lib search",
+      "arduino-cli lib install",
       "arduino-cli compile",
-      "arduino-cli upload"
+      "arduino-cli upload",
+      "pip list",
+      "pip3 list",
+      "pip show",
+      "pip3 show"
     ]
 
     if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
