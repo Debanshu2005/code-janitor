@@ -2,7 +2,7 @@
   "name": "code-janitor-arduino-ai-agent",
   "displayName": "Code Janitor Arduino AI Agent",
   "description": "Arduino-focused AI coding assistant from Code Janitor for Arduino IDE 2.x (VSIX plugin).",
-  "version": "1.5.6",
+  "version": "1.8.0",
   "publisher": "Debanshu2005",
   "repository": {
     "type": "git",
@@ -32,7 +32,7 @@
         },
         "codeJanitor.ai.provider": {
           "type": "string",
-          "default": "nvidia",
+          "default": "ollama",
           "enum": [
             "ollama",
             "groq",
@@ -69,25 +69,25 @@
         },
         "codeJanitor.ai.model": {
           "type": "string",
-          "default": "meta/llama-3.1-8b-instruct",
-          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq, meta/llama-3.1-8b-instruct for NVIDIA."
+          "default": "qwen2.5-coder:1.5b",
+          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq, minimaxai/minimax-m2.7 for NVIDIA."
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
-          "default": "meta/llama-3.1-8b-instruct",
+          "default": "minimaxai/minimax-m2.7",
           "enum": [
+            "minimaxai/minimax-m2.7",
             "meta/llama-3.1-8b-instruct",
             "meta/llama-3.1-70b-instruct",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
-            "mistralai/mistral-7b-instruct-v0.3",
-            "minimaxi/minimax-m2.7"
+            "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+            "mistralai/mistral-nemotron"
           ],
           "description": "NVIDIA model"
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 180000,
-          "description": "AI timeout in milliseconds. Local Ollama models may need a higher value."
+          "default": 300000,
+          "description": "AI timeout in milliseconds (default: 5 minutes). Increase if using slow models."
         }
       }
     },

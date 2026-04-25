@@ -67,6 +67,11 @@ To install Code Janitor, follow these steps:
 - Code generation and refactoring
 - Bug fixing and debugging assistance
 - Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
+- **Web Search**: Search the web with DuckDuckGo (no API key required)
+- **YouTube Search**: Search and watch YouTube videos directly in chat (no API key required)
+  - Unlimited free searches
+  - Videos embed and play inline
+  - Powered by DuckDuckGo
 - **Self-Healing**: Automatically detects slow models and switches to faster alternatives
 - **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
    - Track response times

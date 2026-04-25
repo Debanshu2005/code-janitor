@@ -20,7 +20,7 @@ class SelfDiagnosingErrorHandler {
   async diagnoseAndFix(error, operation, context) {
     const diagnosis = this._diagnoseError(error, operation, context);
     
-    console.log(`[Self-Diagnose] Error detected:`, diagnosis);
+    console.log("[Self-Diagnose] Error detected:", diagnosis);
     
     // Log error for learning
     this._logError(diagnosis);

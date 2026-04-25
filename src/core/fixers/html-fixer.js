@@ -372,7 +372,7 @@ class HtmlFixer {
       async (match, jsContent) => {
         if (
           !match.includes(" src=") &&
-          !match.includes('type="module"') &&
+          !match.includes("type=\"module\"") &&
           !match.includes("type='module'")
         ) {
           const fixedJS = await this.fixJavaScriptWithParsing(jsContent);

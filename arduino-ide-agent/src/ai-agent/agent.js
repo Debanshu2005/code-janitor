@@ -5,12 +5,12 @@ const path = require("path")
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
 const MAX_FILE_SNIPPET = 1_200
-const MAX_RELEVANT_FILES = 4
-const MAX_OPEN_TAB_SNIPPETS = 2
-const MAX_HISTORY_ENTRIES = 4
-const REPETITION_WINDOW = 180
-const REPETITION_WINDOW_HEAVY = 400
-const SCAN_STALE_MS = 30_000
+const MAX_RELEVANT_FILES = 3  // Reduced from 4
+const MAX_OPEN_TAB_SNIPPETS = 1  // Reduced from 2
+const MAX_HISTORY_ENTRIES = 3  // Reduced from 4
+const REPETITION_WINDOW = 150  // Reduced from 180
+const REPETITION_WINDOW_HEAVY = 300  // Reduced from 400
+const SCAN_STALE_MS = 45_000  // Increased from 30000 to reduce rescans
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_COMMAND_OUTPUT_CHARS = 12_000
 const IGNORED_DIRS = new Set([
@@ -49,24 +49,31 @@ const STOP_WORDS = new Set([
   "with"
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
+const NVIDIA_MODEL_ALIASES = new Map([
+  ["nvidia/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["minimaxi/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-70b-instruct"],
+  ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
+  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+])
 const NVIDIA_MODELS = new Set([
+  "minimaxai/minimax-m2.7",
   "meta/llama-3.1-8b-instruct",
   "meta/llama-3.1-70b-instruct",
-  "nvidia/llama-3.1-nemotron-70b-instruct",
-  "mistralai/mistral-7b-instruct-v0.3",
-  "minimaxi/minimax-m2.7"
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "mistralai/mistral-nemotron"
 ])
 
 class AIAgent {
   constructor(context) {
     this.codebaseContext = new Map()
-    this.conversationHistory = []
+    this.context = context // Store context for globalState access
+    this.conversationHistory = this._loadPersistedConversationHistory()
     this.scanVersion = 0
     this.lastScanAt = 0
     this.workspaceRoot = null
     this.currentEditableTargets = null
     this._lastActiveEditor = vscode.window.activeTextEditor || null
-    this.context = context // Store context for globalState access
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
@@ -79,6 +86,56 @@ class AIAgent {
     if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor
     }
+  }
+
+  _getConversationStateKey() {
+    return "codeJanitor.arduino.chatHistory"
+  }
+
+  _loadPersistedConversationHistory() {
+    const rawHistory = this.context?.globalState?.get(
+      this._getConversationStateKey(),
+      []
+    )
+    if (!Array.isArray(rawHistory)) return []
+
+    return rawHistory
+      .filter(
+        (entry) =>
+          entry &&
+          (entry.role === "user" || entry.role === "assistant") &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      .slice(-12)
+  }
+
+  _persistConversationHistory() {
+    if (!this.context?.globalState) return
+    this.context.globalState.update(
+      this._getConversationStateKey(),
+      this.conversationHistory.slice(-12)
+    )
+  }
+
+  _appendConversationEntry(role, content) {
+    if (
+      (role !== "user" && role !== "assistant") ||
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      return
+    }
+
+    this.conversationHistory.push({ role, content })
+    if (this.conversationHistory.length > 12) {
+      this.conversationHistory = this.conversationHistory.slice(-12)
+    }
+    this._persistConversationHistory()
+  }
+
+  getConversationHistory() {
+    return this.conversationHistory.slice()
   }
 
   getConfig() {
@@ -101,7 +158,7 @@ class AIAgent {
 
     const genericModel = String(config.get("model", "") || "").trim()
     const nvidiaModel = String(
-      config.get("nvidiaModel", "meta/llama-3.1-8b-instruct") || ""
+      config.get("nvidiaModel", "minimaxai/minimax-m2.7") || ""
     ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
@@ -118,14 +175,9 @@ class AIAgent {
         ? this._sanitizeNvidiaModel(normalizedStateModel)
         : normalizedStateModel
     const model =
-      normalizedStateProvider &&
-      normalizedConfigProvider &&
-      normalizedStateProvider !== normalizedConfigProvider &&
-      stateAwareModel
-        ? stateAwareModel
-        : preferredConfigModel ||
-          stateAwareModel ||
-          this._getDefaultModelForProvider(provider)
+      stateAwareModel ||
+      preferredConfigModel ||
+      this._getDefaultModelForProvider(provider)
 
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
     const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl)
@@ -140,7 +192,7 @@ class AIAgent {
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
       nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
-      timeout: config.get("timeout", 90_000)
+      timeout: config.get("timeout", 300_000)
     }
   }
   
@@ -148,22 +200,25 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
-    if (provider === "nvidia") return "meta/llama-3.1-8b-instruct"
+    if (provider === "nvidia") return "minimaxai/minimax-m2.7"
     return "qwen2.5-coder:1.5b"
   }
 
   _sanitizeNvidiaModel(model) {
     const value = typeof model === "string" ? model.trim() : ""
-    if (!value) return "meta/llama-3.1-8b-instruct"
+    if (!value) return "minimaxai/minimax-m2.7"
+    if (NVIDIA_MODEL_ALIASES.has(value)) {
+      return NVIDIA_MODEL_ALIASES.get(value)
+    }
     if (NVIDIA_MODELS.has(value)) return value
     if (
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
         value
       )
     ) {
-      return "meta/llama-3.1-8b-instruct"
+      return "minimaxai/minimax-m2.7"
     }
-    return "meta/llama-3.1-8b-instruct"
+    return "minimaxai/minimax-m2.7"
   }
 
   _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
@@ -215,7 +270,18 @@ class AIAgent {
   }
 
   async _prepareRuntimeConfig(config, reportStatus) {
-    if (!config || config.provider !== "ollama") {
+    if (!config) {
+      return { ...config }
+    }
+
+    if (config.provider === "nvidia") {
+      return {
+        ...config,
+        timeout: Math.max(config.timeout || 0, 180_000)
+      }
+    }
+
+    if (config.provider !== "ollama") {
       return { ...config }
     }
 
@@ -234,7 +300,7 @@ class AIAgent {
     return {
       ...config,
       model: resolvedModel,
-      timeout: Math.max(config.timeout || 0, 180_000)
+      timeout: Math.max(config.timeout || 0, 300_000)
     }
   }
 
@@ -261,7 +327,7 @@ class AIAgent {
         return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
       }
       if (/\b404\b|page not found|not found/i.test(message)) {
-        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxi/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
+        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxai/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
       }
       if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
         return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`
@@ -279,8 +345,8 @@ class AIAgent {
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
     const isUnlimited = mode === "heavy" && intent === "create"
-    // Increased token limits for Arduino IDE to prevent truncated responses
-    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
+    // Token limits optimized for speed while maintaining quality
+    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 3072 : 1024
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -339,8 +405,10 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: maxTokens,
+          top_p: 0.9,
+          frequency_penalty: 0.2
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -370,8 +438,9 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: maxTokens,
+          top_p: 0.9
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -387,6 +456,27 @@ class AIAgent {
     }
     if (config.provider === "nvidia") {
       const maskedKey = config.nvidiaApiKey ? `${config.nvidiaApiKey.slice(0, 8)}...${config.nvidiaApiKey.slice(-4)}` : "(none)";
+      const resolvedModel = this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+      const isMinimax = resolvedModel === "minimaxai/minimax-m2.7"
+      const isNemotron =
+        resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      const nvidiaMaxTokens =
+        isUnlimited ? 32768 : mode === "heavy" ? 16384 : 8192
+      const minimaxOptimizations = isMinimax
+        ? {
+            top_p: 0.8,
+            frequency_penalty: 0.3,
+            presence_penalty: 0.1
+          }
+        : {}
+      const nemotronOptimizations = isNemotron
+        ? {
+            top_p: 0.95,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0
+          }
+        : {}
+
       console.log(`[CodeJanitor] Using NVIDIA API key: ${maskedKey}`);
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -395,21 +485,27 @@ class AIAgent {
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
+          model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : 0.2,
+          max_tokens: nvidiaMaxTokens,
+          ...minimaxOptimizations,
+          ...nemotronOptimizations
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
           try {
-            return (
+            const token =
               JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
-            )
+            if (!token) return null
+            if (token.includes("<think>") || token.includes("</think>")) {
+              return null
+            }
+            return token
           } catch {
             return null
           }
@@ -428,10 +524,11 @@ class AIAgent {
         ],
         stream: true,
         options: {
-          temperature: 0.05,
+          temperature: 0.2,
           num_predict: mode === "heavy" ? -1 : 1024,
-          top_k: 10,
-          top_p: 0.7
+          top_k: 15,  // Reduced from 20 for faster sampling
+          top_p: 0.85,  // Reduced from 0.9 for faster sampling
+          repeat_penalty: 1.15  // Increased from 1.1 for less repetition
         }
       }),
       parseChunk: (line) => {
@@ -472,6 +569,66 @@ class AIAgent {
     return controller.signal
   }
 
+  _createIdleTimeoutError(timeoutMs) {
+    const error = new Error(
+      `Response stream was idle for more than ${timeoutMs}ms`
+    )
+    error.name = "TimeoutError"
+    error.code = "STREAM_IDLE_TIMEOUT"
+    return error
+  }
+
+  _readWithIdleTimeout(reader, timeoutMs) {
+    if (!(timeoutMs > 0)) {
+      return reader.read()
+    }
+
+    return Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        const timer = setTimeout(() => {
+          clearTimeout(timer)
+          reject(this._createIdleTimeoutError(timeoutMs))
+        }, timeoutMs)
+      })
+    ])
+  }
+
+  async _fetchWithConnectTimeout(url, options = {}, abortSignal, timeoutMs) {
+    if (!(timeoutMs > 0)) {
+      return fetch(url, {
+        ...options,
+        signal: abortSignal || options.signal
+      })
+    }
+
+    const controller = new AbortController()
+    const externalSignal = abortSignal || options.signal || null
+    const onAbort = () => controller.abort()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timer)
+        controller.abort()
+      } else {
+        externalSignal.addEventListener("abort", onAbort, { once: true })
+      }
+    }
+
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: controller.signal
+      })
+    } finally {
+      clearTimeout(timer)
+      if (externalSignal) {
+        externalSignal.removeEventListener("abort", onAbort)
+      }
+    }
+  }
+
   async _buildHttpError(response, prefix) {
     let details = ""
     try {
@@ -507,6 +664,10 @@ class AIAgent {
         ? options.streamCallback
         : null
     const abortSignal = options.abortSignal || null
+    const idleTimeoutMs =
+      Number.isFinite(options.idleTimeoutMs) && options.idleTimeoutMs > 0
+        ? options.idleTimeoutMs
+        : 0
     const shouldStop =
       typeof options.shouldStop === "function" ? options.shouldStop : null
 
@@ -544,7 +705,10 @@ class AIAgent {
         break
       }
 
-      const { done, value } = await reader.read()
+      const { done, value } = await this._readWithIdleTimeout(
+        reader,
+        idleTimeoutMs
+      )
       if (done) {
         streamDone = true
         pending += decoder.decode()
@@ -814,15 +978,39 @@ class AIAgent {
     if (!runtimeConfig.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
     }
+    if (runtimeConfig.provider === "groq" && !runtimeConfig.groqApiKey) {
+      return {
+        error:
+          "Groq is selected but no API key is saved. Save a Groq key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "openrouter" && !runtimeConfig.openrouterApiKey) {
+      return {
+        error:
+          "OpenRouter is selected but no API key is saved. Save an OpenRouter key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "anthropic" && !runtimeConfig.anthropicApiKey) {
+      return {
+        error:
+          "Anthropic is selected but no API key is saved. Save an Anthropic key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "nvidia" && !runtimeConfig.nvidiaApiKey) {
+      return {
+        error:
+          "NVIDIA is selected but no API key is saved. Save an NVIDIA key or switch the provider to Ollama."
+      }
+    }
 
-    this.conversationHistory.push({ role: "user", content: userMessage })
+    this._appendConversationEntry("user", userMessage)
     const isTabQuestion = this._isTabQuestion(userMessage)
 
-    // Detect intent early for knowledge graph decision
+    // Detect intent early for prompt construction
     const earlyIntent = forcedIntent || this._detectIntent(userMessage)
 
-    // Check for knowledge graph only for code-related intents
-    const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent)
+    // Arduino IDE chat does not use Graphify context.
+    const knowledgeGraphContext = ""
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
@@ -853,7 +1041,7 @@ class AIAgent {
     ) {
       const reply = `Today is ${new Date().toDateString()}.`
       if (streamCallback) streamCallback(reply)
-      this.conversationHistory.push({ role: "assistant", content: reply })
+      this._appendConversationEntry("assistant", reply)
       return { text: reply, actions: [] }
     }
     if (
@@ -863,7 +1051,7 @@ class AIAgent {
     ) {
       const reply = `Current date and time: ${new Date().toString()}.`
       if (streamCallback) streamCallback(reply)
-      this.conversationHistory.push({ role: "assistant", content: reply })
+      this._appendConversationEntry("assistant", reply)
       return { text: reply, actions: [] }
     }
 
@@ -888,6 +1076,9 @@ class AIAgent {
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...")
       const activeFileContext = this._getActiveFileContext(effectiveWorkspace)
+      const arduinoSketchContext = this._buildArduinoSketchContext(
+        effectiveWorkspace
+      )
       const editorState = this._getEditorState(effectiveWorkspace)
       let fastContext = ""
       if (
@@ -925,11 +1116,12 @@ class AIAgent {
         intent === "edit" || intent === "debug" || intent === "refactor"
       const contextToUse = isCreateIntent ? "" : fastContext
       const activeCtx = isCreateIntent ? "" : activeFileContext
+      const sketchCtx = isCreateIntent ? "" : arduinoSketchContext
       const editHint =
         isEditIntent && activeFileContext
           ? "\nOutput the complete updated file using FILE: path then a code block."
           : ""
-      prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${sketchCtx ? `\n\n${sketchCtx}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`
@@ -966,10 +1158,17 @@ ${resolvedMessage}`
             .map(([p, d]) => ({
               path: p.replace(/\\/g, "/"),
               score: 1,
-              content: d.content.slice(0, MAX_FILE_SNIPPET)
+              content: this._extractSmartSnippet(
+                d.content,
+                MAX_FILE_SNIPPET,
+                p
+              )
             }))
         : this._findRelevantFiles(userMessage, effectiveWorkspace)
       const activeFileContext = this._getActiveFileContext(effectiveWorkspace)
+      const arduinoSketchContext = this._buildArduinoSketchContext(
+        effectiveWorkspace
+      )
       const editorStateContext = this._buildEditorStateContext(editorState)
       const openTabSnippetContext = isScopedActiveFileEdit
         ? this._getTargetSnippetContext(
@@ -987,7 +1186,7 @@ ${resolvedMessage}`
       prompt = this._buildPrompt(
         resolvedMessage,
         relevantFiles,
-        activeFileContext,
+        [arduinoSketchContext, activeFileContext].filter(Boolean).join("\n\n"),
         editorStateContext,
         openTabSnippetContext,
         isTabQuestion,
@@ -1013,30 +1212,58 @@ ${resolvedMessage}`
         mode,
         reqIntent
       )
+      reportStatus?.(
+        `Request ready: provider=${runtimeConfig.provider}, model=${runtimeConfig.model}`
+      )
       console.log(
         `[CodeJanitor] Sending request to: ${reqOpts.url} with provider: ${runtimeConfig.provider}`
       )
-      const response = await fetch(reqOpts.url, {
-        method: "POST",
-        headers: reqOpts.headers,
-        signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-        body: reqOpts.body
-      })
+      const response = await this._fetchWithConnectTimeout(
+        reqOpts.url,
+        {
+          method: "POST",
+          headers: reqOpts.headers,
+          body: reqOpts.body
+        },
+        abortSignal,
+        runtimeConfig.timeout
+      )
 
       if (!response.ok) {
+        const errorDetails = await this._buildHttpError(
+          response,
+          "AI request failed with status"
+        )
+        if (
+          runtimeConfig.provider === "nvidia" &&
+          response.status === 400 &&
+          /max.*token|token.*limit|context.*length|too.*long/i.test(
+            errorDetails
+          )
+        ) {
+          throw new Error(
+            `NVIDIA NIM hit a token/context limit. Try a smaller request, Heavy mode, or a different NVIDIA model.\n\nOriginal error: ${errorDetails}`
+          )
+        }
         throw new Error(
-          await this._buildHttpError(response, "AI request failed with status")
+          errorDetails
         )
       }
+      reportStatus?.(`AI response headers received: HTTP ${response.status}.`)
 
       let fullResponse = ""
       let repetitionDetected = false
+      let sawFirstToken = false
 
       fullResponse = await this._readResponseText(
         response,
         (line) => {
           const token = reqOpts.parseChunk(line)
           if (token === null) return null
+          if (!sawFirstToken) {
+            sawFirstToken = true
+            reportStatus?.("First response token received.")
+          }
           const nextResponse = fullResponse + token
           if (
             shouldCheckRepetition &&
@@ -1062,17 +1289,25 @@ ${resolvedMessage}`
       if (repetitionDetected && !fullResponse) {
         fullResponse = this._getEmptyResponseFallback(mode)
       }
+      if (!sawFirstToken) {
+        reportStatus?.(
+          "No streamed response tokens were received before completion."
+        )
+      }
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
         : fullResponse || this._getEmptyResponseFallback(mode)
-      let parsedResponse = this._parseResponse(finalText)
+      const cleanedFinalText = finalText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .trim()
+      let parsedResponse = this._parseResponse(cleanedFinalText)
       const finalIntent = forcedIntent || this._detectIntent(userMessage)
       const requiresFileActions = this._shouldForceStructuredEdit(
         finalIntent,
         userMessage
       )
-      let assistantText = finalText
+      let assistantText = cleanedFinalText || finalText
       let firstRetryText = ""
 
       if (
@@ -1094,12 +1329,16 @@ ${resolvedMessage}`
           mode,
           "edit"
         )
-        const retryResponse = await fetch(retryOpts.url, {
-          method: "POST",
-          headers: retryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-          body: retryOpts.body
-        })
+        const retryResponse = await this._fetchWithConnectTimeout(
+          retryOpts.url,
+          {
+            method: "POST",
+            headers: retryOpts.headers,
+            body: retryOpts.body
+          },
+          abortSignal,
+          runtimeConfig.timeout
+        )
 
         if (!retryResponse.ok) {
           throw new Error(
@@ -1136,12 +1375,16 @@ ${resolvedMessage}`
           mode,
           "edit"
         )
-        const fileOnlyRetryResponse = await fetch(fileOnlyRetryOpts.url, {
-          method: "POST",
-          headers: fileOnlyRetryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-          body: fileOnlyRetryOpts.body
-        })
+        const fileOnlyRetryResponse = await this._fetchWithConnectTimeout(
+          fileOnlyRetryOpts.url,
+          {
+            method: "POST",
+            headers: fileOnlyRetryOpts.headers,
+            body: fileOnlyRetryOpts.body
+          },
+          abortSignal,
+          runtimeConfig.timeout
+        )
 
         if (!fileOnlyRetryResponse.ok) {
           throw new Error(
@@ -1168,10 +1411,10 @@ ${resolvedMessage}`
       ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change."
-        this.conversationHistory.push({
-          role: "assistant",
-          content: assistantText || noEditsMessage
-        })
+        this._appendConversationEntry(
+          "assistant",
+          assistantText || noEditsMessage
+        )
         return {
           text: noEditsMessage,
           actions: [],
@@ -1179,14 +1422,13 @@ ${resolvedMessage}`
         }
       }
 
-      this.conversationHistory.push({
-        role: "assistant",
-        content:
-          assistantText ||
+      this._appendConversationEntry(
+        "assistant",
+        assistantText ||
           (repetitionDetected
             ? `${fullResponse}\n\n[stopped repetitive output]`
             : fullResponse || this._getEmptyResponseFallback(mode))
-      })
+      )
 
       return parsedResponse
     } catch (error) {
@@ -1313,6 +1555,115 @@ ${resolvedMessage}`
       : relativePath.replace(/\\/g, "/")
   }
 
+  _isArduinoSketchFile(filePath) {
+    return /\.ino$/i.test(filePath || "")
+  }
+
+  _getOpenDocumentsByPath() {
+    return new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.fileName,
+        document
+      ])
+    )
+  }
+
+  _sortArduinoSketchPaths(sketchPaths) {
+    const normalized = sketchPaths
+      .map((filePath) => filePath.replace(/\\/g, "/"))
+      .sort((a, b) => a.localeCompare(b))
+
+    if (normalized.length <= 1) {
+      return normalized
+    }
+
+    const sketchDir = path.posix.dirname(normalized[0])
+    const sketchName = path.posix.basename(sketchDir)
+    const primaryFile = `${sketchDir}/${sketchName}.ino`.toLowerCase()
+
+    return normalized.sort((a, b) => {
+      const aPrimary = a.toLowerCase() === primaryFile ? 1 : 0
+      const bPrimary = b.toLowerCase() === primaryFile ? 1 : 0
+      if (bPrimary !== aPrimary) return bPrimary - aPrimary
+      return a.localeCompare(b)
+    })
+  }
+
+  _getActiveArduinoSketchPaths(workspaceFolder) {
+    const activeEditor =
+      vscode.window.activeTextEditor || this._lastActiveEditor
+    const activePath = activeEditor?.document?.fileName || ""
+
+    if (!this._isArduinoSketchFile(activePath)) {
+      return []
+    }
+
+    const relativeActivePath = this._toWorkspaceRelativePath(
+      activePath,
+      workspaceFolder
+    )
+    if (!relativeActivePath) {
+      return []
+    }
+
+    const sketchDir = path.posix.dirname(relativeActivePath.replace(/\\/g, "/"))
+    const sketchPaths = []
+
+    for (const relativePath of this.codebaseContext.keys()) {
+      const normalizedPath = relativePath.replace(/\\/g, "/")
+      if (
+        this._isArduinoSketchFile(normalizedPath) &&
+        path.posix.dirname(normalizedPath) === sketchDir
+      ) {
+        sketchPaths.push(normalizedPath)
+      }
+    }
+
+    if (!sketchPaths.includes(relativeActivePath.replace(/\\/g, "/"))) {
+      sketchPaths.push(relativeActivePath.replace(/\\/g, "/"))
+    }
+
+    return this._sortArduinoSketchPaths(sketchPaths)
+  }
+
+  _buildArduinoSketchContext(workspaceFolder, maxChars = 4_500) {
+    const sketchPaths = this._getActiveArduinoSketchPaths(workspaceFolder)
+    if (sketchPaths.length <= 1) {
+      return ""
+    }
+
+    const openDocuments = this._getOpenDocumentsByPath()
+    let context = `Active Arduino sketch tabs (${sketchPaths.length} files):\n`
+
+    for (const sketchPath of sketchPaths) {
+      const fullPath = workspaceFolder
+        ? path.join(workspaceFolder, sketchPath)
+        : sketchPath
+      const openDocument = openDocuments.get(fullPath)
+      const fileData = this.codebaseContext.get(sketchPath)
+      const content = openDocument
+        ? openDocument.getText()
+        : fileData?.content || ""
+
+      if (!content) {
+        continue
+      }
+
+      const snippet = this._extractSmartSnippet(
+        content,
+        MAX_FILE_SNIPPET,
+        sketchPath
+      )
+      const block = `Sketch file: ${sketchPath}${openDocument?.isDirty ? " (unsaved changes)" : ""}\n\`\`\`cpp\n${snippet}\n\`\`\`\n\n`
+      if ((context + block).length > maxChars) {
+        break
+      }
+      context += block
+    }
+
+    return context.trim() ? `${context}\n` : ""
+  }
+
   _buildDocumentContext(label, document, workspaceFolder, maxChars = 1_200) {
     if (!document) {
       return ""
@@ -1320,9 +1671,81 @@ ${resolvedMessage}`
 
     const filePath = document.isUntitled ? null : document.fileName
     const displayPath = this._formatContextPath(filePath, workspaceFolder)
-    const content = document.getText().slice(0, maxChars)
+    const content = this._extractSmartSnippet(
+      document.getText(),
+      maxChars,
+      displayPath
+    )
 
     return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``
+  }
+
+  _extractSmartSnippet(content, maxChars = MAX_FILE_SNIPPET, filePath = "") {
+    const text = typeof content === "string" ? content : ""
+    const normalizedPath = (filePath || "").replace(/\\/g, "/").toLowerCase()
+
+    // Arduino IDE should prefer full sketch files so core functions like
+    // setup()/loop() are never hidden below an arbitrary snippet boundary.
+    if (normalizedPath.endsWith(".ino")) {
+      return text
+    }
+
+    if (text.length <= maxChars) {
+      return text
+    }
+
+    const ext = path.extname(normalizedPath)
+    const isArduinoLike =
+      ext === ".ino" || ext === ".cpp" || ext === ".h" || ext === ".hpp"
+
+    const segments = []
+    const addSegment = (label, start, end) => {
+      const safeStart = Math.max(0, start)
+      const safeEnd = Math.min(text.length, end)
+      if (safeEnd <= safeStart) return
+      const body = text.slice(safeStart, safeEnd).trim()
+      if (!body) return
+      const segment = label ? `// ${label}\n${body}` : body
+      if (!segments.includes(segment)) {
+        segments.push(segment)
+      }
+    }
+
+    addSegment("File start", 0, Math.min(text.length, Math.floor(maxChars * 0.45)))
+
+    if (isArduinoLike) {
+      const patterns = [
+        { label: "setup()", regex: /\bvoid\s+setup\s*\([^)]*\)\s*\{/i },
+        { label: "loop()", regex: /\bvoid\s+loop\s*\([^)]*\)\s*\{/i },
+        {
+          label: "Arduino command handler",
+          regex:
+            /\b(?:void|bool|int|long|float|double|String)\s+(?:applyCommand|handleCommand|getDistanceCM|updateWiggle|updateNod|updateThink)\s*\([^)]*\)\s*\{/i
+        }
+      ]
+
+      const windowSize = Math.max(320, Math.floor(maxChars * 0.3))
+      for (const pattern of patterns) {
+        const match = text.match(pattern.regex)
+        if (!match || typeof match.index !== "number") continue
+        addSegment(
+          pattern.label,
+          Math.max(0, match.index - 80),
+          Math.min(text.length, match.index + windowSize)
+        )
+      }
+    }
+
+    let combined = segments.join("\n\n")
+    if (!combined) {
+      combined = text.slice(0, maxChars)
+    }
+
+    if (combined.length > maxChars) {
+      combined = combined.slice(0, maxChars)
+    }
+
+    return combined
   }
 
   _formatFileList(label, filePaths) {
@@ -1422,12 +1845,7 @@ ${resolvedMessage}`
 
   _getOpenTabSnippetContext(openTabPaths, workspaceFolder) {
     const snippetBlocks = []
-    const openDocuments = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.fileName,
-        document
-      ])
-    )
+    const openDocuments = this._getOpenDocumentsByPath()
 
     for (const tabPath of openTabPaths) {
       let snippet = ""
@@ -1449,9 +1867,10 @@ ${resolvedMessage}`
           continue
         }
 
-        snippet = `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
-          0,
-          MAX_FILE_SNIPPET
+        snippet = `Open tab content: ${tabPath}\n\`\`\`\n${this._extractSmartSnippet(
+          fileData.content,
+          MAX_FILE_SNIPPET,
+          tabPath
         )}\n\`\`\``
       }
 
@@ -1475,12 +1894,7 @@ ${resolvedMessage}`
     }
 
     const snippetBlocks = []
-    const openDocuments = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.fileName,
-        document
-      ])
-    )
+    const openDocuments = this._getOpenDocumentsByPath()
 
     for (const targetPath of targetPaths) {
       let snippet = ""
@@ -1502,9 +1916,10 @@ ${resolvedMessage}`
           continue
         }
 
-        snippet = `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
-          0,
-          MAX_FILE_SNIPPET
+        snippet = `Editable target content: ${targetPath}\n\`\`\`\n${this._extractSmartSnippet(
+          fileData.content,
+          MAX_FILE_SNIPPET,
+          targetPath
         )}\n\`\`\``
       }
 
@@ -1637,16 +2052,17 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder) {
     const base =
-      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Source control integration, including branch, commit, push, pull, and status workflows"
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic"
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
 - If a command is likely to fail, propose a corrected safer command immediately.
-- When the workspace contains \`graphify-out/GRAPH_REPORT.md\`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.
-- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.
-- If the user wants to visualize architecture, dependencies, or the project graph, use the \`GRAPHIFY: open\` action instead of only describing it.`
+- For Arduino sketches, treat all ".ino" tabs in the same sketch folder as one program before claiming a function is missing.
+- When asked to create diagrams, flowcharts, or visualizations, use mermaid syntax in code blocks with the language identifier "mermaid".
+- Mermaid diagrams will be automatically rendered in the chat interface.
+`
     switch (intent) {
       case "greeting":
         return `${base}
@@ -1655,11 +2071,7 @@ Reply naturally and briefly.`
       case "show_graph":
         return `${base}
 ${operatingPrinciples}
-The user wants to see the codebase graph visualization.
-You MUST output this exact line first:
-GRAPHIFY: open
-
-Then you may add a brief message like "Opening the codebase graph visualization panel..."`
+Graph visualization is not part of the Arduino IDE chat workflow. Explain that briefly and continue with a normal text answer.`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
@@ -2128,6 +2540,11 @@ ${(rawResponse || "").slice(0, 4000)}
     const keywords = this._extractKeywords(query)
     const pathHints = this._extractPathHints(query)
     const relevant = []
+    const activeSketchPaths = new Set(
+      this._getActiveArduinoSketchPaths(workspaceFolder).map((candidate) =>
+        candidate.toLowerCase()
+      )
+    )
 
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
@@ -2157,6 +2574,10 @@ ${(rawResponse || "").slice(0, 4000)}
         score += 40
       }
 
+      if (activeSketchPaths.has(normalizedPath)) {
+        score += normalizedPath === activeRelativePath ? 0 : 35
+      }
+
       if (preferredHintMatches.has(normalizedPath)) {
         score += 120
       }
@@ -2180,7 +2601,11 @@ ${(rawResponse || "").slice(0, 4000)}
         relevant.push({
           path: relativePath,
           score,
-          content: fileData.content.slice(0, MAX_FILE_SNIPPET)
+          content: this._extractSmartSnippet(
+            fileData.content,
+            MAX_FILE_SNIPPET,
+            relativePath
+          )
         })
       }
     }
@@ -2253,7 +2678,12 @@ ${(rawResponse || "").slice(0, 4000)}
               relativePath,
               fileData
             ] of this.codebaseContext.entries()) {
-              const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`
+              const snippet = this._extractSmartSnippet(
+                fileData.content,
+                500,
+                relativePath
+              )
+              const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${snippet}\n\`\`\`\n\n`
               if ((snippetContext + block).length > MAX_PROMPT_CHARS) break
               snippetContext += block
             }
@@ -2467,7 +2897,7 @@ ${userMessage}`
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
-      /\bformat\b/
+      /^\s*format(?:\.com)?(?:\s|$)/
     ]
 
     if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
@@ -2820,6 +3250,7 @@ ${userMessage}`
 
   clearHistory() {
     this.conversationHistory = []
+    this._persistConversationHistory()
   }
 }
 

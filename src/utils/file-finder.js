@@ -1,5 +1,5 @@
-const fs = require('fs').promises;
-const path = require('path');
+const fs = require("fs").promises;
+const path = require("path");
 
 /**
  * Recursively finds files with specific extensions in a directory
@@ -18,7 +18,7 @@ async function findFiles(dir, allowedExtensions) {
       
       if (item.isDirectory()) {
         // Skip node_modules and hidden directories
-        if (item.name === 'node_modules' || item.name.startsWith('.')) {
+        if (item.name === "node_modules" || item.name.startsWith(".")) {
           continue;
         }
         results = results.concat(await findFiles(fullPath, allowedExtensions));
