@@ -12,11 +12,12 @@ const MODELS_BY_PROVIDER = {
   ],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: [
-    "minimaxai/minimax-m2.7",
     "meta/llama-3.1-8b-instruct",
+    "nvidia/nvidia-nemotron-nano-9b-v2",
+    "minimaxai/minimax-m2.7",
+    "mistralai/mistral-nemotron",
     "meta/llama-3.1-70b-instruct",
-    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-    "mistralai/mistral-nemotron"
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5"
   ]
 };
 
@@ -2010,36 +2011,40 @@ ${trimmedText}`;
   }
 
   async _fetchAndSendModels() {
+    const config = this.agent.getConfig();
+    const provider = config.provider;
+    if (provider !== "ollama" && provider !== "nvidia") return;
     // Only needed for Ollama — other providers populate models client-side
     try {
-      const config = this.agent.getConfig();
-      if (config.provider !== "ollama") return;
-      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(8000) });
-      if (res.ok) {
-        const data = await res.json();
-        const models = (data.models || []).map(m => m.name).filter(Boolean);
-        if (models.length > 0 && this.panel) {
-          this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "ollama" });
-          this.panel.webview.postMessage({
-            type: "status",
-            text: `Ollama model discovery succeeded: found ${models.length} model(s).`
-          });
-          return;
-        }
+      const models = await this.agent.getAvailableModelsForProvider(provider, {
+        forceRefresh: provider === "nvidia"
+      });
+      if (models.length > 0 && this.panel) {
+        this.panel.webview.postMessage({
+          type: "setModelOptions",
+          models,
+          provider
+        });
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model discovery succeeded: found ${models.length} model(s).`
+        });
+        return;
       }
       if (this.panel) {
         this.panel.webview.postMessage({
           type: "status",
-          text: res.ok
-            ? "Ollama responded, but no local models were reported."
-            : `Ollama model discovery failed with HTTP ${res.status}.`
+          text:
+            provider === "nvidia"
+              ? "NVIDIA model discovery failed. Showing fallback models."
+              : "Ollama responded, but no local models were reported."
         });
       }
     } catch (error) {
       if (this.panel) {
         this.panel.webview.postMessage({
           type: "status",
-          text: `Ollama model discovery failed: ${error.message}`
+          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model discovery failed: ${error.message}`
         });
       }
     }
@@ -2047,8 +2052,11 @@ ${trimmedText}`;
     if (this.panel) {
       this.panel.webview.postMessage({
         type: "setModelOptions",
-        models: ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-        provider: "ollama"
+        models:
+          provider === "nvidia"
+            ? MODELS_BY_PROVIDER.nvidia
+            : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
+        provider
       });
     }
   }
@@ -2245,7 +2253,7 @@ ${trimmedText}`;
 
     await this._updateAiConfig("provider", defaultProvider);
     await this._updateAiConfig("model", defaultModel);
-    await this._updateAiConfig("nvidiaModel", "minimaxai/minimax-m2.7");
+    await this._updateAiConfig("nvidiaModel", "meta/llama-3.1-8b-instruct");
 
     await this.context.globalState.update("codeJanitor.ai.provider", defaultProvider);
     await this.context.globalState.update("codeJanitor.ai.model", defaultModel);
@@ -2812,7 +2820,7 @@ ${trimmedText}`;
         await this._runSyntaxScan(workspaceFolder, files);
       } else if (message.type === "libraryAudit") {
         await this._runArduinoLibraryAudit(workspaceFolder);
-      } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
+      } else if (message.type === "refreshProviderModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
           const restoredKeys = await this._restoreApiKeys();
@@ -2833,7 +2841,10 @@ ${trimmedText}`;
                          (savedConfig.provider === "openrouter" && hasOpenrouterKey) ||
                          (savedConfig.provider === "anthropic" && hasAnthropicKey) ||
                          (savedConfig.provider === "nvidia" && hasNvidiaKey);
-          const models = hasKey ? (MODELS_BY_PROVIDER[savedConfig.provider] || null) : null;
+          const models =
+            hasKey && savedConfig.provider !== "ollama"
+              ? (MODELS_BY_PROVIDER[savedConfig.provider] || null)
+              : null;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
             provider: savedConfig.provider,
@@ -2989,8 +3000,11 @@ ${trimmedText}`;
             });
           }
           
-          // Fetch models for the new provider if needed
-          if (effectiveConfig.provider === "ollama") {
+          // Fetch models for providers that support runtime discovery.
+          if (
+            effectiveConfig.provider === "ollama" ||
+            effectiveConfig.provider === "nvidia"
+          ) {
             await this._fetchAndSendModels();
           }
         } catch (error) {

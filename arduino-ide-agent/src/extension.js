@@ -15,13 +15,21 @@ function registerLegacyAlias(context, alias, handler) {
 
 function activate(context) {
   console.log("[Code Janitor Arduino] Extension activation started...")
-  
+
   const chatPanel = new ChatPanel(context)
   const gitPanel = new GitPanel(context)
   const graphifyPanel = new GraphifyPanel(context)
 
   console.log("[Code Janitor Arduino] Registering commands...")
-  
+
+  const openWelcomeCommand = vscode.commands.registerCommand(
+    "codeJanitorArduino.openWelcome",
+    () => {
+      console.log("[Code Janitor Arduino] openWelcome command triggered")
+      chatPanel.showWelcome()
+    }
+  )
+
   const openChatCommand = vscode.commands.registerCommand(
     "codeJanitorArduino.openChat",
     () => {
@@ -46,6 +54,7 @@ function activate(context) {
     }
   )
 
+  context.subscriptions.push(openWelcomeCommand)
   context.subscriptions.push(openChatCommand)
   context.subscriptions.push(openGitCommand)
   context.subscriptions.push(openGraphifyCommand)
@@ -63,7 +72,9 @@ function activate(context) {
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
       console.log("[Code Janitor Arduino] URI handler triggered:", uri.path)
-      if (uri.path === "/open-chat") {
+      if (uri.path === "/open-welcome") {
+        chatPanel.showWelcome()
+      } else if (uri.path === "/open-chat") {
         chatPanel.show()
       } else if (uri.path === "/open-git") {
         gitPanel.show()
@@ -74,7 +85,6 @@ function activate(context) {
   })
 
   context.subscriptions.push(uriHandler)
-<<<<<<< HEAD
 
   // Show welcome screen on first install
   const hasSeenWelcome = context.globalState.get("codeJanitorArduino.seenWelcome", false)
@@ -83,18 +93,16 @@ function activate(context) {
     chatPanel.showWelcome()
   }
 
-  console.log("Code Janitor Arduino AI Agent activated")
-=======
   console.log("[Code Janitor Arduino] Extension activated successfully!")
   console.log("[Code Janitor Arduino] Commands registered:")
+  console.log("  - codeJanitorArduino.openWelcome")
   console.log("  - codeJanitorArduino.openChat")
   console.log("  - codeJanitorArduino.openSourceControl")
   console.log("  - codeJanitorArduino.openGraphify")
   console.log("  - codeJanitor.openChat (legacy alias)")
   console.log("  - codeJanitor.openSourceControl (legacy alias)")
   console.log("  - codeJanitor.openGraphify (legacy alias)")
-  console.log("[Code Janitor Arduino] Use Ctrl+Alt+A to open AI Chat")
->>>>>>> 46c4f15b4c756adb0fa1e7570abbc17555273e31
+  console.log("[Code Janitor Arduino] Use Ctrl+Alt+A to open the welcome screen")
 }
 
 function deactivate() {}

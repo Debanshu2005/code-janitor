@@ -1724,11 +1724,12 @@
           "claude-3-opus-20240229",
         ],
         nvidia: [
-          "minimaxai/minimax-m2.7",
           "meta/llama-3.1-8b-instruct",
+          "nvidia/nvidia-nemotron-nano-9b-v2",
+          "minimaxai/minimax-m2.7",
+          "mistralai/mistral-nemotron",
           "meta/llama-3.1-70b-instruct",
-          "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-          "mistralai/mistral-nemotron"
+          "nvidia/llama-3.3-nemotron-super-49b-v1.5"
         ],
       };
 
@@ -1787,7 +1788,11 @@
             (p === "anthropic" && currentHasAnthropicKey) ||
             (p === "nvidia" && currentHasNvidiaKey);
           if (hasKey) {
-            populateModels(modelsByProvider[p]);
+            if (p === "nvidia") {
+              showNoModels("Loading models...");
+            } else {
+              populateModels(modelsByProvider[p]);
+            }
           } else {
             showNoModels("Save an API key to see models");
           }
@@ -1795,7 +1800,9 @@
           showNoModels("Loading models...");
         }
         vscode.postMessage({ type: "setProvider", provider: p });
-        if (p === "ollama") vscode.postMessage({ type: "refreshOllamaModels" });
+        if (p === "ollama" || (p === "nvidia" && currentHasNvidiaKey)) {
+          vscode.postMessage({ type: "refreshProviderModels" });
+        }
       };
 
       apiKeySave.onclick = function () {
@@ -2930,7 +2937,11 @@
               showKeySaved();
               var modelsToShow = msg.models || modelsByProvider[msg.provider];
               if (modelsToShow) {
-                populateModels(modelsToShow);
+                if (msg.provider === "nvidia" && !msg.models) {
+                  showNoModels("Loading models...");
+                } else {
+                  populateModels(modelsToShow);
+                }
                 if (msg.model) {
                   for (var i = 0; i < modelSelect.options.length; i++) {
                     if (modelSelect.options[i].value === msg.model) {

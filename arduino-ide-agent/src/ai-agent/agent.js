@@ -61,13 +61,15 @@ const NVIDIA_MODEL_ALIASES = new Map([
   ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
   ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 ])
-const NVIDIA_MODELS = new Set([
-  "minimaxai/minimax-m2.7",
+const NVIDIA_MODEL_DISCOVERY_TTL_MS = 5 * 60 * 1000
+const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.1-8b-instruct",
+  "nvidia/nvidia-nemotron-nano-9b-v2",
+  "minimaxai/minimax-m2.7",
+  "mistralai/mistral-nemotron",
   "meta/llama-3.1-70b-instruct",
-  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-  "mistralai/mistral-nemotron"
-])
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+]
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
   openrouter: [
@@ -82,7 +84,7 @@ const MODELS_BY_PROVIDER = {
     "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229"
   ],
-  nvidia: Array.from(NVIDIA_MODELS)
+  nvidia: NVIDIA_FALLBACK_MODELS.slice()
 }
 
 class AIAgent {
@@ -100,6 +102,8 @@ class AIAgent {
     this._lastActiveEditor = vscode.window.activeTextEditor || null
     this._preparedWorkspaceContextCache = null
     this._relevantFileCache = new Map()
+    this._nvidiaModelsCache = []
+    this._nvidiaModelsFetchedAt = 0
     this.showThinking = false // Toggle to show AI reasoning process
     this._syncCurrentSessionReferences()
 
@@ -473,7 +477,7 @@ class AIAgent {
 
     const genericModel = String(config.get("model", "") || "").trim()
     const nvidiaModel = String(
-      config.get("nvidiaModel", "minimaxai/minimax-m2.7") || ""
+      config.get("nvidiaModel", this._getDefaultModelForProvider("nvidia")) || ""
     ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
@@ -515,7 +519,7 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
-    if (provider === "nvidia") return "minimaxai/minimax-m2.7"
+    if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0]
     return "qwen2.5-coder:1.5b"
   }
 
@@ -539,19 +543,19 @@ class AIAgent {
 
   _sanitizeNvidiaModel(model) {
     const value = typeof model === "string" ? model.trim() : ""
-    if (!value) return "minimaxai/minimax-m2.7"
+    if (!value) return this._getDefaultModelForProvider("nvidia")
     if (NVIDIA_MODEL_ALIASES.has(value)) {
       return NVIDIA_MODEL_ALIASES.get(value)
     }
-    if (NVIDIA_MODELS.has(value)) return value
+    if (/^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(value)) return value
     if (
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
         value
       )
     ) {
-      return "minimaxai/minimax-m2.7"
+      return this._getDefaultModelForProvider("nvidia")
     }
-    return "minimaxai/minimax-m2.7"
+    return this._getDefaultModelForProvider("nvidia")
   }
 
   _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
@@ -586,6 +590,79 @@ class AIAgent {
     }
   }
 
+  _looksLikeNvidiaChatModel(modelId) {
+    const value = String(modelId || "").trim().toLowerCase()
+    if (!value) return false
+
+    const blockedFragments = [
+      "embed",
+      "rerank",
+      "guard",
+      "safety",
+      "topic-control",
+      "jailbreak",
+      "detect",
+      "dino",
+      "ocdrnet",
+      "bevformer",
+      "clip",
+      "parse",
+      "translate",
+      "asr",
+      "tts",
+      "ocr",
+      "object-detection"
+    ]
+
+    return !blockedFragments.some((fragment) => value.includes(fragment))
+  }
+
+  async _fetchNvidiaModelNames(apiKey, timeoutMs = 8_000, forceRefresh = false) {
+    const cacheAge = Date.now() - this._nvidiaModelsFetchedAt
+    if (
+      !forceRefresh &&
+      this._nvidiaModelsCache.length > 0 &&
+      cacheAge < NVIDIA_MODEL_DISCOVERY_TTL_MS
+    ) {
+      return this._nvidiaModelsCache.slice()
+    }
+
+    if (!apiKey) return []
+
+    try {
+      const response = await fetch("https://integrate.api.nvidia.com/v1/models", {
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
+        signal: this._createRequestSignal(null, timeoutMs)
+      })
+      if (!response.ok) return []
+
+      const data = await response.json()
+      const models = Array.from(
+        new Set(
+          (data?.data || [])
+            .map((entry) =>
+              typeof entry === "string"
+                ? entry.trim()
+                : String(entry?.id || entry?.name || "").trim()
+            )
+            .filter(Boolean)
+            .filter((modelId) => this._looksLikeNvidiaChatModel(modelId))
+        )
+      )
+
+      if (models.length > 0) {
+        this._nvidiaModelsCache = models
+        this._nvidiaModelsFetchedAt = Date.now()
+      }
+
+      return models
+    } catch {
+      return []
+    }
+  }
+
   _pickOllamaModel(models, currentModel) {
     if (!Array.isArray(models) || models.length === 0) return currentModel
     if (currentModel && models.includes(currentModel)) return currentModel
@@ -602,14 +679,76 @@ class AIAgent {
     return models[0]
   }
 
+  _pickNvidiaModel(models, currentModel) {
+    const normalizedCurrent = this._sanitizeNvidiaModel(currentModel)
+    if (Array.isArray(models) && models.includes(normalizedCurrent)) {
+      return normalizedCurrent
+    }
+
+    for (const candidate of NVIDIA_FALLBACK_MODELS) {
+      if (Array.isArray(models) && models.includes(candidate)) {
+        return candidate
+      }
+    }
+
+    return Array.isArray(models) && models.length > 0
+      ? models[0]
+      : normalizedCurrent
+  }
+
+  async getAvailableModelsForProvider(
+    provider,
+    { timeoutMs = 8_000, forceRefresh = false } = {}
+  ) {
+    const config = this.getConfig()
+
+    if (provider === "ollama") {
+      return this._fetchOllamaModelNames(config.ollamaUrl, timeoutMs)
+    }
+
+    if (provider === "nvidia") {
+      return this._fetchNvidiaModelNames(
+        config.nvidiaApiKey,
+        timeoutMs,
+        forceRefresh
+      )
+    }
+
+    const providerModels = MODELS_BY_PROVIDER[provider]
+    return Array.isArray(providerModels) ? providerModels.slice() : []
+  }
+
   async _prepareRuntimeConfig(config, reportStatus) {
     if (!config) {
       return { ...config }
     }
 
     if (config.provider === "nvidia") {
+      const discoveredModels = await this._fetchNvidiaModelNames(
+        config.nvidiaApiKey,
+        8_000
+      )
+      const currentModel = this._sanitizeNvidiaModel(
+        config.model || config.nvidiaModel
+      )
+      const resolvedModel = this._pickNvidiaModel(
+        discoveredModels,
+        currentModel
+      )
+
+      if (
+        discoveredModels.length > 0 &&
+        resolvedModel !== currentModel
+      ) {
+        reportStatus?.(
+          `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
+        )
+      }
+
       return {
         ...config,
+        model: resolvedModel,
+        nvidiaModel: resolvedModel,
         timeout: Math.max(config.timeout || 0, 180_000)
       }
     }
@@ -660,7 +799,7 @@ class AIAgent {
         return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
       }
       if (/\b404\b|page not found|not found/i.test(message)) {
-        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxai/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
+        return `NVIDIA error: ${message}. This usually means the selected model is no longer available. Refresh the NVIDIA model list or switch to meta/llama-3.1-8b-instruct.`
       }
       if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
         return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`

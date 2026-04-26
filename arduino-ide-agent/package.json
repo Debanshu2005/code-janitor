@@ -2,7 +2,7 @@
   "name": "code-janitor-arduino-ai-agent",
   "displayName": "Code Janitor Arduino AI Agent",
   "description": "Arduino-focused AI coding assistant from Code Janitor for Arduino IDE 2.x (VSIX plugin).",
-  "version": "1.8.6",
+  "version": "1.8.8",
   "publisher": "Debanshu2005",
   "repository": {
     "type": "git",
@@ -70,19 +70,12 @@
         "codeJanitor.ai.model": {
           "type": "string",
           "default": "qwen2.5-coder:1.5b",
-          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq, minimaxai/minimax-m2.7 for NVIDIA."
+          "description": "AI model. Recommended: qwen2.5-coder:1.5b for Ollama, llama-3.1-8b-instant for Groq, meta/llama-3.1-8b-instruct for NVIDIA."
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
-          "default": "minimaxai/minimax-m2.7",
-          "enum": [
-            "minimaxai/minimax-m2.7",
-            "meta/llama-3.1-8b-instruct",
-            "meta/llama-3.1-70b-instruct",
-            "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-            "mistralai/mistral-nemotron"
-          ],
-          "description": "NVIDIA model"
+          "default": "meta/llama-3.1-8b-instruct",
+          "description": "NVIDIA model id. When an NVIDIA API key is available, the extension fetches the current supported model list from NVIDIA at runtime."
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
@@ -92,6 +85,11 @@
       }
     },
     "commands": [
+      {
+        "command": "codeJanitorArduino.openWelcome",
+        "title": "Open Welcome Screen",
+        "category": "Code Janitor Arduino"
+      },
       {
         "command": "codeJanitorArduino.openChat",
         "title": "Open Arduino AI Chat",
@@ -111,6 +109,9 @@
     "menus": {
       "commandPalette": [
         {
+          "command": "codeJanitorArduino.openWelcome"
+        },
+        {
           "command": "codeJanitorArduino.openChat"
         },
         {
@@ -123,7 +124,7 @@
     },
     "keybindings": [
       {
-        "command": "codeJanitorArduino.openChat",
+        "command": "codeJanitorArduino.openWelcome",
         "key": "ctrl+alt+a",
         "mac": "cmd+alt+a"
       },
