@@ -137,7 +137,10 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-node_modules
-node_modules
-node_modules
-node_modules
+
+# VS Code extension packages
+*.vsix
+
+# Markdown files except README
+*.md
+!README.md
