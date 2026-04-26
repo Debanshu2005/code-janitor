@@ -40,6 +40,14 @@ function activate(context) {
   })
 
   context.subscriptions.push(uriHandler)
+
+  // Show welcome screen on first install
+  const hasSeenWelcome = context.globalState.get("codeJanitorArduino.seenWelcome", false)
+  if (!hasSeenWelcome) {
+    context.globalState.update("codeJanitorArduino.seenWelcome", true)
+    chatPanel.showWelcome()
+  }
+
   console.log("Code Janitor Arduino AI Agent activated")
 }
 

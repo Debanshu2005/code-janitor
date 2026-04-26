@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      *, *::before, *::after { 
+        margin: 0; padding: 0; box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #0b0f14;
+        --panel: #0f141b;
+        --panel-2: #121a23;
+        --panel-3: #182230;
+        --border: #223042;
+        --text: #e6edf3;
+        --muted: #8ba0b6;
+        --accent: #58a6ff;
+        --accent-soft: rgba(88, 166, 255, 0.12);
+        --green: #3fb950;
+        --green-soft: rgba(63, 185, 80, 0.12);
+      }
+
+      body {
+        font-family: "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+        background:
+          radial-gradient(circle at 30% 20%, rgba(88, 166, 255, 0.07), transparent 50%),
+          radial-gradient(circle at 70% 80%, rgba(63, 185, 80, 0.05), transparent 50%),
+          linear-gradient(180deg, #0b0f14 0%, #0d1117 100%);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+
+      /* ── Intro screen ── */
+      #intro-screen {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        z-index: 100;
+        background:
+          radial-gradient(circle at 30% 20%, rgba(88, 166, 255, 0.07), transparent 50%),
+          radial-gradient(circle at 70% 80%, rgba(63, 185, 80, 0.05), transparent 50%),
+          linear-gradient(180deg, #0b0f14 0%, #0d1117 100%);
+      }
+
+      #intro-screen.fade-out {
+        animation: screenFadeOut 0.7s ease forwards;
+      }
+
+      @keyframes screenFadeOut {
+        to { opacity: 0; pointer-events: none; }
+      }
+
+      /* greeting */
+      #greeting {
+        font-size: 52px;
+        font-weight: 800;
+        color: var(--text);
+        letter-spacing: -1px;
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      #greeting.show {
+        animation: popIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+      #greeting.hide {
+        animation: fadeUp 0.4s ease forwards;
+      }
+
+      /* name */
+      #name-line {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        opacity: 0;
+        transform: translateY(16px);
+        margin-top: 8px;
+      }
+      #name-line.show {
+        animation: popIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+      #name-prefix {
+        font-size: 22px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      #name-brand {
+        font-size: 32px;
+        font-weight: 800;
+        background: linear-gradient(90deg, #58a6ff, #79c0ff, #3fb950);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        letter-spacing: -0.5px;
+      }
+
+      /* logo icon */
+      #logo-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #1f6feb, #388bfd);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        box-shadow: 0 8px 24px rgba(31, 111, 235, 0.35);
+        flex-shrink: 0;
+      }
+
+      /* tagline */
+      #tagline {
+        font-size: 14px;
+        color: var(--muted);
+        margin-top: 10px;
+        opacity: 0;
+        letter-spacing: 0.3px;
+      }
+      #tagline.show {
+        animation: fadeIn 0.5s ease forwards;
+      }
+
+      /* cursor blink */
+      .cursor {
+        display: inline-block;
+        width: 3px;
+        height: 1.1em;
+        background: var(--accent);
+        border-radius: 2px;
+        margin-left: 3px;
+        vertical-align: middle;
+        animation: blink 0.9s step-end infinite;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+      }
+
+      /* ── Recommendations card ── */
+      #recs-card {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        opacity: 0;
+        pointer-events: none;
+        z-index: 99;
+      }
+      #recs-card.show {
+        animation: fadeIn 0.5s ease forwards;
+        pointer-events: all;
+      }
+
+      #recs-inner {
+        width: 100%;
+        max-width: 560px;
+        background: rgba(15, 20, 27, 0.96);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 28px 28px 22px;
+        box-shadow: 0 24px 56px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      #recs-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      #recs-logo {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #1f6feb, #388bfd);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        box-shadow: 0 6px 18px rgba(31, 111, 235, 0.3);
+        flex-shrink: 0;
+      }
+
+      #recs-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      #recs-sub {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      /* rec items */
+      #recs-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .rec-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid transparent;
+        background: rgba(18, 26, 35, 0.6);
+        opacity: 0;
+        transform: translateX(-12px);
+        transition: border-color 0.2s, background 0.2s;
+      }
+      .rec-item.show {
+        animation: slideInLeft 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      .rec-item:hover {
+        border-color: rgba(88, 166, 255, 0.3);
+        background: rgba(24, 34, 48, 0.8);
+      }
+
+      .rec-icon {
+        font-size: 18px;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+      .rec-body {}
+      .rec-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 3px;
+      }
+      .rec-desc {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      /* progress dots */
+      #recs-dots {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--border);
+        transition: background 0.3s, transform 0.3s;
+      }
+      .dot.active {
+        background: var(--accent);
+        transform: scale(1.3);
+      }
+
+      /* actions */
+      #recs-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        opacity: 0;
+      }
+      #recs-actions.show {
+        animation: fadeIn 0.4s ease 0.2s forwards;
+      }
+      .recs-btn {
+        padding: 7px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .recs-btn:hover {
+        background: var(--panel-3);
+        border-color: var(--accent);
+      }
+      .recs-btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+        font-weight: 600;
+      }
+      .recs-btn.primary:hover {
+        filter: brightness(1.1);
+      }
+
+      /* ── Main app (shown after welcome) ── */
+      #app {
+        width: 100%;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+      }
+      #app.show {
+        animation: fadeIn 0.6s ease forwards;
+        pointer-events: all;
+      }
+      #app-inner {
+        text-align: center;
+      }
+      #app-title {
+        font-size: 28px;
+        font-weight: 700;
+        background: linear-gradient(90deg, #58a6ff, #3fb950);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 8px;
+      }
+      #app-sub {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      /* ── Keyframes ── */
+      @keyframes popIn {
+        from { opacity: 0; transform: translateY(20px) scale(0.95); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      @keyframes fadeUp {
+        from { opacity: 1; transform: translateY(0); }
+        to   { opacity: 0; transform: translateY(-20px); }
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      @keyframes slideInLeft {
+        from { opacity: 0; transform: translateX(-12px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+
+      /* particles */
+      #particles {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+      }
+      .particle {
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(88, 166, 255, 0.15);
+        animation: floatUp linear infinite;
+      }
+      @keyframes floatUp {
+        from { transform: translateY(100vh) scale(0); opacity: 0; }
+        10%  { opacity: 1; }
+        90%  { opacity: 0.4; }
+        to   { transform: translateY(-10vh) scale(1); opacity: 0; }
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Floating particles -->
+    <div id="particles"></div>
+
+    <!-- Step 1: Greeting + Name -->
+    <div id="intro-screen">
+      <div id="greeting">Hi 👋</div>
+      <div id="name-line">
+        <div id="logo-icon">🧹</div>
+        <div>
+          <div style="display:flex;align-items:baseline;gap:8px;">
+            <span id="name-prefix">I am</span>
+            <span id="name-brand">Code Janitor<span class="cursor"></span></span>
+          </div>
+        </div>
+      </div>
+      <div id="tagline">Your intelligent coding assistant for VS Code</div>
+    </div>
+
+    <!-- Step 2: Recommendations -->
+    <div id="recs-card">
+      <div id="recs-inner">
+        <div id="recs-header">
+          <div id="recs-logo">🧹</div>
+          <div>
+            <div id="recs-title">Here's what I can do for you</div>
+            <div id="recs-sub">Fast fixes, safe edits, and AI-powered assistance</div>
+          </div>
+        </div>
+
+        <div id="recs-list">
+          <div class="rec-item" data-index="0">
+            <div class="rec-icon">⚡</div>
+            <div class="rec-body">
+              <div class="rec-title">Format &amp; Fix Code</div>
+              <div class="rec-desc">Instantly format and repair syntax errors in JS, Python, Java, C/C++, and HTML.</div>
+            </div>
+          </div>
+          <div class="rec-item" data-index="1">
+            <div class="rec-icon">🤖</div>
+            <div class="rec-body">
+              <div class="rec-title">AI Chat Assistant</div>
+              <div class="rec-desc">Ask anything about your code. I'll explain, refactor, debug, or generate new code for you.</div>
+            </div>
+          </div>
+          <div class="rec-item" data-index="2">
+            <div class="rec-icon">🔍</div>
+            <div class="rec-body">
+              <div class="rec-title">Workspace Scanner</div>
+              <div class="rec-desc">Scan your entire codebase for syntax errors, issues, and get a full project overview.</div>
+            </div>
+          </div>
+          <div class="rec-item" data-index="3">
+            <div class="rec-icon">👁️</div>
+            <div class="rec-body">
+              <div class="rec-title">Live Preview</div>
+              <div class="rec-desc">Preview HTML, React, Markdown, CSS, SVG, Vue, and Svelte files in real time.</div>
+            </div>
+          </div>
+          <div class="rec-item" data-index="4">
+            <div class="rec-icon">🗺️</div>
+            <div class="rec-body">
+              <div class="rec-title">Graphify Visualization</div>
+              <div class="rec-desc">Visualize your codebase as an interactive dependency graph to understand architecture.</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="recs-dots">
+          <div class="dot active"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+        </div>
+
+        <div id="recs-actions">
+          <button class="recs-btn" id="btn-skip">Skip</button>
+          <button class="recs-btn primary" id="btn-start">Let's go →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main app placeholder -->
+    <div id="app">
+      <div id="app-inner">
+        <div id="app-title">Code Janitor</div>
+        <div id="app-sub">Ready. Open the AI Chat with <kbd style="background:#0f1724;border:1px solid #1f2a38;border-radius:4px;padding:2px 6px;font-size:11px;">Ctrl+Alt+C</kbd></div>
+      </div>
+    </div>
+
+    <script>
+      // ── Particles ──────────────────────────────────────────
+      (function () {
+        var container = document.getElementById("particles");
+        for (var i = 0; i < 18; i++) {
+          var p = document.createElement("div");
+          p.className = "particle";
+          var size = Math.random() * 6 + 3;
+          p.style.cssText = [
+            "width:" + size + "px",
+            "height:" + size + "px",
+            "left:" + Math.random() * 100 + "%",
+            "animation-duration:" + (Math.random() * 12 + 8) + "s",
+            "animation-delay:" + (Math.random() * 10) + "s"
+          ].join(";");
+          container.appendChild(p);
+        }
+      })();
+
+      // ── Animation sequence ─────────────────────────────────
+      var greeting  = document.getElementById("greeting");
+      var nameLine  = document.getElementById("name-line");
+      var tagline   = document.getElementById("tagline");
+      var introScreen = document.getElementById("intro-screen");
+      var recsCard  = document.getElementById("recs-card");
+      var recItems  = Array.prototype.slice.call(document.querySelectorAll(".rec-item"));
+      var dots      = Array.prototype.slice.call(document.querySelectorAll(".dot"));
+      var recsActions = document.getElementById("recs-actions");
+      var app       = document.getElementById("app");
+
+      var currentDot = 0;
+      var dotTimer = null;
+
+      function activateDot(index) {
+        dots.forEach(function (d, i) { d.classList.toggle("active", i === index); });
+        currentDot = index;
+      }
+
+      function showRecItem(index) {
+        if (index >= recItems.length) return;
+        recItems[index].classList.add("show");
+        activateDot(index);
+      }
+
+      function startRecsSequence() {
+        recsCard.classList.add("show");
+        var delay = 120;
+        recItems.forEach(function (_, i) {
+          setTimeout(function () { showRecItem(i); }, delay + i * 220);
+        });
+        setTimeout(function () {
+          recsActions.classList.add("show");
+        }, delay + recItems.length * 220 + 100);
+      }
+
+      function dismissToApp() {
+        recsCard.style.animation = "screenFadeOut 0.5s ease forwards";
+        setTimeout(function () {
+          recsCard.style.display = "none";
+          app.classList.add("show");
+        }, 500);
+      }
+
+      // Sequence:
+      // 0ms   — show "Hi 👋"
+      // 900ms — show name line
+      // 1700ms — show tagline
+      // 2600ms — fade out intro, show recs
+
+      setTimeout(function () { greeting.classList.add("show"); }, 0);
+
+      setTimeout(function () { nameLine.classList.add("show"); }, 900);
+
+      setTimeout(function () { tagline.classList.add("show"); }, 1700);
+
+      setTimeout(function () {
+        introScreen.classList.add("fade-out");
+        setTimeout(function () {
+          introScreen.style.display = "none";
+          startRecsSequence();
+        }, 700);
+      }, 2600);
+
+      // Buttons
+      document.getElementById("btn-skip").onclick = dismissToApp;
+      document.getElementById("btn-start").onclick = dismissToApp;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      *, *::before, *::after {
+        margin: 0; padding: 0; box-sizing: border-box;
+      }
+
+      /* ── Arduino IDE Dark Theme (default) ── */
+      :root {
+        --bg: #1a1a1a;
+        --panel: #242424;
+        --panel-2: #2c2c2c;
+        --panel-3: #333333;
+        --border: #3d3d3d;
+        --text: #ffffff;
+        --muted: #a0a0a0;
+        --accent: #00979d;
+        --accent-hover: #00b4ba;
+        --accent-soft: rgba(0, 151, 157, 0.15);
+        --green: #00979d;
+        --green-soft: rgba(0, 151, 157, 0.15);
+        --red: #e74c3c;
+        --red-soft: rgba(231, 76, 60, 0.15);
+        --yellow: #f39c12;
+        --orange: #ff6f00;
+        --card-bg: #242424;
+        --card-border: #3d3d3d;
+        --step-bg: rgba(44, 44, 44, 0.8);
+        --step-active-border: rgba(0, 151, 157, 0.5);
+        --step-active-shadow: rgba(0, 151, 157, 0.15);
+        --header-border: #00979d;
+        --overlay-bg: rgba(15, 15, 15, 0.97);
+      }
+
+      /* ── Arduino IDE Light Theme ── */
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f5f5f5;
+          --panel: #ffffff;
+          --panel-2: #e8e8e8;
+          --panel-3: #d4d4d4;
+          --border: #c0c0c0;
+          --text: #1a1a1a;
+          --muted: #666666;
+          --accent: #00979d;
+          --accent-hover: #007a80;
+          --accent-soft: rgba(0, 151, 157, 0.12);
+          --green: #00979d;
+          --green-soft: rgba(0, 151, 157, 0.12);
+          --red: #c0392b;
+          --red-soft: rgba(192, 57, 43, 0.12);
+          --yellow: #e67e22;
+          --orange: #e65100;
+          --card-bg: #ffffff;
+          --card-border: #c8c8c8;
+          --step-bg: rgba(232, 232, 232, 0.9);
+          --step-active-border: rgba(0, 151, 157, 0.5);
+          --step-active-shadow: rgba(0, 151, 157, 0.1);
+          --header-border: #00979d;
+          --overlay-bg: rgba(245, 245, 245, 0.97);
+        }
+      }
+
+      body {
+        font-family: "Roboto", "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        overflow: hidden;
+      }
+
+      /* ── Header (matches chat-panel.html exactly) ── */
+      #header {
+        padding: 8px 12px;
+        background: var(--panel);
+        border-bottom: 2px solid var(--accent);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+      #header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      #header-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+      #header-sub {
+        font-size: 10px;
+        color: var(--muted);
+        padding: 2px 6px;
+        background: var(--panel-2);
+        border-radius: 3px;
+      }
+      #header-skip {
+        padding: 5px 12px;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-family: inherit;
+      }
+      #header-skip:hover {
+        color: var(--text);
+        border-color: var(--accent);
+        background: var(--panel-2);
+      }
+
+      /* ── Main content area ── */
+      #content {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 18px;
+        gap: 20px;
+      }
+      #content::-webkit-scrollbar { width: 4px; }
+      #content::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+      }
+
+      /* ── Greeting section ── */
+      #greeting-section {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        background: var(--bg);
+        z-index: 10;
+        transition: opacity 0.5s ease;
+      }
+      #greeting-section.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #greeting-text {
+        font-size: 42px;
+        font-weight: 800;
+        color: var(--text);
+        opacity: 0;
+        transform: translateY(18px);
+        letter-spacing: -0.5px;
+      }
+      #greeting-text.show {
+        animation: popIn 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+      #greeting-text.hide {
+        animation: fadeUp 0.35s ease forwards;
+      }
+
+      #name-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        opacity: 0;
+        transform: translateY(14px);
+      }
+      #name-row.show {
+        animation: popIn 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+
+      #name-logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 6px;
+        background: var(--accent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        flex-shrink: 0;
+        box-shadow: 0 4px 12px rgba(0, 151, 157, 0.35);
+        overflow: hidden;
+        padding: 0;
+      }
+      #name-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 6px;
+      }
+
+      #name-prefix {
+        font-size: 16px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      #name-brand {
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--accent);
+        letter-spacing: 0.3px;
+      }
+      .cursor {
+        display: inline-block;
+        width: 2px;
+        height: 1em;
+        background: var(--accent);
+        margin-left: 2px;
+        vertical-align: middle;
+        animation: blink 0.9s step-end infinite;
+      }
+
+      #tagline {
+        font-size: 12px;
+        color: var(--muted);
+        opacity: 0;
+        letter-spacing: 0.2px;
+      }
+      #tagline.show {
+        animation: fadeIn 0.45s ease forwards;
+      }
+
+      /* ── Cards hidden until greeting fades ── */
+      #steps-card, #keys-card {
+        display: none;
+      }
+      #steps-card.visible, #keys-card.visible {
+        display: block;
+      }
+      #steps-card {
+        width: 100%;
+        max-width: 520px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-left: 3px solid var(--accent);
+        border-radius: 4px;
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      #steps-card.show {
+        animation: slideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+
+      #steps-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: var(--panel-2);
+        border-bottom: 1px solid var(--border);
+      }
+      #steps-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      #steps-counter {
+        font-size: 10px;
+        color: var(--muted);
+        background: var(--panel-3);
+        padding: 2px 7px;
+        border-radius: 3px;
+      }
+
+      #steps-list {
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      .step-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 3px;
+        border: 1px solid transparent;
+        background: var(--step-bg);
+        opacity: 0;
+        transform: translateX(-10px);
+        transition: border-color 0.2s, background 0.2s;
+      }
+      .step-item.show {
+        animation: slideInLeft 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      .step-item.active {
+        border-color: var(--step-active-border);
+        box-shadow: 0 2px 8px var(--step-active-shadow);
+      }
+
+      .step-icon {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--accent);
+        flex-shrink: 0;
+        margin-top: 2px;
+        width: 28px;
+        text-align: center;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 2px 0;
+        letter-spacing: 0.3px;
+      }
+      .step-body {}
+      .step-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 2px;
+      }
+      .step-desc {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      /* ── Keybindings card ── */
+      #keys-card {
+        width: 100%;
+        max-width: 520px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-left: 3px solid var(--orange);
+        border-radius: 4px;
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      #keys-card.show {
+        animation: slideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+
+      #keys-header {
+        padding: 10px 14px;
+        background: var(--panel-2);
+        border-bottom: 1px solid var(--border);
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--orange);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      #keys-list {
+        padding: 10px 14px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .key-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--muted);
+        opacity: 0;
+      }
+      .key-row.show {
+        animation: fadeIn 0.3s ease forwards;
+      }
+      .key-label { flex: 1; }
+      kbd {
+        background: var(--panel-3);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 2px 6px;
+        font-size: 10px;
+        color: var(--text);
+        font-family: "Roboto Mono", "Fira Code", monospace;
+        white-space: nowrap;
+      }
+
+      /* ── Bottom action bar (matches chat-panel input area) ── */
+      #action-area {
+        padding: 10px 14px;
+        background: var(--panel);
+        border-top: 1px solid var(--border);
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        opacity: 0;
+      }
+      #action-area.show {
+        animation: fadeIn 0.4s ease forwards;
+      }
+
+      #action-hint {
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      #action-btns {
+        display: flex;
+        gap: 8px;
+      }
+
+      .action-btn {
+        padding: 8px 18px;
+        border-radius: 3px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-family: inherit;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .action-btn:hover {
+        background: var(--panel-3);
+        border-color: var(--accent);
+      }
+      .action-btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .action-btn.primary:hover {
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
+        transform: translateY(-1px);
+      }
+
+      /* ── Keyframes ── */
+      @keyframes popIn {
+        from { opacity: 0; transform: translateY(18px) scale(0.96); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      @keyframes fadeUp {
+        from { opacity: 1; transform: translateY(0); }
+        to   { opacity: 0; transform: translateY(-16px); }
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      @keyframes slideUp {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes slideInLeft {
+        from { opacity: 0; transform: translateX(-10px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Header — same structure as chat-panel.html -->
+    <div id="header">
+      <div id="header-left">
+        <img id="header-logo" src="" alt="" style="width:22px;height:22px;border-radius:4px;object-fit:cover;display:none;" />
+        <div id="header-title">Code Janitor Arduino</div>
+        <div id="header-sub">Welcome</div>
+      </div>
+      <button id="header-skip">Skip</button>
+    </div>
+
+    <!-- Main scrollable content -->
+    <div id="content">
+
+      <!-- Step 1: Greeting -->
+      <div id="greeting-section">
+        <div id="greeting-text">Hi</div>
+        <div id="name-row">
+          <div id="name-logo"><img id="logo-img" src="" alt="Code Janitor" /></div>
+          <div style="display:flex;align-items:baseline;gap:6px;">
+            <span id="name-prefix">I am</span>
+            <span id="name-brand">Code Janitor<span class="cursor"></span></span>
+          </div>
+        </div>
+        <div id="tagline">Your AI coding assistant for Arduino IDE</div>
+      </div>
+
+      <!-- Step 2: What I can do -->
+      <div id="steps-card">
+        <div id="steps-header">
+          <div id="steps-title">What I can do for you</div>
+          <div id="steps-counter">5 features</div>
+        </div>
+        <div id="steps-list">
+          <div class="step-item" data-index="0">
+            <div class="step-icon">AI</div>
+            <div class="step-body">
+              <div class="step-title">AI Chat Assistant</div>
+              <div class="step-desc">Ask anything about your Arduino sketch. I'll explain, debug, or generate code for you.</div>
+            </div>
+          </div>
+          <div class="step-item" data-index="1">
+            <div class="step-icon">&lt;/&gt;</div>
+            <div class="step-desc-wrap step-body">
+              <div class="step-title">Syntax Check &amp; Fix</div>
+              <div class="step-desc">Instantly detect and repair syntax errors in your .ino, C, and C++ files.</div>
+            </div>
+          </div>
+          <div class="step-item" data-index="2">
+            <div class="step-icon">~</div>
+            <div class="step-body">
+              <div class="step-title">Circuit Generation</div>
+              <div class="step-desc">Generate circuit diagrams and wiring instructions from your sketch code.</div>
+            </div>
+          </div>
+          <div class="step-item" data-index="3">
+            <div class="step-icon">#</div>
+            <div class="step-body">
+              <div class="step-title">Workspace Scanner</div>
+              <div class="step-desc">Scan your entire project for issues and get a full codebase overview.</div>
+            </div>
+          </div>
+          <div class="step-item" data-index="4">
+            <div class="step-icon">GIT</div>
+            <div class="step-body">
+              <div class="step-title">Source Control</div>
+              <div class="step-desc">Use Git to collaborate, commit, and push your Arduino projects.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Keybindings -->
+      <div id="keys-card">
+        <div id="keys-header">Quick Actions</div>
+        <div id="keys-list">
+          <div class="key-row" data-ki="0">
+            <span class="key-label">Open AI Chat</span>
+            <kbd>Ctrl+Alt+A</kbd>
+          </div>
+          <div class="key-row" data-ki="1">
+            <span class="key-label">Check Syntax</span>
+            <kbd>Action Chip</kbd>
+          </div>
+          <div class="key-row" data-ki="2">
+            <span class="key-label">Source Control</span>
+            <kbd>Action Chip</kbd>
+          </div>
+          <div class="key-row" data-ki="3">
+            <span class="key-label">Fast Mode</span>
+            <kbd>/fast</kbd>
+          </div>
+          <div class="key-row" data-ki="4">
+            <span class="key-label">Heavy Mode</span>
+            <kbd>/heavy</kbd>
+          </div>
+          <div class="key-row" data-ki="5">
+            <span class="key-label">Scan Codebase</span>
+            <kbd>/scan</kbd>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom action bar — same style as chat-panel input area -->
+    <div id="action-area">
+      <div id="action-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; /scan /fast /heavy</div>
+      <div id="action-btns">
+        <button class="action-btn" id="btn-later">Later</button>
+        <button class="action-btn primary" id="btn-start">Open Chat</button>
+      </div>
+    </div>
+
+    <script>
+      // ── Logo: window.LOGO_URI is injected before </head> by the extension
+      // We wait for DOMContentLoaded to ensure the injection script has run
+      document.addEventListener("DOMContentLoaded", function () {
+        var uri = (typeof window.LOGO_URI === "string" && window.LOGO_URI) ? window.LOGO_URI : "";
+
+        // Name row logo
+        var img = document.getElementById("logo-img");
+        var logo = document.getElementById("name-logo");
+        if (uri && img) {
+          img.src = uri;
+          img.onerror = function () {
+            if (img.parentNode) img.parentNode.removeChild(img);
+            logo.textContent = "CJ";
+          };
+        } else if (img) {
+          if (img.parentNode) img.parentNode.removeChild(img);
+          logo.textContent = "CJ";
+        }
+
+        // Header logo
+        var headerLogo = document.getElementById("header-logo");
+        if (uri && headerLogo) {
+          headerLogo.src = uri;
+          headerLogo.style.display = "block";
+          headerLogo.onerror = function () { headerLogo.style.display = "none"; };
+        }
+      });
+
+      // ── Animation sequence ──────────────────────────────────
+      var _vscode = null;
+      function tryPostMessage(msg) {
+        try { if (!_vscode) _vscode = acquireVsCodeApi(); _vscode.postMessage(msg); } catch(e) {}
+      }
+
+      var greetingSection = document.getElementById("greeting-section");
+      var greetingText = document.getElementById("greeting-text");
+      var nameRow      = document.getElementById("name-row");
+      var tagline      = document.getElementById("tagline");
+      var stepsCard    = document.getElementById("steps-card");
+      var keysCard     = document.getElementById("keys-card");
+      var actionArea   = document.getElementById("action-area");
+      var stepItems    = Array.prototype.slice.call(document.querySelectorAll(".step-item"));
+      var keyRows      = Array.prototype.slice.call(document.querySelectorAll(".key-row"));
+      var counter      = document.getElementById("steps-counter");
+
+      // Phase 1 — greeting overlay (0 → 4.8s)
+      setTimeout(function () { greetingText.classList.add("show"); }, 0);
+      setTimeout(function () { nameRow.classList.add("show"); }, 1200);
+      setTimeout(function () { tagline.classList.add("show"); }, 2400);
+
+      // Phase 2 — fade out greeting, reveal cards
+      setTimeout(function () {
+        greetingSection.classList.add("fade-out");
+        setTimeout(function () {
+          greetingSection.style.display = "none";
+
+          stepsCard.classList.add("visible");
+          stepsCard.classList.add("show");
+
+          stepItems.forEach(function (item, i) {
+            setTimeout(function () {
+              item.classList.add("show");
+              item.classList.add("active");
+              counter.textContent = (i + 1) + " / " + stepItems.length;
+              if (i > 0) stepItems[i - 1].classList.remove("active");
+            }, 200 + i * 180);
+          });
+
+          var afterSteps = 200 + stepItems.length * 180 + 150;
+          setTimeout(function () {
+            if (stepItems.length) stepItems[stepItems.length - 1].classList.remove("active");
+            counter.textContent = stepItems.length + " features";
+            keysCard.classList.add("visible");
+            keysCard.classList.add("show");
+            keyRows.forEach(function (row, i) {
+              setTimeout(function () { row.classList.add("show"); }, 100 + i * 80);
+            });
+            setTimeout(function () {
+              actionArea.classList.add("show");
+            }, 100 + keyRows.length * 80 + 100);
+          }, afterSteps);
+
+        }, 500);
+      }, 4800);
+
+      // ── Button handlers ─────────────────────────────────────
+      document.getElementById("header-skip").onclick = function () { tryPostMessage({ type: "welcomeDismiss" }); };
+      document.getElementById("btn-later").onclick   = function () { tryPostMessage({ type: "welcomeDismiss" }); };
+      document.getElementById("btn-start").onclick   = function () { tryPostMessage({ type: "welcomeOpenChat" }); };
+    </script>
+  </body>
+</html>

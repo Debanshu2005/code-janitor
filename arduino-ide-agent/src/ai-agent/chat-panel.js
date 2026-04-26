@@ -17,6 +17,7 @@ class ChatPanel {
   constructor(context) {
     this.context = context;
     this.panel = null;
+    this.welcomePanel = null;
     this.circuitPreviewPanel = null;
     this.agent = new AIAgent(context); // Pass context to agent
     this.abortController = null;
@@ -165,6 +166,52 @@ class ChatPanel {
 
   _getHtmlContent() {
     return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
+  }
+
+  _getWelcomeHtmlContent() {
+    const logoPath = vscode.Uri.file(path.join(__dirname, "logo.png"));
+    const logoUri = this.welcomePanel
+      ? this.welcomePanel.webview.asWebviewUri(logoPath).toString()
+      : "";
+    let html = fs.readFileSync(path.join(__dirname, "welcome.html"), "utf8");
+    html = html.replace(
+      "</head>",
+      `<script>window.LOGO_URI = ${JSON.stringify(logoUri)};</script>\n  </head>`
+    );
+    return html;
+  }
+
+  async showWelcome() {
+    if (this.welcomePanel) {
+      this.welcomePanel.reveal();
+      return;
+    }
+
+    this.welcomePanel = vscode.window.createWebviewPanel(
+      "codeJanitorArduinoWelcome",
+      "Welcome to Code Janitor Arduino",
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.file(path.join(__dirname))
+        ]
+      }
+    );
+
+    this.welcomePanel.webview.html = this._getWelcomeHtmlContent();
+
+    this.welcomePanel.webview.onDidReceiveMessage((message) => {
+      if (message.type === "welcomeDismiss") {
+        this.welcomePanel.dispose();
+      } else if (message.type === "welcomeOpenChat") {
+        this.welcomePanel.dispose();
+        this.show();
+      }
+    });
+
+    this.welcomePanel.onDidDispose(() => { this.welcomePanel = null; });
   }
 
   _getApiKeyConfigKey(provider) {
