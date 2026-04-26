@@ -2863,15 +2863,8 @@ ${userMessage}`;
       }
     }
 
-    // YouTube searches are handled separately via the YouTube button in the UI
-    // Do not parse YOUTUBE: actions from AI responses to avoid slowdowns
-    // const youtubeRegex = /YOUTUBE:\s*(.+)/g;
-    while ((match = youtubeRegex.exec(response)) !== null) {
-      const query = match[1].trim();
-      if (query) {
-        actions.push({ type: "youtube", query });
-      }
-    }
+    // YouTube searches are handled separately via the YouTube button in the UI.
+    // Intentionally do not parse YOUTUBE: actions from AI responses.
 
     return { text: response, actions, warnings };
   }

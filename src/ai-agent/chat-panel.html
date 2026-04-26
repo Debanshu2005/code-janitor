@@ -2323,7 +2323,7 @@
 
         var note = document.createElement("div");
         note.style.cssText = "font-size: 12px; color: var(--muted); line-height: 1.4;";
-        note.textContent = "Videos open in your browser because YouTube often blocks playback inside the VS Code webview (Error 153).";
+        note.textContent = "Videos open in your browser because the VS Code webview is not a reliable place for YouTube playback.";
 
         var openBtn = document.createElement("button");
         openBtn.type = "button";
@@ -2380,20 +2380,21 @@
         
         var title = document.createElement("p");
         title.style.cssText = "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;";
-        title.textContent = "⚠️ This video cannot be embedded (Error 153)";
+        title.textContent = "This video will open on YouTube";
         
         var desc = document.createElement("p");
         desc.style.cssText = "margin: 0 0 15px 0; font-size: 12px; color: var(--muted);";
-        desc.textContent = "The video owner has disabled playback on external websites.";
+        desc.textContent = "Embedded playback is skipped in the VS Code panel so the video can open more reliably in your browser.";
         
-        var link = document.createElement("a");
-        link.href = "https://www.youtube.com/watch?v=" + videoId;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.style.cssText = "display: inline-block; padding: 10px 20px; background: #f85149; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 13px; transition: all 0.2s; cursor: pointer;";
-        link.textContent = "▶️ Watch on YouTube";
+        var link = document.createElement("button");
+        link.type = "button";
+        link.style.cssText = "display: inline-block; padding: 10px 20px; background: #f85149; color: white; text-decoration: none; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; transition: all 0.2s; cursor: pointer;";
+        link.textContent = "Open on YouTube";
         link.onmouseover = function() { this.style.background = "#dc2626"; };
         link.onmouseout = function() { this.style.background = "#f85149"; };
+        link.onclick = function() {
+          openExternalUrl("https://www.youtube.com/watch?v=" + videoId);
+        };
         
         errorMsg.appendChild(title);
         errorMsg.appendChild(desc);

@@ -32,12 +32,41 @@ class ChatPanel {
     this._confirmResolve = null;
     this._providerSwitchVersion = 0;
     this._modelSelectionVersion = 0;
+    this.showThinking = !!this.context.globalState.get(
+      "codeJanitor.ai.showThinking",
+      false
+    );
+    this.agent.showThinking = this.showThinking;
 
     this.agent.setActiveEditor(this.lastActiveEditor);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
     }, null, context.subscriptions);
+  }
+
+  _postSessionState(extra = {}) {
+    if (!this.panel?.webview) return;
+    this.panel.webview.postMessage({
+      type: "sessionState",
+      ...this.agent.getSessionState(),
+      ...extra
+    });
+  }
+
+  async _setThinkingMode(enabled) {
+    this.showThinking = !!enabled;
+    this.agent.showThinking = this.showThinking;
+    await this.context.globalState.update(
+      "codeJanitor.ai.showThinking",
+      this.showThinking
+    );
+    if (this.panel?.webview) {
+      this.panel.webview.postMessage({
+        type: "thinkingState",
+        enabled: this.showThinking
+      });
+    }
   }
 
   _resolveArduinoProjectRoot(workspaceFolder) {
@@ -104,7 +133,7 @@ class ChatPanel {
       (currentProvider === "nvidia" && !cfg.get("nvidiaApiKey", ""));
 
     if (missingKeyForSelectedProvider) {
-      await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
+      await this._updateAiConfig("provider", "ollama");
       await this.context.globalState.update("codeJanitor.ai.provider", "ollama");
     }
 
@@ -1060,9 +1089,8 @@ class ChatPanel {
   async _persistApiKey(provider, apiKey) {
     const configKey = this._getApiKeyConfigKey(provider);
     if (!configKey || !apiKey) return;
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     await this.context.secrets.store(this._getApiSecretKey(provider), apiKey);
-    await cfg.update(configKey, apiKey, vscode.ConfigurationTarget.Global);
+    await this._updateAiConfig(configKey, apiKey);
   }
 
   async _restoreApiKeys() {
@@ -1082,7 +1110,7 @@ class ChatPanel {
       const effectiveValue = configValue || secretValue || "";
 
       if (!configValue && secretValue) {
-        await cfg.update(configKey, secretValue, vscode.ConfigurationTarget.Global);
+        await this._updateAiConfig(configKey, secretValue);
       }
 
       presence[provider] = !!effectiveValue;
@@ -1986,6 +2014,25 @@ ${trimmedText}`;
       : "qwen2.5-coder:1.5b";
   }
 
+  _normalizeModelForProvider(provider, model) {
+    if (provider === "nvidia") {
+      return this.agent._sanitizeNvidiaModel(model);
+    }
+
+    const trimmedModel = typeof model === "string" ? model.trim() : "";
+    const providerModels = MODELS_BY_PROVIDER[provider];
+
+    if (!Array.isArray(providerModels) || providerModels.length === 0) {
+      return trimmedModel || this._getDefaultModelForProvider(provider);
+    }
+
+    if (providerModels.includes(trimmedModel)) {
+      return trimmedModel;
+    }
+
+    return providerModels[0];
+  }
+
   _getProviderModelStateKey(provider) {
     return `codeJanitor.ai.lastModel.${provider || "unknown"}`;
   }
@@ -2016,7 +2063,10 @@ ${trimmedText}`;
     }
 
     const configuredModel = String(cfg.get("model", "") || "").trim();
-    return savedModel || configuredModel || this._getDefaultModelForProvider(provider);
+    return this._normalizeModelForProvider(
+      provider,
+      savedModel || configuredModel || this._getDefaultModelForProvider(provider)
+    );
   }
 
   _getConfigTargetForKey(key) {
@@ -2034,29 +2084,50 @@ ${trimmedText}`;
     return vscode.ConfigurationTarget.Global;
   }
 
+  _getAlternateConfigTarget(target) {
+    if (!vscode.workspace.workspaceFolders?.length) {
+      return null;
+    }
+
+    return target === vscode.ConfigurationTarget.Workspace
+      ? vscode.ConfigurationTarget.Global
+      : vscode.ConfigurationTarget.Workspace;
+  }
+
   async _updateAiConfig(key, value) {
     try {
-      // Arduino IDE uses Theia/Eclipse framework, not pure VS Code
-      // We need to update config and ensure it persists
-      const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-      
-      // Try Global target first (works in both VS Code and Arduino IDE)
-      await cfg.update(key, value, vscode.ConfigurationTarget.Global);
-      
-      // Also try updating in the configuration object directly as fallback
-      // This ensures Arduino IDE's Theia framework picks it up
-      await new Promise(r => setTimeout(r, 200));
-      
-      // Verify the update worked
-      const freshCfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-      const actualValue = freshCfg.get(key);
-      
-      console.log(`[CodeJanitor] Updated ${key} to ${value}, actual value: ${actualValue}`);
-      
+      const attemptUpdate = async (target) => {
+        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+        await cfg.update(key, value, target);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        const freshCfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+        const actualValue = freshCfg.get(key);
+
+        console.log(
+          `[CodeJanitor] Updated ${key} to ${value}, target=${target}, actual value: ${actualValue}`
+        );
+
+        return { freshCfg, actualValue };
+      };
+
+      const preferredTarget = this._getConfigTargetForKey(key);
+      let { freshCfg, actualValue } = await attemptUpdate(preferredTarget);
+
+      if (actualValue !== value) {
+        const alternateTarget = this._getAlternateConfigTarget(preferredTarget);
+        if (alternateTarget !== null) {
+          console.warn(
+            `[CodeJanitor] Config update mismatch for ${key}. Retrying with target=${alternateTarget}.`
+          );
+          ({ freshCfg, actualValue } = await attemptUpdate(alternateTarget));
+        }
+      }
+
       if (actualValue !== value) {
         console.warn(`[CodeJanitor] Config update may not have persisted. Expected ${value}, got ${actualValue}`);
       }
-      
+
       return freshCfg;
     } catch (error) {
       console.error(`[CodeJanitor] Failed to update config ${key}:`, error);
@@ -2122,13 +2193,12 @@ ${trimmedText}`;
   }
 
   async _resetAiRuntimeState() {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     const defaultProvider = "ollama";
     const defaultModel = "qwen2.5-coder:1.5b";
 
-    await cfg.update("provider", defaultProvider, vscode.ConfigurationTarget.Global);
-    await cfg.update("model", defaultModel, vscode.ConfigurationTarget.Global);
-    await cfg.update("nvidiaModel", "minimaxai/minimax-m2.7", vscode.ConfigurationTarget.Global);
+    await this._updateAiConfig("provider", defaultProvider);
+    await this._updateAiConfig("model", defaultModel);
+    await this._updateAiConfig("nvidiaModel", "minimaxai/minimax-m2.7");
 
     await this.context.globalState.update("codeJanitor.ai.provider", defaultProvider);
     await this.context.globalState.update("codeJanitor.ai.model", defaultModel);
@@ -2176,6 +2246,32 @@ ${trimmedText}`;
           this.panel.webview.postMessage({ type: "done" });
           return;
         }
+        if (/^\/deep$/i.test(trimmedText)) {
+          this.chatMode = "deep";
+          this.panel.webview.postMessage({ type: "status", text: "Mode switched to Deep." });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+        if (/^\/think$/i.test(trimmedText)) {
+          await this._setThinkingMode(!this.showThinking);
+          const status = this.showThinking ? "enabled" : "disabled";
+          this.panel.webview.postMessage({
+            type: "status",
+            text: `Thinking mode ${status}. Replies will ${this.showThinking ? "include a short visible reasoning summary before the answer." : "return to normal answer-only mode."}`
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
+        if (/^\/think$/i.test(trimmedText)) {
+          this.agent.showThinking = !this.agent.showThinking;
+          const status = this.agent.showThinking ? "enabled" : "disabled";
+          this.panel.webview.postMessage({ 
+            type: "status", 
+            text: `🤔 Thinking mode ${status}. The AI will ${this.agent.showThinking ? 'show its reasoning process step-by-step' : 'respond normally without showing reasoning'}.` 
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          return;
+        }
         if (/^\/scan$/i.test(trimmedText)) {
           this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
           this.panel.webview.postMessage({ type: "thinking" });
@@ -2219,13 +2315,15 @@ ${trimmedText}`;
         }
 
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-        if (workspaceFolder && (this.chatMode === "heavy" || intent === "scan")) {
-          const forcePrep = this.chatMode === "heavy" || intent === "scan";
+        if (workspaceFolder && (this.chatMode === "heavy" || this.chatMode === "deep" || intent === "scan")) {
+          const forcePrep = intent === "scan";
           this.panel.webview.postMessage({ type: "status", text: "Studying workspace before responding..." });
           const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
           this.panel.webview.postMessage({
             type: "status",
-            text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
+            text: prep.cacheHit
+              ? `Reused cached workspace context: ${prep.indexedFiles} indexed file(s).`
+              : `Studied workspace: indexed ${prep.indexedFiles} file(s).`
           });
           if (prep.activeFile) {
             this.panel.webview.postMessage({
@@ -2246,6 +2344,25 @@ ${trimmedText}`;
         let response;
         let streamedText = "";
         try {
+          // Verify config before making request
+          const currentConfig = this.agent.getConfig();
+          console.log(`[CodeJanitor] Chat request - Provider: ${currentConfig.provider}, Model: ${currentConfig.model}`);
+          console.log(`[CodeJanitor] API Keys present - Groq: ${!!currentConfig.groqApiKey}, OpenRouter: ${!!currentConfig.openrouterApiKey}, Anthropic: ${!!currentConfig.anthropicApiKey}, NVIDIA: ${!!currentConfig.nvidiaApiKey}`);
+          
+          // Check if provider needs API key and if it's present
+          if (currentConfig.provider === "groq" && !currentConfig.groqApiKey) {
+            throw new Error("Groq API key is missing. Please save your API key in the chat panel.");
+          }
+          if (currentConfig.provider === "openrouter" && !currentConfig.openrouterApiKey) {
+            throw new Error("OpenRouter API key is missing. Please save your API key in the chat panel.");
+          }
+          if (currentConfig.provider === "anthropic" && !currentConfig.anthropicApiKey) {
+            throw new Error("Anthropic API key is missing. Please save your API key in the chat panel.");
+          }
+          if (currentConfig.provider === "nvidia" && !currentConfig.nvidiaApiKey) {
+            throw new Error("NVIDIA API key is missing. Please save your API key in the chat panel.");
+          }
+          
           response = await this.agent.chat(
             trimmedText,
             workspaceFolder,
@@ -2262,6 +2379,7 @@ ${trimmedText}`;
         } catch (err) {
           this.panel.webview.postMessage({ type: "error", text: `AI error: ${err.message}` });
           this.panel.webview.postMessage({ type: "done" });
+          this._postSessionState();
           return;
         } finally {
           this.abortController = null;
@@ -2270,14 +2388,32 @@ ${trimmedText}`;
         if (response.error) {
           this.panel.webview.postMessage({ type: "error", text: response.error });
           this.panel.webview.postMessage({ type: "done" });
+          this._postSessionState();
           return;
         }
 
-        if (!streamedText.trim() && response.text && response.text.trim()) {
+        const streamedTrimmed = (streamedText || "").trim();
+        const responseTrimmed =
+          typeof response.text === "string" ? response.text.trim() : "";
+
+        if (response.manualFallback && responseTrimmed) {
+          this.panel.webview.postMessage({
+            type: "status",
+            text: "Auto-apply could not be completed. Showing copy/paste fallback code."
+          });
+          if (responseTrimmed !== streamedTrimmed) {
+            const prefix = streamedTrimmed ? "\n\nCopy/paste fallback:\n\n" : "";
+            this.panel.webview.postMessage({
+              type: "stream",
+              text: `${prefix}${response.text}`
+            });
+          }
+        } else if (!streamedTrimmed && responseTrimmed) {
           this.panel.webview.postMessage({ type: "stream", text: response.text });
         }
 
         this.panel.webview.postMessage({ type: "done" });
+        this._postSessionState();
 
         if (response.warnings && response.warnings.length > 0) {
           for (const warning of response.warnings) {
@@ -2612,6 +2748,7 @@ ${trimmedText}`;
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
         this.panel.webview.postMessage({ type: "cleared" });
+        this._postSessionState();
       } else if (message.type === "openFile") {
         await this._revealWorkspaceFile(message.path);
       } else if (message.type === "scanOverview") {
@@ -2633,7 +2770,14 @@ ${trimmedText}`;
         if (message.type === "ready") {
           const restoredKeys = await this._restoreApiKeys();
           const savedConfig = this.agent.getConfig();
-          const conversationHistory = this.agent.getConversationHistory();
+          const normalizedModel = this._resolvePreferredModelForProvider(savedConfig.provider);
+          if (normalizedModel !== savedConfig.model) {
+            await this._updateAiConfig("model", normalizedModel);
+            if (savedConfig.provider === "nvidia") {
+              await this._updateAiConfig("nvidiaModel", normalizedModel);
+            }
+            await this._syncAiState(savedConfig.provider, normalizedModel);
+          }
           const hasGroqKey = restoredKeys.groq;
           const hasOpenrouterKey = restoredKeys.openrouter;
           const hasAnthropicKey = restoredKeys.anthropic;
@@ -2646,7 +2790,7 @@ ${trimmedText}`;
           this.panel.webview.postMessage({
             type: "setCurrentProvider",
             provider: savedConfig.provider,
-            model: savedConfig.model,
+            model: normalizedModel,
             hasGroqKey,
             hasOpenrouterKey,
             hasAnthropicKey,
@@ -2654,21 +2798,39 @@ ${trimmedText}`;
             models
           });
           this.panel.webview.postMessage({
-            type: "restoreConversation",
-            history: conversationHistory
+            type: "thinkingState",
+            enabled: this.showThinking
           });
+          this._postSessionState();
         }
         this._fetchAndSendModels();
+      } else if (message.type === "toggleThinking") {
+        await this._setThinkingMode(!this.showThinking);
+        this.panel.webview.postMessage({
+          type: "status",
+          text: `Thinking mode ${this.showThinking ? "enabled" : "disabled"}.`
+        });
+        this.panel.webview.postMessage({ type: "done" });
+      } else if (message.type === "createSession") {
+        this.agent.createSession();
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
+      } else if (message.type === "switchSession") {
+        this.agent.switchSession(message.sessionId);
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
       } else if (message.type === "mode") {
-        this.chatMode = message.value === "heavy" ? "heavy" : "fast";
+        this.chatMode =
+          message.value === "deep"
+            ? "deep"
+            : message.value === "heavy"
+              ? "heavy"
+              : "fast";
       } else if (message.type === "setModel") {
         this._modelSelectionVersion += 1;
         const cfg = await this._updateAiConfig("model", message.model);
         const provider = message.provider || cfg.get("provider", "ollama");
-        const resolvedModel =
-          provider === "nvidia"
-            ? this.agent._sanitizeNvidiaModel(message.model)
-            : message.model;
+        const resolvedModel = this._normalizeModelForProvider(provider, message.model);
         if (resolvedModel !== message.model) {
           await this._updateAiConfig("model", resolvedModel);
         }
@@ -2683,27 +2845,49 @@ ${trimmedText}`;
           const modelSelectionVersion = this._modelSelectionVersion;
           console.log(`[CodeJanitor] Switching provider to: ${message.provider}`);
 
-          await this._updateAiConfig("provider", message.provider);
-
-          // Save API key if provided
+          // Save API key FIRST if provided (before updating provider)
           if (message.apiKey) {
-            if (message.provider === "groq") {
-              await this._persistApiKey("groq", message.apiKey);
+            console.log(`[CodeJanitor] Saving API key for ${message.provider}`);
+            await this._persistApiKey(message.provider, message.apiKey);
+            
+            // Verify the key was saved
+            const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+            const configKey = this._getApiKeyConfigKey(message.provider);
+            const savedKey = cfg.get(configKey, "");
+            console.log(`[CodeJanitor] API key verification - saved: ${!!savedKey}`);
+            
+            if (!savedKey) {
+              console.error(`[CodeJanitor] API key failed to persist for ${message.provider}`);
+              if (this.panel) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Failed to save API key for ${message.provider}. Please try again.`
+                });
+              }
+              return;
             }
-            if (message.provider === "openrouter") {
-              await this._persistApiKey("openrouter", message.apiKey);
-            }
-            if (message.provider === "anthropic") {
-              await this._persistApiKey("anthropic", message.apiKey);
-            }
-            if (message.provider === "nvidia") {
-              await this._persistApiKey("nvidia", message.apiKey);
-            }
-            console.log(`[CodeJanitor] API key saved for ${message.provider}`);
           }
+
+          await this._updateAiConfig("provider", message.provider);
           
-          // Wait for persistence
-          await new Promise(r => setTimeout(r, 300));
+          // Wait for persistence and verify
+          await new Promise(r => setTimeout(r, 500));
+          
+          // Verify provider was actually set
+          const verifyConfig = vscode.workspace.getConfiguration("codeJanitor.ai");
+          const actualProvider = verifyConfig.get("provider", "");
+          console.log(`[CodeJanitor] Provider verification - expected: ${message.provider}, actual: ${actualProvider}`);
+          
+          if (actualProvider !== message.provider) {
+            console.error(`[CodeJanitor] Provider failed to persist`);
+            if (this.panel) {
+              this.panel.webview.postMessage({
+                type: "error",
+                text: `Failed to switch to ${message.provider}. Current provider: ${actualProvider}`
+              });
+            }
+            return;
+          }
 
           if (switchVersion !== this._providerSwitchVersion) {
             return;
@@ -2711,20 +2895,23 @@ ${trimmedText}`;
 
           const selectedDuringSwitch = this._modelSelectionVersion !== modelSelectionVersion;
           const latestCfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-          const currentConfiguredModel = message.provider === "nvidia"
-            ? this.agent._sanitizeNvidiaModel(
-                String(
+          const currentConfiguredModel = this._normalizeModelForProvider(
+            message.provider,
+            message.provider === "nvidia"
+              ? String(
                   latestCfg.get("nvidiaModel", "") ||
                     latestCfg.get("model", "") ||
                     ""
                 ).trim()
-              )
-            : String(latestCfg.get("model", "") || "").trim();
+              : String(latestCfg.get("model", "") || "").trim()
+          );
           const preferredModel = this._resolvePreferredModelForProvider(message.provider);
-          const nextModel =
+          const nextModel = this._normalizeModelForProvider(
+            message.provider,
             selectedDuringSwitch && currentConfiguredModel
               ? currentConfiguredModel
-              : preferredModel;
+              : preferredModel
+          );
 
           console.log(
             `[CodeJanitor] Setting model to: ${nextModel}${selectedDuringSwitch ? " (preserving latest user selection)" : ""}`
