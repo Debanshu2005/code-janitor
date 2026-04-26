@@ -18,12 +18,14 @@ class ChatPanel {
   constructor(context) {
     this.context = context;
     this.panel = null;
+    this.sidebarView = null;
     this.agent = new AIAgent();
     this.performanceMonitor = new PerformanceMonitor(context);
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
     this._confirmResolve = null;
+    this._boundWebviews = new WeakSet();
 
     this.agent.setActiveEditor(this.lastActiveEditor);
     this.performanceMonitor.loadMetrics();
@@ -37,7 +39,6 @@ class ChatPanel {
   }
 
   async show() {
-    let provider = forceProvider || "ollama";
     try {
       console.log("[ChatPanel] show() called");
       this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
@@ -95,11 +96,7 @@ class ChatPanel {
       { enableScripts: true, retainContextWhenHidden: true }
     );
 
-    console.log("[ChatPanel] Setting up message handler BEFORE setting HTML");
-    this._setupMessageHandler();
-    
-    console.log("[ChatPanel] Setting webview HTML");
-    this.panel.webview.html = this._getHtmlContent();
+    this._attachWebviewHost(this.panel, { kind: "panel" });
     
     console.log("[ChatPanel] Setting up dispose handler");
     this.panel.onDidDispose(() => { 
@@ -118,16 +115,16 @@ class ChatPanel {
 
   async _runSyntaxScan(workspaceFolder, specificFiles) {
     if (!workspaceFolder) {
-      this.panel.webview.postMessage({ type: "status", text: "No workspace open." });
+      this._postMessage({ type: "status", text: "No workspace open." });
       return;
     }
-    this.panel.webview.postMessage({ type: "thinking" });
+    this._postMessage({ type: "thinking" });
     await this.agent.ensureCodebaseScanned(workspaceFolder);
     const files = specificFiles || Array.from(this.agent.codebaseContext.keys()).filter(f =>
       /\.(js|jsx|ts|tsx|py|java)$/i.test(f)
     );
     let reply = `Scanning ${files.length} file(s) for syntax errors...\n`;
-    this.panel.webview.postMessage({ type: "stream", text: reply });
+    this._postMessage({ type: "stream", text: reply });
     let errorCount = 0;
     const dirtyOpen = new Map();
     for (const editor of vscode.window.visibleTextEditors || []) {
@@ -176,7 +173,7 @@ class ChatPanel {
       if (result.skipped) {
         // C/C++ files that need manual checking
         const msg = `\n\u26a0\ufe0f ${normalized}: ${result.output}`;
-        this.panel.webview.postMessage({ type: "stream", text: msg });
+        this._postMessage({ type: "stream", text: msg });
         reply += msg;
         continue;
       }
@@ -184,7 +181,7 @@ class ChatPanel {
         // Syntax error found
         const errorMsg = result.error || result.output || "Unknown syntax error";
         const msg = `\n\u274c ${normalized}:\n${errorMsg}`;
-        this.panel.webview.postMessage({ type: "stream", text: msg });
+        this._postMessage({ type: "stream", text: msg });
         reply += msg;
         errorCount++;
       }
@@ -192,22 +189,22 @@ class ChatPanel {
     const summary = errorCount > 0 
       ? `\n\n\u274c Found ${errorCount} file(s) with syntax errors.` 
       : "\n\n\u2705 No syntax errors found.";
-    this.panel.webview.postMessage({ type: "stream", text: summary });
-    this.panel.webview.postMessage({ type: "done" });
+    this._postMessage({ type: "stream", text: summary });
+    this._postMessage({ type: "done" });
   }
 
   async _runLibraryAudit(workspaceFolder) {
     if (!workspaceFolder) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: "Open a workspace first so imports and installed libraries can be audited."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
-    this.panel.webview.postMessage({ type: "thinking" });
-    this.panel.webview.postMessage({
+    this._postMessage({ type: "thinking" });
+    this._postMessage({
       type: "status",
       text: "Auditing libraries across all supported languages..."
     });
@@ -232,11 +229,11 @@ class ChatPanel {
     }
 
     if (importsByLanguage.size === 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "stream",
         text: "No library imports found in supported languages."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -433,8 +430,8 @@ class ChatPanel {
       report += "\n";
     }
 
-    this.panel.webview.postMessage({ type: "stream", text: report });
-    this.panel.webview.postMessage({ type: "done" });
+    this._postMessage({ type: "stream", text: report });
+    this._postMessage({ type: "done" });
   }
 
   async _collectLibraryImports(workspaceFolder) {
@@ -760,11 +757,11 @@ class ChatPanel {
   async _runActiveSyntaxFix(workspaceFolder) {
     const activeEditor = this._getCurrentFileEditor();
     if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: "Open the file you want to repair, then ask me to fix its syntax errors."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -774,11 +771,11 @@ class ChatPanel {
       ? path.relative(workspaceFolder, fileName).replace(/\\/g, "/")
       : path.basename(fileName);
 
-    this.panel.webview.postMessage({
+    this._postMessage({
       type: "status",
       text: `Analyzing ${relativePath} for syntax errors...`
     });
-    this.panel.webview.postMessage({ type: "thinking" });
+    this._postMessage({ type: "thinking" });
 
     // Run syntax check first
     const syntaxCheck = await this.agent._runSyntaxCheck(
@@ -788,29 +785,29 @@ class ChatPanel {
     );
 
     if (!syntaxCheck) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: "Syntax checking is not supported for this file type."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
     if (syntaxCheck.skipped) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: syntaxCheck.output
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
     if (syntaxCheck.success) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "stream",
         text: `✅ No syntax errors found in ${relativePath}.`
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -826,7 +823,7 @@ class ChatPanel {
       .replace(/\s{2,}/g, " ") // collapse multiple spaces
       .trim();
     
-    this.panel.webview.postMessage({
+    this._postMessage({
       type: "stream",
       text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
     });
@@ -852,24 +849,24 @@ class ChatPanel {
     const response = await this.agent.chat(
       fixPrompt,
       workspaceFolder,
-      (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
+      (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
       null,
       { mode: "heavy", runtimeConfig }
     );
 
     if (response.error) {
-      this.panel.webview.postMessage({ type: "error", text: response.error });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "error", text: response.error });
+      this._postMessage({ type: "done" });
       return;
     }
 
     const fileAction = (response.actions || []).find(a => a.type === "file" && a.content);
     if (!fileAction) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: "AI did not generate a file fix. Try rephrasing your request or use a different AI model."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -880,11 +877,11 @@ class ChatPanel {
       relativePath
     );
     if (!generatedContentCheck.ok) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: generatedContentCheck.reason
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -898,11 +895,11 @@ class ChatPanel {
     });
 
     if (!applied) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "error",
         text: "Failed to apply the fix to the editor."
       });
-      this.panel.webview.postMessage({ type: "done" });
+      this._postMessage({ type: "done" });
       return;
     }
 
@@ -915,29 +912,30 @@ class ChatPanel {
       activeEditor.document.getText()
     );
     if (verifyCheck && verifyCheck.success) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "stream",
         text: "\n\n✅ Syntax errors fixed successfully!"
       });
     } else {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "stream",
         text: "\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
 
-    this.panel.webview.postMessage({ type: "done" });
+    this._postMessage({ type: "done" });
   }
 
   _getHtmlContent() {
     try {
-      const htmlPath = path.join(__dirname, "chat-panel.html");
+      const htmlPath = this._getChatPanelHtmlPath();
       console.log("[ChatPanel] Loading HTML from:", htmlPath);
-      const html = require("fs").readFileSync(htmlPath, "utf8");
+      const html = fsSync.readFileSync(htmlPath, "utf8");
       console.log("[ChatPanel] HTML loaded, length:", html.length);
       return html;
     } catch (error) {
       console.error("[ChatPanel] Failed to load HTML:", error);
+      const attemptedPaths = this._getChatPanelHtmlCandidates().join(" | ");
       return `<!DOCTYPE html>
 <html>
 <head>
@@ -953,10 +951,57 @@ class ChatPanel {
 <body>
   <h1>Error Loading Chat Panel</h1>
   <p>Failed to load chat-panel.html: ${error.message}</p>
-  <p>Path: ${path.join(__dirname, "chat-panel.html")}</p>
+  <p>Attempted paths: ${attemptedPaths}</p>
 </body>
 </html>`;
     }
+  }
+
+  resolveWebviewView(webviewView) {
+    console.log("[ChatPanel] Resolving sidebar chat view");
+    this.sidebarView = webviewView;
+    this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
+    this.agent.setActiveEditor(this.lastActiveEditor);
+    this._attachWebviewHost(webviewView, { kind: "sidebar" });
+    webviewView.onDidDispose(() => {
+      if (this.sidebarView === webviewView) {
+        console.log("[ChatPanel] Sidebar view disposed");
+        this.sidebarView = null;
+      }
+    });
+  }
+
+  _attachWebviewHost(host, { kind }) {
+    if (!host || !host.webview) return;
+    console.log(`[ChatPanel] Attaching ${kind} webview host`);
+    host.webview.options = { enableScripts: true, retainContextWhenHidden: true };
+    this._setupMessageHandler(host.webview);
+    host.webview.html = this._getHtmlContent();
+  }
+
+  _postMessage(message) {
+    const targets = [this.panel?.webview, this.sidebarView?.webview].filter(Boolean);
+    const seen = new Set();
+    for (const webview of targets) {
+      if (seen.has(webview)) continue;
+      seen.add(webview);
+      webview.postMessage(message);
+    }
+  }
+
+  _getChatPanelHtmlPath() {
+    const candidates = this._getChatPanelHtmlCandidates();
+    const existingPath = candidates.find(candidate => fsSync.existsSync(candidate));
+    if (existingPath) return existingPath;
+
+    throw new Error(`chat-panel.html not found. Attempted paths: ${candidates.join(", ")}`);
+  }
+
+  _getChatPanelHtmlCandidates() {
+    return [
+      path.join(this.context.extensionPath, "src", "ai-agent", "chat-panel.html"),
+      path.join(__dirname, "chat-panel.html")
+    ];
   }
 
   _getApiKeyConfigKey(provider) {
@@ -1679,7 +1724,7 @@ ${trimmedText}`;
       {
         mode: this.chatMode,
         onStatus: (text) => {
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `README retry: ${text}`
           });
@@ -1731,7 +1776,7 @@ ${trimmedText}`;
 
     // Run syntax checks for each file type
     if (fileTypes.py.length > 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `🔍 Verifying Python syntax (${fileTypes.py.length} file(s))...`
       });
@@ -1741,13 +1786,13 @@ ${trimmedText}`;
         if (result && !result.success && !result.skipped) {
           results.success = false;
           results.errors.push({ file, error: result.error || result.output, type: "syntax" });
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `❌ Python syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
           results.checks.push({ file, check: "python-syntax", passed: true });
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `✅ Python syntax OK: ${file}`
           });
@@ -1756,7 +1801,7 @@ ${trimmedText}`;
     }
 
     if (fileTypes.java.length > 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `🔍 Verifying Java syntax (${fileTypes.java.length} file(s))...`
       });
@@ -1766,13 +1811,13 @@ ${trimmedText}`;
         if (result && !result.success && !result.skipped) {
           results.success = false;
           results.errors.push({ file, error: result.error || result.output, type: "syntax" });
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `❌ Java syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
           results.checks.push({ file, check: "java-syntax", passed: true });
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `✅ Java syntax OK: ${file}`
           });
@@ -1781,7 +1826,7 @@ ${trimmedText}`;
     }
 
     if (fileTypes.c.length > 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `⚠️ C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler manually to verify syntax.`
       });
@@ -1789,7 +1834,7 @@ ${trimmedText}`;
 
     // Run npm scripts only for JS/TS files
     if (fileTypes.js.length === 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: "✅ Verification complete (no JS/TS files changed)"
       });
@@ -1798,14 +1843,14 @@ ${trimmedText}`;
 
     const commands = this._getPostEditVerificationCommands(workspaceFolder);
     if (commands.length === 0) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: "✅ Verification complete (no npm scripts configured)"
       });
       return results;
     }
 
-    this.panel.webview.postMessage({
+    this._postMessage({
       type: "status",
       text: `🔍 Running ${commands.length} verification check(s): ${commands.join(", ")}`
     });
@@ -1814,28 +1859,28 @@ ${trimmedText}`;
     for (const command of commands) {
       const validation = this.agent.validateCommand(command);
       if (!validation.allowed) {
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: "status",
           text: `⚠️ Skipped check (${command}): ${validation.reason}`
         });
         continue;
       }
 
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `Running: ${command}...`
       });
       const result = await this.agent.executeCommand(command, workspaceFolder);
       if (result.success) {
         results.checks.push({ command, passed: true });
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: "status",
           text: `✅ ${command} passed`
         });
       } else {
         results.success = false;
         results.errors.push({ command, error: result.error || result.output, type: "npm" });
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: "status",
           text: `❌ ${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
         });
@@ -1845,12 +1890,12 @@ ${trimmedText}`;
 
     // Summary
     if (results.success) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `✅ All verification checks passed (${results.checks.length} checks)`
       });
     } else {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "status",
         text: `⚠️ Verification completed with ${results.errors.length} error(s). Review changes before committing.`
       });
@@ -1873,11 +1918,11 @@ ${trimmedText}`;
         forceRefresh: provider === "nvidia"
       });
       if (models.length > 0 && this.panel) {
-        this.panel.webview.postMessage({ type: "setModelOptions", models, provider });
+        this._postMessage({ type: "setModelOptions", models, provider });
         return;
       }
       if (this.panel) {
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: "status",
           text:
             provider === "nvidia"
@@ -1887,7 +1932,7 @@ ${trimmedText}`;
       }
     } catch (err) {
       if (this.panel) {
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: "status",
           text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model list failed: ${err.message || err}. Showing defaults.`
         });
@@ -1895,7 +1940,7 @@ ${trimmedText}`;
     }
     // Ollama unreachable or no models — show defaults
     if (this.panel) {
-      this.panel.webview.postMessage({
+      this._postMessage({
         type: "setModelOptions",
         models:
           provider === "nvidia"
@@ -2179,8 +2224,10 @@ ${trimmedText}`;
 
 
 
-  _setupMessageHandler() {
-    this.panel.webview.onDidReceiveMessage(async (message) => {
+  _setupMessageHandler(webview) {
+    if (!webview || this._boundWebviews.has(webview)) return;
+    this._boundWebviews.add(webview);
+    webview.onDidReceiveMessage(async (message) => {
       console.log("[ChatPanel] Received message:", message.type);
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -2202,34 +2249,34 @@ ${trimmedText}`;
         if (/^\/ollama$/i.test(trimmedText)) {
           await this._updateAiConfig("provider", "ollama");
           await this._updateAiConfig("model", "qwen2.5-coder:1.5b");
-          this.panel.webview.postMessage({ type: "status", text: "Provider forced to Ollama. Reloading..." });
+          this._postMessage({ type: "status", text: "Provider forced to Ollama. Reloading..." });
           await this._fetchAndSendModels("ollama");
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "done" });
           return;
         }
         if (/^\/fast$/i.test(trimmedText)) {
           this.chatMode = "fast";
-          this.panel.webview.postMessage({ type: "status", text: "Mode switched to Fast." });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "status", text: "Mode switched to Fast." });
+          this._postMessage({ type: "done" });
           return;
         }
         if (/^\/heavy$/i.test(trimmedText)) {
           this.chatMode = "heavy";
-          this.panel.webview.postMessage({ type: "status", text: "Mode switched to Heavy." });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "status", text: "Mode switched to Heavy." });
+          this._postMessage({ type: "done" });
           return;
         }
         if (/^\/scan$/i.test(trimmedText)) {
-          this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
-          this.panel.webview.postMessage({ type: "thinking" });
+          this._postMessage({ type: "status", text: "Scanning workspace..." });
+          this._postMessage({ type: "thinking" });
           const overview = await this.agent.getCodebaseOverview(workspaceFolder);
-          this.panel.webview.postMessage({ type: "stream", text: overview });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "stream", text: overview });
+          this._postMessage({ type: "done" });
           return;
         }
         if (/^\/ping$/i.test(trimmedText)) {
-          this.panel.webview.postMessage({ type: "status", text: "Testing AI connection..." });
-          this.panel.webview.postMessage({ type: "thinking" });
+          this._postMessage({ type: "status", text: "Testing AI connection..." });
+          this._postMessage({ type: "thinking" });
           const config = await this._getEffectiveAiConfig();
           try {
             if (config.provider === "ollama") {
@@ -2237,20 +2284,20 @@ ${trimmedText}`;
               if (res.ok) {
                 const data = await res.json();
                 const models = (data.models || []).map(m => m.name);
-                this.panel.webview.postMessage({ 
+                this._postMessage({ 
                   type: "stream", 
                   text: `✅ Ollama is running at ${config.ollamaUrl}\n\nAvailable models: ${models.join(", ") || "none"}\n\nCurrent model: ${config.model}` 
                 });
               } else {
-                this.panel.webview.postMessage({ type: "error", text: `❌ Ollama returned status ${res.status}` });
+                this._postMessage({ type: "error", text: `❌ Ollama returned status ${res.status}` });
               }
             } else {
-              this.panel.webview.postMessage({ type: "stream", text: `✅ Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
+              this._postMessage({ type: "stream", text: `✅ Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
             }
           } catch (err) {
-            this.panel.webview.postMessage({ type: "error", text: `❌ Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
+            this._postMessage({ type: "error", text: `❌ Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
           }
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "done" });
           return;
         }
 
@@ -2282,20 +2329,20 @@ ${trimmedText}`;
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText)) {
           const forcePrep = this.chatMode === "heavy" || intent === "scan";
-          this.panel.webview.postMessage({ type: "status", text: "Studying workspace before responding..." });
+          this._postMessage({ type: "status", text: "Studying workspace before responding..." });
           const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
           });
           if (prep.activeFile) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: `Active file in focus: ${prep.activeFile}`
             });
           }
           if (prep.relevantFiles.length > 0) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
             });
@@ -2303,14 +2350,14 @@ ${trimmedText}`;
           if (["edit", "debug", "refactor"].includes(intent)) {
             const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
             if (gitStatus.success) {
-              this.panel.webview.postMessage({
+              this._postMessage({
                 type: "status",
                 text: this._summarizeGitStatus(gitStatus.output)
               });
             }
           }
         }
-        this.panel.webview.postMessage({ type: "thinking" });
+        this._postMessage({ type: "thinking" });
         this.abortController = new AbortController();
 
         // Add timeout warning for slow models
@@ -2319,7 +2366,7 @@ ${trimmedText}`;
         
         // Warn immediately for known slow models
         if (config.model === "minimaxai/minimax-m2.7") {
-          this.panel.webview.postMessage({ 
+          this._postMessage({ 
             type: "status", 
             text: "⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
           });
@@ -2327,7 +2374,7 @@ ${trimmedText}`;
         
         const warningTimer = setTimeout(() => {
           if (this.abortController && !this.abortController.signal.aborted) {
-            this.panel.webview.postMessage({ 
+            this._postMessage({ 
               type: "status", 
               text: `⏳ Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
             });
@@ -2346,12 +2393,12 @@ ${trimmedText}`;
           response = await this.agent.chat(
             trimmedText,
             workspaceFolder,
-            (chunk) => { this.panel.webview.postMessage({ type: "stream", text: chunk }); },
+            (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
             this.abortController.signal,
             {
               mode: this.chatMode,
               runtimeConfig: config,
-              onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
+              onStatus: (text) => { this._postMessage({ type: "status", text }); }
             }
           );
           
@@ -2368,8 +2415,8 @@ ${trimmedText}`;
           const errorMsg = chatError.name === "AbortError" 
             ? "Generation stopped or timed out. Try a faster model or increase timeout in settings."
             : `AI error: ${chatError.message}`;
-          this.panel.webview.postMessage({ type: "error", text: errorMsg });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "error", text: errorMsg });
+          this._postMessage({ type: "done" });
           return;
         } finally {
           clearTimeout(warningTimer);
@@ -2377,16 +2424,16 @@ ${trimmedText}`;
         }
 
         if (response.error) {
-          this.panel.webview.postMessage({ type: "error", text: response.error });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "error", text: response.error });
+          this._postMessage({ type: "done" });
           return;
         }
 
-        this.panel.webview.postMessage({ type: "done" });
+        this._postMessage({ type: "done" });
 
         if (response.warnings && response.warnings.length > 0) {
           for (const warning of response.warnings) {
-            this.panel.webview.postMessage({ type: "status", text: warning });
+            this._postMessage({ type: "status", text: warning });
           }
         }
 
@@ -2399,7 +2446,7 @@ ${trimmedText}`;
             if (a.type === "preview_inspect") return "preview:inspect";
             return `${a.type}:${a.path || a.command || ""}`;
           }).join(", ");
-          this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
+          this._postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
         }
 
         if (response.actions && response.actions.length > 0) {
@@ -2416,11 +2463,11 @@ ${trimmedText}`;
             this._shouldInspectPreviewRequest(trimmedText)
           );
           if (isEditLikeIntent && !hasFileAction && !hasPreviewInspectionAction) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: "Blocked execution: edit requests must include at least one FILE action."
             });
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "error",
               text: "No executable file edits were generated. Please retry with the target file path and expected change."
             });
@@ -2428,7 +2475,7 @@ ${trimmedText}`;
           }
 
           if (!workspaceFolder) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: "No workspace is open. Generated files will open as drafts and will not be auto-saved."
             });
@@ -2440,7 +2487,7 @@ ${trimmedText}`;
                   wantsActiveFileEdit &&
                   activeEditor &&
                   activeEditor.document.uri.scheme === "file";
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: shouldApplyToOpenFile
                     ? `Editing open file: ${path.basename(activeEditor.document.fileName)}`
@@ -2449,7 +2496,7 @@ ${trimmedText}`;
                 const result = shouldApplyToOpenFile
                   ? await this._applyToEditor(activeEditor, action.content)
                   : await this._openDraftFile(action.path, action.content);
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: result.success ? "applied" : "error",
                   filePath: result.success ? result.path : undefined,
                   text: result.success
@@ -2459,19 +2506,19 @@ ${trimmedText}`;
                     : result.error
                 });
               } else if (action.type === "mkdir") {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: `Skipped folder creation for ${action.path}. Save the draft files where you want them.`
                 });
               } else if (action.type === "cmd") {
                 if (isEditLikeIntent && !hasExplicitCommandRequest) {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "status",
                     text: `Suppressed command during edit request: ${action.command}`
                   });
                   continue;
                 }
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: `Skipped command without workspace: ${action.command}`
                 });
@@ -2505,7 +2552,7 @@ ${trimmedText}`;
               const mkdirPath = (action.path || "").replace(/\\/g, "/").toLowerCase();
               const mkdirParent = path.dirname(mkdirPath);
               if (fileActionPaths.has(mkdirPath) || fileActionPaths.has(mkdirParent)) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: `Skipped redundant MKDIR: ${action.path}`
                 });
@@ -2521,7 +2568,7 @@ ${trimmedText}`;
               }
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: `Suppressed command during edit request: ${action.command}`
                 });
@@ -2535,7 +2582,7 @@ ${trimmedText}`;
           let allowOutside = this._outsideWorkspaceAllowed || false;
           if (outsideFiles.length > 0 && !allowOutside) {
             const paths = outsideFiles.map(f => f.path).join("\n");
-            this.panel.webview.postMessage({ type: "confirmOutsideEdit", path: paths });
+            this._postMessage({ type: "confirmOutsideEdit", path: paths });
             allowOutside = await new Promise((resolve) => { this._confirmResolve = resolve; });
             if (allowOutside) this._outsideWorkspaceAllowed = true;
           }
@@ -2546,7 +2593,7 @@ ${trimmedText}`;
             outsideFiles
           );
           if (planSummary) {
-            this.panel.webview.postMessage({ type: "status", text: planSummary });
+            this._postMessage({ type: "status", text: planSummary });
           }
 
           // Process all actions
@@ -2563,7 +2610,7 @@ ${trimmedText}`;
             }
             if (action.type === "file") {
               if (outside && !allowOutside) {
-                this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
               let result = outside
@@ -2581,7 +2628,7 @@ ${trimmedText}`;
                 this._isReadmePath(action.path) &&
                 this._isDocTruncateGuardError(result.error)
               ) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: "README guard blocked truncation. Retrying with strict full-file README rewrite..."
                 });
@@ -2591,13 +2638,13 @@ ${trimmedText}`;
                   writeOptions
                 );
                 if (!result.success) {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "error",
                     text: `README retry failed: ${result.error}`
                   });
                   stopFurtherActions = true;
                 } else {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "status",
                     text: "README retry succeeded with a full-file rewrite."
                   });
@@ -2608,8 +2655,8 @@ ${trimmedText}`;
                 break;
               }
               const operation = result.created ? "Adding file" : "Editing file";
-              this.panel.webview.postMessage({ type: "status", text: `${operation}: ${action.path}` });
-              this.panel.webview.postMessage({
+              this._postMessage({ type: "status", text: `${operation}: ${action.path}` });
+              this._postMessage({
                 type: result.success ? "applied" : "error",
                 filePath: result.success ? result.path : undefined,
                 text: result.success
@@ -2634,7 +2681,7 @@ ${trimmedText}`;
               if (result.success && result.syntaxCheckCmd) {
                 const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
                 const ok = checkResult.success && !(checkResult.output || "").trim();
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: ok
                     ? `\u2705 No syntax errors in ${result.relativePath}`
@@ -2643,13 +2690,13 @@ ${trimmedText}`;
               }
             } else if (action.type === "mkdir") {
               if (outside && !allowOutside) {
-                this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
               const result = outside
                 ? await this.agent.createFolder(action.path, true)
                 : preResult;
-              this.panel.webview.postMessage({
+              this._postMessage({
                 type: result.success ? "applied" : "error",
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
@@ -2658,53 +2705,53 @@ ${trimmedText}`;
               
               // Check if workspace is open
               if (!workspaceFolder) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: "Cannot open Graphify: No workspace folder is open. Please open a folder or workspace first."
                 });
                 continue;
               }
               
-              this.panel.webview.postMessage({ type: "status", text: "Opening Graphify visualization..." });
+              this._postMessage({ type: "status", text: "Opening Graphify visualization..." });
               try {
                 console.log("[ChatPanel] Calling vscode.commands.executeCommand('codeJanitor.openGraphify')");
                 await vscode.commands.executeCommand("codeJanitor.openGraphify");
                 console.log("[ChatPanel] Graphify command executed successfully");
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "applied",
                   text: "\u2705 Graphify panel opened. You can now visualize the codebase structure."
                 });
               } catch (err) {
                 console.error("[ChatPanel] Graphify command failed:", err);
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to open Graphify: ${err.message}\n\nStack: ${err.stack}`
                 });
               }
             } else if (action.type === "lint") {
-              this.panel.webview.postMessage({ type: "status", text: "Running Code Janitor lint on the active file..." });
+              this._postMessage({ type: "status", text: "Running Code Janitor lint on the active file..." });
               try {
                 await vscode.commands.executeCommand("codeJanitor.lintCode");
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "applied",
                   text: "✅ Lint command executed. Check the Problems panel and notifications for results."
                 });
               } catch (err) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to run lint: ${err.message}`
                 });
               }
             } else if (action.type === "validate_frontend") {
-              this.panel.webview.postMessage({ type: "status", text: "Running frontend dependency validation..." });
+              this._postMessage({ type: "status", text: "Running frontend dependency validation..." });
               try {
                 await vscode.commands.executeCommand("codeJanitor.validateFrontend");
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "applied",
                   text: "✅ Frontend validation command executed."
                 });
               } catch (err) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to validate frontend dependencies: ${err.message}`
                 });
@@ -2712,17 +2759,17 @@ ${trimmedText}`;
 } else if (action.type === "preview") {
               const shouldInspectPreview = this._shouldInspectPreviewRequest(trimmedText);
               if (shouldInspectPreview) {
-                this.panel.webview.postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
+                this._postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
                 try {
                   const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
                   const diagnostics = inspection?.diagnostics || null;
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "applied",
                     text: this._summarizePreviewDiagnostics(diagnostics)
                   });
 
                   if (isEditLikeIntent && this._previewDiagnosticsHasIssues(diagnostics)) {
-                    this.panel.webview.postMessage({
+                    this._postMessage({
                       type: "status",
                       text: "Preview issues found. Generating a fix for the active file..."
                     });
@@ -2735,12 +2782,12 @@ ${trimmedText}`;
                     );
 
                     if (!fixResult.success) {
-                      this.panel.webview.postMessage({
+                      this._postMessage({
                         type: "error",
                         text: fixResult.error
                       });
                     } else {
-                      this.panel.webview.postMessage({
+                      this._postMessage({
                         type: "applied",
                         text: `✅ Updated ${fixResult.path} using preview diagnostics.`
                       });
@@ -2748,7 +2795,7 @@ ${trimmedText}`;
                       const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                       if (verificationDiagnostics) {
                         const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
-                        this.panel.webview.postMessage({
+                        this._postMessage({
                           type: cleanPreview ? "applied" : "status",
                           text: cleanPreview
                             ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
@@ -2758,38 +2805,38 @@ ${trimmedText}`;
                     }
                   }
                 } catch (err) {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "error",
                     text: `Failed to inspect live preview: ${err.message}`
                   });
                 }
               } else {
-                this.panel.webview.postMessage({ type: "status", text: "Opening live preview..." });
+                this._postMessage({ type: "status", text: "Opening live preview..." });
                 try {
                   await vscode.commands.executeCommand("codeJanitor.livePreview");
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "applied",
                     text: "✅ Live preview command executed."
                   });
                 } catch (err) {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "error",
                     text: `Failed to open live preview: ${err.message}`
                   });
                 }
               }
             } else if (action.type === "preview_inspect") {
-              this.panel.webview.postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
+              this._postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
               try {
                 const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
                 const diagnostics = inspection?.diagnostics || null;
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "applied",
                   text: this._summarizePreviewDiagnostics(diagnostics)
                 });
 
                 if (isEditLikeIntent && this._previewDiagnosticsHasIssues(diagnostics)) {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "status",
                     text: "Preview issues found. Generating a fix for the active file..."
                   });
@@ -2802,12 +2849,12 @@ ${trimmedText}`;
                   );
 
                   if (!fixResult.success) {
-                    this.panel.webview.postMessage({
+                    this._postMessage({
                       type: "error",
                       text: fixResult.error
                     });
                   } else {
-                    this.panel.webview.postMessage({
+                    this._postMessage({
                       type: "applied",
                       text: `✅ Updated ${fixResult.path} using preview diagnostics.`
                     });
@@ -2815,7 +2862,7 @@ ${trimmedText}`;
                     const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                     if (verificationDiagnostics) {
                       const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
-                      this.panel.webview.postMessage({
+                      this._postMessage({
                         type: cleanPreview ? "applied" : "status",
                         text: cleanPreview
                           ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
@@ -2825,44 +2872,44 @@ ${trimmedText}`;
                   }
                 }
               } catch (err) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to inspect live preview: ${err.message}`
                 });
               }
             } else if (action.type === "performance") {
-              this.panel.webview.postMessage({ type: "status", text: "Opening AI performance report..." });
+              this._postMessage({ type: "status", text: "Opening AI performance report..." });
               try {
                 await vscode.commands.executeCommand("codeJanitor.showPerformance");
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "applied",
                   text: "✅ AI performance report command executed."
                 });
               } catch (err) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to open AI performance report: ${err.message}`
                 });
               }
             } else if (action.type === "fetch") {
-              this.panel.webview.postMessage({ type: "status", text: `Fetching from web: ${action.url}` });
+              this._postMessage({ type: "status", text: `Fetching from web: ${action.url}` });
               try {
                 const fetchResult = await this.agent.fetchFromWeb(action.url);
                 if (fetchResult.success) {
                   const preview = fetchResult.data.slice(0, 2000);
                   const truncated = fetchResult.data.length > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "applied",
                     text: `\u2705 Fetched ${action.url}${truncated}:\n\n${preview}`
                   });
                 } else {
-                  this.panel.webview.postMessage({
+                  this._postMessage({
                     type: "error",
                     text: `Failed to fetch ${action.url}: ${fetchResult.error}`
                   });
                 }
               } catch (err) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "error",
                   text: `Failed to fetch ${action.url}: ${err.message}`
                 });
@@ -2870,13 +2917,13 @@ ${trimmedText}`;
             } else if (action.type === "youtube") {
               // YouTube actions are now handled only via the YouTube button
               // Skip processing YouTube actions from AI responses to improve performance
-              this.panel.webview.postMessage({
+              this._postMessage({
                 type: "status",
                 text: "💡 Use the YouTube search button in the chat to search for videos"
               });
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
-                this.panel.webview.postMessage({
+                this._postMessage({
                   type: "status",
                   text: `Suppressed command during edit request: ${action.command}`
                 });
@@ -2884,16 +2931,16 @@ ${trimmedText}`;
               }
               const validation = this.agent.validateCommand(action.command);
               if (!validation.allowed) {
-                this.panel.webview.postMessage({ type: "status", text: `Blocked: ${validation.reason}` });
+                this._postMessage({ type: "status", text: `Blocked: ${validation.reason}` });
                 continue;
               }
-              this.panel.webview.postMessage({ type: "confirm", command: action.command });
+              this._postMessage({ type: "confirm", command: action.command });
               const allowed = await new Promise((resolve) => { this._confirmResolve = resolve; });
               if (!allowed) {
-                this.panel.webview.postMessage({ type: "status", text: `Denied: ${action.command}` });
+                this._postMessage({ type: "status", text: `Denied: ${action.command}` });
                 continue;
               }
-              this.panel.webview.postMessage({ type: "status", text: `Running: ${action.command}` });
+              this._postMessage({ type: "status", text: `Running: ${action.command}` });
               const result = await this.agent.executeCommand(action.command, workspaceFolder);
               const resultText = result.success
                 ? (result.output || "Done.")
@@ -2901,7 +2948,7 @@ ${trimmedText}`;
               const suffix = result.outputTruncated
                 ? "\n[Command output was truncated for safety.]"
                 : "";
-              this.panel.webview.postMessage({
+              this._postMessage({
                 type: result.success ? "applied" : "error",
                 text: `${resultText}${suffix}`
               });
@@ -2916,8 +2963,8 @@ ${trimmedText}`;
         }
         } catch (error) {
           console.error("[ChatPanel] Error in chat handler:", error);
-          this.panel.webview.postMessage({ type: "error", text: `Chat error: ${error.message}` });
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "error", text: `Chat error: ${error.message}` });
+          this._postMessage({ type: "done" });
         }
 
       } else if (message.type === "confirmResponse") {
@@ -2929,11 +2976,11 @@ ${trimmedText}`;
         if (this.abortController) {
           this.abortController.abort();
           this.abortController = null;
-          this.panel.webview.postMessage({ type: "done" });
+          this._postMessage({ type: "done" });
         }
       } else if (message.type === "apply") {
         const result = await this.agent.applyChanges(message.filePath, message.content);
-        this.panel.webview.postMessage({
+        this._postMessage({
           type: result.success ? "applied" : "error",
           filePath: result.success ? result.path : undefined,
           text: result.success
@@ -2946,15 +2993,15 @@ ${trimmedText}`;
       } else if (message.type === "clear") {
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
-        this.panel.webview.postMessage({ type: "cleared" });
+        this._postMessage({ type: "cleared" });
       } else if (message.type === "openFile") {
         await this._revealWorkspaceFile(message.path);
       } else if (message.type === "scanOverview") {
-        this.panel.webview.postMessage({ type: "status", text: "Scanning workspace..." });
-        this.panel.webview.postMessage({ type: "thinking" });
+        this._postMessage({ type: "status", text: "Scanning workspace..." });
+        this._postMessage({ type: "thinking" });
         const overview = await this.agent.getCodebaseOverview(workspaceFolder);
-        this.panel.webview.postMessage({ type: "stream", text: overview });
-        this.panel.webview.postMessage({ type: "done" });
+        this._postMessage({ type: "stream", text: overview });
+        this._postMessage({ type: "done" });
       } else if (message.type === "syntaxScan") {
         // Triggered by action chip — run directly without model
         const activeEditor = this._getCurrentFileEditor();
@@ -2985,7 +3032,7 @@ ${trimmedText}`;
               : hasKey
                 ? (MODELS_BY_PROVIDER[selectedProvider] || null)
                 : null;
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "setCurrentProvider",
             provider: selectedProvider,
             model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
@@ -3001,7 +3048,7 @@ ${trimmedText}`;
         const provider = this._getSelectedProviderId() || vscode.workspace.getConfiguration("codeJanitor.ai").get("provider", "ollama");
         const nextModel = await this._setProviderModel(provider, message.model);
         if (this.panel) {
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "status",
             text: `Model switched to ${nextModel}.`
           });
@@ -3031,7 +3078,7 @@ ${trimmedText}`;
           const customProvider = this._getCustomProviderById(message.provider);
           if (this.panel) {
             const hasKey = message.provider === "ollama" || !!keyPresence[message.provider];
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "setCurrentProvider",
               provider: message.provider,
               model: nextModel,
@@ -3047,7 +3094,7 @@ ${trimmedText}`;
             });
           }
           if (this.panel) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
             });
@@ -3056,7 +3103,7 @@ ${trimmedText}`;
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);
           if (this.panel) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "error",
               text: `Failed to switch provider: ${error.message}`
             });
@@ -3067,7 +3114,7 @@ ${trimmedText}`;
           const provider = await this._addCustomProvider(message.provider || {}, message.apiKey || "");
           const keyPresence = await this._getProviderPresence();
           if (this.panel) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "setCurrentProvider",
               provider: provider.id,
               model: provider.defaultModel,
@@ -3075,14 +3122,14 @@ ${trimmedText}`;
               keyPresence,
               models: provider.models
             });
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "status",
               text: `Custom provider ${provider.name} added and selected.`
             });
           }
         } catch (error) {
           if (this.panel) {
-            this.panel.webview.postMessage({
+            this._postMessage({
               type: "error",
               text: `Failed to add custom provider: ${error.message}`
             });
@@ -3093,7 +3140,7 @@ ${trimmedText}`;
         this.performanceMonitor._showPerformanceReport(analysis);
       } else if (message.type === "getAutoHealHistory") {
         const history = await this.performanceMonitor.getAutoHealHistory();
-        this.panel.webview.postMessage({ type: "autoHealHistory", history });
+        this._postMessage({ type: "autoHealHistory", history });
       } else if (message.type === "tutorialCompleted") {
         // Mark tutorial as completed in global state
         await this.context.globalState.update("codeJanitor.tutorialCompleted", true);
@@ -3101,7 +3148,7 @@ ${trimmedText}`;
       } else if (message.type === "prefillMessage") {
         // Quick Fix with AI: pre-fill message and auto-send
         if (this.panel) {
-          this.panel.webview.postMessage({ 
+          this._postMessage({ 
             type: "prefillAndSend", 
             message: message.message 
           });
@@ -3110,12 +3157,12 @@ ${trimmedText}`;
         try {
           const query = (message.query || "").trim();
           if (!query) {
-            this.panel.webview.postMessage({ type: "searchError", error: "Search query is empty" });
+            this._postMessage({ type: "searchError", error: "Search query is empty" });
             return;
           }
 
-          this.panel.webview.postMessage({ type: "status", text: `Searching for: ${query}` });
-          this.panel.webview.postMessage({ type: "thinking" });
+          this._postMessage({ type: "status", text: `Searching for: ${query}` });
+          this._postMessage({ type: "thinking" });
 
           // Use DuckDuckGo Instant Answer API (free, no API key required)
           const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
@@ -3156,18 +3203,18 @@ ${trimmedText}`;
             resultText += `No detailed results found. Try a more specific query or visit:\nhttps://duckduckgo.com/?q=${encodeURIComponent(query)}`;
           }
 
-          this.panel.webview.postMessage({ type: "stream", text: resultText });
-          this.panel.webview.postMessage({ type: "done" });
-          this.panel.webview.postMessage({ type: "searchComplete" });
+          this._postMessage({ type: "stream", text: resultText });
+          this._postMessage({ type: "done" });
+          this._postMessage({ type: "searchComplete" });
 
         } catch (error) {
           console.error("[ChatPanel] Web search error:", error);
-          this.panel.webview.postMessage({ 
+          this._postMessage({ 
             type: "error", 
             text: `Search failed: ${error.message}. Check your internet connection.` 
           });
-          this.panel.webview.postMessage({ type: "done" });
-          this.panel.webview.postMessage({ type: "searchError", error: error.message });
+          this._postMessage({ type: "done" });
+          this._postMessage({ type: "searchError", error: error.message });
         }
       } else if (message.type === "openExternal") {
         const targetUrl = String(message.url || "").trim();
@@ -3179,7 +3226,7 @@ ${trimmedText}`;
           await vscode.env.openExternal(vscode.Uri.parse(targetUrl));
         } catch (error) {
           console.error("[ChatPanel] Failed to open external URL:", error);
-          this.panel.webview.postMessage({
+          this._postMessage({
             type: "error",
             text: `Could not open link: ${error.message}`
           });
@@ -3188,12 +3235,12 @@ ${trimmedText}`;
         try {
           const query = (message.query || "").trim();
           if (!query) {
-            this.panel.webview.postMessage({ type: "youtubeError", error: "Search query is empty" });
+            this._postMessage({ type: "youtubeError", error: "Search query is empty" });
             return;
           }
 
-          this.panel.webview.postMessage({ type: "status", text: `▶️ Searching YouTube for: ${query}` });
-          this.panel.webview.postMessage({ type: "thinking" });
+          this._postMessage({ type: "status", text: `▶️ Searching YouTube for: ${query}` });
+          this._postMessage({ type: "thinking" });
 
           const results = await this._searchYouTube(query);
           
@@ -3218,18 +3265,18 @@ ${trimmedText}`;
           
           console.log("[YouTube Backend] Sending result text:", resultText);
 
-          this.panel.webview.postMessage({ type: "stream", text: resultText });
-          this.panel.webview.postMessage({ type: "done" });
-          this.panel.webview.postMessage({ type: "youtubeComplete" });
+          this._postMessage({ type: "stream", text: resultText });
+          this._postMessage({ type: "done" });
+          this._postMessage({ type: "youtubeComplete" });
 
         } catch (error) {
           console.error("[ChatPanel] YouTube search error:", error);
-          this.panel.webview.postMessage({ 
+          this._postMessage({ 
             type: "error", 
             text: `YouTube search failed: ${error.message}` 
           });
-          this.panel.webview.postMessage({ type: "done" });
-          this.panel.webview.postMessage({ type: "youtubeError", error: error.message });
+          this._postMessage({ type: "done" });
+          this._postMessage({ type: "youtubeError", error: error.message });
         }
       }
     });

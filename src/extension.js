@@ -430,6 +430,14 @@ async function activate(context) {
   // Auto-correction state
   let isAutoFixing = false;
   let autoFixTimeout = null;
+  chatPanelInstance = new ChatPanel(context);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      "codeJanitor.chatSidebar",
+      chatPanelInstance,
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  );
 
   // 1. Manual Fix Command - Open AI chat and trigger Fix issues
   const fixDisposable = vscode.commands.registerCommand(
@@ -441,7 +449,7 @@ async function activate(context) {
         return;
       }
       // Always create fresh instance or reuse if panel is still open
-      if (!chatPanelInstance || !chatPanelInstance.panel) {
+      if (!chatPanelInstance) {
         chatPanelInstance = new ChatPanel(context);
       }
       // Show panel and trigger fix
@@ -584,7 +592,7 @@ async function activate(context) {
   const quickFixDisposable = vscode.commands.registerCommand(
     "codeJanitor.quickFixWithAI",
     async (document, diagnostic) => {
-      if (!chatPanelInstance || !chatPanelInstance.panel) {
+      if (!chatPanelInstance) {
         chatPanelInstance = new ChatPanel(context);
       }
       await chatPanelInstance.show();
@@ -608,7 +616,7 @@ async function activate(context) {
   const quickFixAllDisposable = vscode.commands.registerCommand(
     "codeJanitor.quickFixAllWithAI",
     async (document, diagnostics) => {
-      if (!chatPanelInstance || !chatPanelInstance.panel) {
+      if (!chatPanelInstance) {
         chatPanelInstance = new ChatPanel(context);
       }
       await chatPanelInstance.show();
@@ -718,7 +726,7 @@ async function activate(context) {
       try {
         console.log("[Extension] codeJanitor.openChat command triggered");
         // Always create fresh instance or reuse if panel is still open
-        if (!chatPanelInstance || !chatPanelInstance.panel) {
+        if (!chatPanelInstance) {
           console.log("[Extension] Creating new ChatPanel instance");
           chatPanelInstance = new ChatPanel(context);
         }
@@ -766,7 +774,7 @@ async function activate(context) {
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
       if (uri.path === "/check-models") {
-        if (!chatPanelInstance || !chatPanelInstance.panel) {
+        if (!chatPanelInstance) {
           chatPanelInstance = new ChatPanel(context);
         }
         chatPanelInstance.show();

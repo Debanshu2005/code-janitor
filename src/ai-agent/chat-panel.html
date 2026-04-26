@@ -873,6 +873,59 @@
         color: var(--text);
       }
 
+      .mermaid-wrap {
+        margin: 10px 0;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: linear-gradient(180deg, rgba(15, 20, 27, 0.98), rgba(11, 15, 20, 0.98));
+      }
+      .mermaid-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 10px;
+        background: rgba(88, 166, 255, 0.08);
+        border-bottom: 1px solid var(--border);
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .mermaid-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .mermaid-btn {
+        padding: 4px 8px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--text);
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .mermaid-btn:hover {
+        background: var(--panel-3);
+      }
+      .mermaid-preview {
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .mermaid-preview img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: #0b0f14;
+      }
+      .mermaid-fallback {
+        padding: 12px;
+        color: #fca5a5;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
       /* confirm block */
       .confirm-wrap {
         background: rgba(15, 20, 27, 0.98);
@@ -2128,6 +2181,78 @@
         return wrap;
       }
 
+      function encodeMermaidPayload(source) {
+        var payload = JSON.stringify({
+          code: source,
+          mermaid: { theme: "dark" }
+        });
+        return btoa(unescape(encodeURIComponent(payload)));
+      }
+
+      function makeMermaidBlock(source) {
+        var code = String(source || "").trim();
+        var wrap = document.createElement("div");
+        wrap.className = "mermaid-wrap";
+
+        var hdr = document.createElement("div");
+        hdr.className = "mermaid-header";
+        var lbl = document.createElement("span");
+        lbl.textContent = "mermaid";
+
+        var actions = document.createElement("div");
+        actions.className = "mermaid-actions";
+
+        var copyBtn = document.createElement("button");
+        copyBtn.className = "mermaid-btn";
+        copyBtn.textContent = "Copy";
+        copyBtn.onclick = function () {
+          copyText(code, copyBtn);
+        };
+
+        var openBtn = document.createElement("button");
+        openBtn.className = "mermaid-btn";
+        openBtn.textContent = "Open";
+
+        actions.appendChild(copyBtn);
+        actions.appendChild(openBtn);
+        hdr.appendChild(lbl);
+        hdr.appendChild(actions);
+        wrap.appendChild(hdr);
+
+        try {
+          var encoded = encodeMermaidPayload(code);
+          var imageUrl = "https://mermaid.ink/img/" + encoded + "?type=png&theme=dark&bgColor=0b0f14";
+          var preview = document.createElement("div");
+          preview.className = "mermaid-preview";
+          var img = document.createElement("img");
+          img.alt = "Rendered Mermaid diagram";
+          img.src = imageUrl;
+          img.onerror = function () {
+            preview.remove();
+            var fallback = document.createElement("div");
+            fallback.className = "mermaid-fallback";
+            fallback.textContent = "Diagram preview could not be loaded, but the Mermaid source is still available below.";
+            wrap.appendChild(fallback);
+          };
+          preview.appendChild(img);
+          wrap.appendChild(preview);
+          openBtn.onclick = function () {
+            openExternalUrl(imageUrl);
+          };
+        } catch (error) {
+          var fallback = document.createElement("div");
+          fallback.className = "mermaid-fallback";
+          fallback.textContent = "Diagram preview could not be prepared: " + error.message;
+          wrap.appendChild(fallback);
+          openBtn.onclick = function () {
+            copyText(code, openBtn);
+          };
+        }
+
+        wrap.appendChild(makeCodeBlock("mermaid", code));
+        return wrap;
+      }
+
       function makeDiffBlock(lines) {
         var wrap = document.createElement("div");
         wrap.className = "diff-block";
@@ -2439,6 +2564,10 @@
         for (var s = 0; s < segments.length; s++) {
           var seg = segments[s];
           if (seg.type === "code") {
+            if (/^mermaid$/i.test(seg.lang)) {
+              container.appendChild(makeMermaidBlock(seg.content));
+              continue;
+            }
             container.appendChild(makeCodeBlock(seg.lang, seg.content));
             continue;
           }
