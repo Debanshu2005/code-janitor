@@ -1,0 +1,12 @@
+# VS Code extension packages
+*.vsix
+
+# Markdown files except README
+*.md
+!README.md
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
