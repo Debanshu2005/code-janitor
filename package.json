@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.14.2",
+  "version": "1.14.4",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -112,15 +112,8 @@
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
-          "default": "minimaxai/minimax-m2.7",
-          "enum": [
-            "minimaxai/minimax-m2.7",
-            "meta/llama-3.1-8b-instruct",
-            "meta/llama-3.1-70b-instruct",
-            "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-            "mistralai/mistral-nemotron"
-          ],
-          "description": "NVIDIA NIM model (recommended: meta/llama-3.1-8b-instruct for speed, meta/llama-3.1-70b-instruct for quality. Note: minimaxai/minimax-m2.7 may be slower)"
+          "default": "meta/llama-3.1-8b-instruct",
+          "description": "NVIDIA NIM model id. When an NVIDIA API key is available, Code Janitor fetches the current supported NVIDIA model list at runtime."
         },
         "codeJanitor.ai.groqApiKey": {
           "type": "string",
@@ -140,7 +133,7 @@
         "codeJanitor.ai.model": {
           "type": "string",
           "default": "",
-          "description": "AI model to use. Leave empty to use the provider default. For OpenRouter use slugs like qwen/qwen-2.5-coder-32b-instruct. For Ollama use qwen2.5-coder:1.5b. For NVIDIA NIM use minimaxai/minimax-m2.7 or meta/llama-3.1-70b-instruct."
+          "description": "AI model to use. Leave empty to use the provider default. For OpenRouter use slugs like qwen/qwen-2.5-coder-32b-instruct. For Ollama use qwen2.5-coder:1.5b. For NVIDIA NIM use a current model id such as meta/llama-3.1-8b-instruct."
         },
         "codeJanitor.ai.timeout": {
           "type": "number",

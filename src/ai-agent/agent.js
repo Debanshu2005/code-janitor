@@ -82,13 +82,15 @@ const NVIDIA_MODEL_ALIASES = new Map([
   ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-70b-instruct"],
   ["mistralai/mistral-nemotron", "mistralai/mistral-nemotron"]
 ]);
-const NVIDIA_MODELS = new Set([
-  "minimaxai/minimax-m2.7",
+const NVIDIA_MODEL_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.1-8b-instruct",
+  "nvidia/nvidia-nemotron-nano-9b-v2",
+  "minimaxai/minimax-m2.7",
+  "mistralai/mistral-nemotron",
   "meta/llama-3.1-70b-instruct",
-  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-  "mistralai/mistral-nemotron"
-]);
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+];
 
 class AIAgent {
   constructor() {
@@ -99,6 +101,8 @@ class AIAgent {
     this.workspaceRoot = null;
     this.currentEditableTargets = null;
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
+    this._nvidiaModelsCache = [];
+    this._nvidiaModelsFetchedAt = 0;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -121,7 +125,7 @@ class AIAgent {
     const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl);
     const genericModel = String(config.get("model", "") || "").trim();
     const nvidiaModel = String(
-      config.get("nvidiaModel", "minimaxai/minimax-m2.7") || ""
+      config.get("nvidiaModel", this._getDefaultModelForProvider("nvidia")) || ""
     ).trim();
     const model = this._resolveConfiguredModel(
       provider,
@@ -153,15 +157,15 @@ class AIAgent {
       return "meta-llama/llama-3.1-8b-instruct:free";
     }
     if (provider === "anthropic") return "claude-3-5-haiku-20241022";
-    if (provider === "nvidia") return "minimaxai/minimax-m2.7";
+    if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0];
     return "qwen2.5-coder:1.5b";
   }
 
   _sanitizeNvidiaModel(model) {
     const value = typeof model === "string" ? model.trim() : "";
-    if (!value) return "minimaxai/minimax-m2.7";
+    if (!value) return this._getDefaultModelForProvider("nvidia");
     if (NVIDIA_MODEL_ALIASES.has(value)) return NVIDIA_MODEL_ALIASES.get(value);
-    if (NVIDIA_MODELS.has(value)) return value;
+    if (/^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(value)) return value;
 
     // Old broken settings sometimes stored a function UUID instead of a model.
     if (
@@ -169,10 +173,10 @@ class AIAgent {
         value
       )
     ) {
-      return "minimaxai/minimax-m2.7";
+      return this._getDefaultModelForProvider("nvidia");
     }
 
-    return "minimaxai/minimax-m2.7";
+    return this._getDefaultModelForProvider("nvidia");
   }
 
   _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
@@ -214,6 +218,79 @@ class AIAgent {
     }
   }
 
+  _looksLikeNvidiaChatModel(modelId) {
+    const value = String(modelId || "").trim().toLowerCase();
+    if (!value) return false;
+
+    const blockedFragments = [
+      "embed",
+      "rerank",
+      "guard",
+      "safety",
+      "topic-control",
+      "jailbreak",
+      "detect",
+      "dino",
+      "ocdrnet",
+      "bevformer",
+      "clip",
+      "parse",
+      "translate",
+      "asr",
+      "tts",
+      "ocr",
+      "object-detection"
+    ];
+
+    return !blockedFragments.some((fragment) => value.includes(fragment));
+  }
+
+  async _fetchNvidiaModelNames(apiKey, timeoutMs = 8_000, forceRefresh = false) {
+    const cacheAge = Date.now() - this._nvidiaModelsFetchedAt;
+    if (
+      !forceRefresh &&
+      this._nvidiaModelsCache.length > 0 &&
+      cacheAge < NVIDIA_MODEL_DISCOVERY_TTL_MS
+    ) {
+      return this._nvidiaModelsCache.slice();
+    }
+
+    if (!apiKey) return [];
+
+    try {
+      const response = await fetch("https://integrate.api.nvidia.com/v1/models", {
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
+        signal: this._createRequestSignal(null, timeoutMs)
+      });
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      const models = Array.from(
+        new Set(
+          (data?.data || [])
+            .map((entry) =>
+              typeof entry === "string"
+                ? entry.trim()
+                : String(entry?.id || entry?.name || "").trim()
+            )
+            .filter(Boolean)
+            .filter((modelId) => this._looksLikeNvidiaChatModel(modelId))
+        )
+      );
+
+      if (models.length > 0) {
+        this._nvidiaModelsCache = models;
+        this._nvidiaModelsFetchedAt = Date.now();
+      }
+
+      return models;
+    } catch {
+      return [];
+    }
+  }
+
   _pickOllamaModel(models, currentModel) {
     if (!Array.isArray(models) || models.length === 0) return currentModel;
     if (currentModel && models.includes(currentModel)) return currentModel;
@@ -230,9 +307,75 @@ class AIAgent {
     return models[0];
   }
 
+  _pickNvidiaModel(models, currentModel) {
+    const normalizedCurrent = this._sanitizeNvidiaModel(currentModel);
+    if (Array.isArray(models) && models.includes(normalizedCurrent)) {
+      return normalizedCurrent;
+    }
+
+    for (const candidate of NVIDIA_FALLBACK_MODELS) {
+      if (Array.isArray(models) && models.includes(candidate)) {
+        return candidate;
+      }
+    }
+
+    return Array.isArray(models) && models.length > 0
+      ? models[0]
+      : normalizedCurrent;
+  }
+
+  async getAvailableModelsForProvider(
+    provider,
+    { ollamaUrl = "", nvidiaApiKey = "", timeoutMs = 8_000, forceRefresh = false } = {}
+  ) {
+    if (provider === "ollama") {
+      return this._fetchOllamaModelNames(
+        ollamaUrl || this.getConfig().ollamaUrl,
+        timeoutMs
+      );
+    }
+
+    if (provider === "nvidia") {
+      return this._fetchNvidiaModelNames(
+        nvidiaApiKey || this.getConfig().nvidiaApiKey,
+        timeoutMs,
+        forceRefresh
+      );
+    }
+
+    return [];
+  }
+
   async _prepareRuntimeConfig(config, reportStatus) {
     if (!config) {
       return config;
+    }
+
+    if (config.provider === "nvidia") {
+      const discoveredModels = await this._fetchNvidiaModelNames(
+        config.nvidiaApiKey,
+        8_000
+      );
+      const currentModel = this._sanitizeNvidiaModel(
+        config.model || config.nvidiaModel
+      );
+      const resolvedModel = this._pickNvidiaModel(
+        discoveredModels,
+        currentModel
+      );
+
+      if (discoveredModels.length > 0 && resolvedModel !== currentModel) {
+        reportStatus?.(
+          `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
+        );
+      }
+
+      return {
+        ...config,
+        model: resolvedModel,
+        nvidiaModel: resolvedModel,
+        timeout: Math.max(config.timeout || 0, 300_000)
+      };
     }
 
     const baseConfig = {

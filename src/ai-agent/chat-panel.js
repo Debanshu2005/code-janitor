@@ -10,7 +10,7 @@ const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
   openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
-  nvidia: ["minimaxai/minimax-m2.7","meta/llama-3.1-8b-instruct","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5","mistralai/mistral-nemotron"]
+  nvidia: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 };
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
@@ -37,6 +37,7 @@ class ChatPanel {
   }
 
   async show() {
+    let provider = forceProvider || "ollama";
     try {
       console.log("[ChatPanel] show() called");
       this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;
@@ -1859,31 +1860,36 @@ ${trimmedText}`;
   }
 
   async _fetchAndSendModels(forceProvider = null) {
+    let provider = forceProvider || "ollama";
     // Only needed for Ollama — other providers populate models client-side
     try {
       const config = await this._getEffectiveAiConfig();
-      const provider = forceProvider || config.provider;
-      if (provider !== "ollama") return;
-      const res = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(15000) });
-      if (res.ok) {
-        const data = await res.json();
-        const models = (data.models || []).map(m => m.name).filter(Boolean);
-        if (models.length > 0 && this.panel) {
-          this.panel.webview.postMessage({ type: "setModelOptions", models, provider: "ollama" });
-          return;
-        }
+      provider = forceProvider || config.provider;
+      if (provider !== "ollama" && provider !== "nvidia") return;
+      const models = await this.agent.getAvailableModelsForProvider(provider, {
+        ollamaUrl: config.ollamaUrl,
+        nvidiaApiKey: config.nvidiaApiKey,
+        timeoutMs: 15_000,
+        forceRefresh: provider === "nvidia"
+      });
+      if (models.length > 0 && this.panel) {
+        this.panel.webview.postMessage({ type: "setModelOptions", models, provider });
+        return;
       }
       if (this.panel) {
         this.panel.webview.postMessage({
           type: "status",
-          text: "Ollama responded, but no models were returned. Showing defaults."
+          text:
+            provider === "nvidia"
+              ? "NVIDIA model discovery failed. Showing fallback models."
+              : "Ollama responded, but no models were returned. Showing defaults."
         });
       }
     } catch (err) {
       if (this.panel) {
         this.panel.webview.postMessage({
           type: "status",
-          text: `Ollama model list failed: ${err.message || err}. Showing defaults.`
+          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model list failed: ${err.message || err}. Showing defaults.`
         });
       }
     }
@@ -1891,15 +1897,18 @@ ${trimmedText}`;
     if (this.panel) {
       this.panel.webview.postMessage({
         type: "setModelOptions",
-        models: ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-        provider: "ollama"
+        models:
+          provider === "nvidia"
+            ? MODELS_BY_PROVIDER.nvidia
+            : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
+        provider: provider === "nvidia" ? "nvidia" : "ollama"
       });
     }
   }
 
   _getDefaultModelForProvider(provider) {
     if (provider === "ollama") return "qwen2.5-coder:1.5b";
-    if (provider === "nvidia") return "minimaxai/minimax-m2.7";
+    if (provider === "nvidia") return "meta/llama-3.1-8b-instruct";
     const customProvider = this._getCustomProviderById(provider);
     if (customProvider?.defaultModel) return customProvider.defaultModel;
     const providerModels = MODELS_BY_PROVIDER[provider];
@@ -1952,6 +1961,10 @@ ${trimmedText}`;
     const raw = typeof model === "string" ? model.trim() : "";
     const defaultModel = this._getDefaultModelForProvider(provider);
     if (!raw) return defaultModel;
+
+    if (provider === "nvidia") {
+      return this.agent._sanitizeNvidiaModel(raw);
+    }
 
     const customProvider = this._getCustomProviderById(provider);
     const allowedModels = customProvider?.models?.length
@@ -2956,15 +2969,16 @@ ${trimmedText}`;
       } else if (message.type === "quickFixActive") {
         // Quick Fix from chat panel - lint and fix with AI
         await this._runActiveSyntaxFix(workspaceFolder);
-      } else if (message.type === "refreshOllamaModels" || message.type === "ready") {
+      } else if (message.type === "refreshProviderModels" || message.type === "ready") {
+        let selectedProvider = this._getSelectedProviderId() || this.agent.getConfig().provider;
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
           const keyPresence = await this._getProviderPresence();
           const savedConfig = this.agent.getConfig();
-          const selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+          selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
           const customProvider = this._getCustomProviderById(selectedProvider);
           const hasKey = selectedProvider === "ollama" || !!keyPresence[selectedProvider];
-          const models = selectedProvider === "ollama"
+          const models = selectedProvider === "ollama" || selectedProvider === "nvidia"
             ? null
             : customProvider?.models?.length
               ? customProvider.models
@@ -2980,7 +2994,7 @@ ${trimmedText}`;
             models
           });
         }
-        this._fetchAndSendModels("ollama");
+        this._fetchAndSendModels(selectedProvider === "nvidia" ? "nvidia" : "ollama");
       } else if (message.type === "mode") {
         this.chatMode = message.value === "heavy" ? "heavy" : "fast";
       } else if (message.type === "setModel") {
@@ -3023,7 +3037,7 @@ ${trimmedText}`;
               model: nextModel,
               providers: this._buildProviderCatalog(),
               keyPresence,
-              models: message.provider === "ollama"
+              models: message.provider === "ollama" || message.provider === "nvidia"
                 ? null
                 : customProvider?.models?.length
                   ? customProvider.models
@@ -3038,7 +3052,7 @@ ${trimmedText}`;
               text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
             });
           }
-          await this._fetchAndSendModels("ollama");
+          await this._fetchAndSendModels(message.provider === "nvidia" ? "nvidia" : "ollama");
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);
           if (this.panel) {

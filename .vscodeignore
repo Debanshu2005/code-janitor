@@ -9,6 +9,9 @@
 !LICENSE
 !CHANGELOG.md
 
+# The main VS Code extension should only ship the chat panel UI.
+src/ai-agent/welcome.html
+
 # Exclude most node_modules but include essential runtime dependencies
 node_modules/**
 !node_modules/@babel/**
