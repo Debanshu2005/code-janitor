@@ -49,6 +49,13 @@ const STOP_WORDS = new Set([
   "with"
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
+const NVIDIA_MODELS = new Set([
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.1-70b-instruct",
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "mistralai/mistral-7b-instruct-v0.3",
+  "minimaxi/minimax-m2.7"
+])
 
 class AIAgent {
   constructor(context) {
@@ -77,7 +84,7 @@ class AIAgent {
   getConfig() {
     const config = vscode.workspace.getConfiguration("codeJanitor.ai")
 
-    const configProvider = config.get("provider", "ollama")
+    const configProvider = config.get("provider", "nvidia")
     const stateProvider = this.context
       ? this.context.globalState.get("codeJanitor.ai.provider", "")
       : ""
@@ -90,27 +97,34 @@ class AIAgent {
       normalizedConfigProvider &&
       normalizedStateProvider !== normalizedConfigProvider
         ? normalizedStateProvider
-        : normalizedConfigProvider || normalizedStateProvider || "ollama"
+        : normalizedConfigProvider || normalizedStateProvider || "nvidia"
 
-    const configModel = config.get(
-      "model",
-      this._getDefaultModelForProvider(provider)
-    )
+    const genericModel = String(config.get("model", "") || "").trim()
+    const nvidiaModel = String(
+      config.get("nvidiaModel", "meta/llama-3.1-8b-instruct") || ""
+    ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
       : ""
-    const normalizedConfigModel =
-      typeof configModel === "string" ? configModel.trim() : ""
     const normalizedStateModel =
       typeof stateModel === "string" ? stateModel.trim() : ""
+    const preferredConfigModel = this._resolveConfiguredModel(
+      provider,
+      genericModel,
+      nvidiaModel
+    )
+    const stateAwareModel =
+      provider === "nvidia"
+        ? this._sanitizeNvidiaModel(normalizedStateModel)
+        : normalizedStateModel
     const model =
       normalizedStateProvider &&
       normalizedConfigProvider &&
       normalizedStateProvider !== normalizedConfigProvider &&
-      normalizedStateModel
-        ? normalizedStateModel
-        : normalizedConfigModel ||
-          normalizedStateModel ||
+      stateAwareModel
+        ? stateAwareModel
+        : preferredConfigModel ||
+          stateAwareModel ||
           this._getDefaultModelForProvider(provider)
 
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
@@ -124,6 +138,8 @@ class AIAgent {
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
+      nvidiaApiKey: config.get("nvidiaApiKey", ""),
+      nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
       timeout: config.get("timeout", 90_000)
     }
   }
@@ -132,7 +148,29 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
+    if (provider === "nvidia") return "meta/llama-3.1-8b-instruct"
     return "qwen2.5-coder:1.5b"
+  }
+
+  _sanitizeNvidiaModel(model) {
+    const value = typeof model === "string" ? model.trim() : ""
+    if (!value) return "meta/llama-3.1-8b-instruct"
+    if (NVIDIA_MODELS.has(value)) return value
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+      )
+    ) {
+      return "meta/llama-3.1-8b-instruct"
+    }
+    return "meta/llama-3.1-8b-instruct"
+  }
+
+  _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
+    if (provider === "nvidia") {
+      return this._sanitizeNvidiaModel(nvidiaModel || genericModel)
+    }
+    return genericModel || this._getDefaultModelForProvider(provider)
   }
 
   _normalizeOllamaUrl(url) {
@@ -178,12 +216,12 @@ class AIAgent {
 
   async _prepareRuntimeConfig(config, reportStatus) {
     if (!config || config.provider !== "ollama") {
-      return config
+      return { ...config }
     }
 
     const models = await this._fetchOllamaModelNames(config.ollamaUrl)
     if (models.length === 0) {
-      return config
+      return { ...config }
     }
 
     const resolvedModel = this._pickOllamaModel(models, config.model)
@@ -215,6 +253,18 @@ class AIAgent {
       }
       if (/\b404\b|no endpoints found|not found/i.test(message)) {
         return `OpenRouter error: ${message}. That model currently has no available endpoint. Try another listed model.`
+      }
+    }
+
+    if (config?.provider === "nvidia") {
+      if (/\b429\b|rate limit|quota|too many requests/i.test(message)) {
+        return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
+      }
+      if (/\b404\b|page not found|not found/i.test(message)) {
+        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxi/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
+      }
+      if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
+        return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`
       }
     }
 
@@ -315,6 +365,37 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
+          messages: [
+            { role: "system", content: sysContent },
+            { role: "user", content: userContent }
+          ],
+          stream: true,
+          temperature: 0.05,
+          max_tokens: maxTokens
+        }),
+        parseChunk: (line) => {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") return null
+          try {
+            return (
+              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+            )
+          } catch {
+            return null
+          }
+        }
+      }
+    }
+    if (config.provider === "nvidia") {
+      const maskedKey = config.nvidiaApiKey ? `${config.nvidiaApiKey.slice(0, 8)}...${config.nvidiaApiKey.slice(-4)}` : "(none)";
+      console.log(`[CodeJanitor] Using NVIDIA API key: ${maskedKey}`);
+      return {
+        url: "https://integrate.api.nvidia.com/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.nvidiaApiKey}`
+        },
+        body: JSON.stringify({
+          model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }
@@ -932,6 +1013,9 @@ ${resolvedMessage}`
         mode,
         reqIntent
       )
+      console.log(
+        `[CodeJanitor] Sending request to: ${reqOpts.url} with provider: ${runtimeConfig.provider}`
+      )
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
@@ -1120,11 +1204,15 @@ ${resolvedMessage}`
     if (!workspaceFolder) return ""
 
     // Only load graph for code-related intents where location matters
-    const shouldLoadGraph = 
-      intent === "scan" || 
-      intent === "debug" || 
+    const shouldLoadGraph =
+      intent === "scan" ||
+      intent === "debug" ||
       intent === "refactor" ||
-      /\b(where is|where's|locate|find|location|which file|what file)\b/i.test(userMessage)
+      intent === "edit" ||
+      intent === "show_graph" ||
+      /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
+        userMessage
+      )
     
     if (!shouldLoadGraph) return ""
 
@@ -1132,14 +1220,35 @@ ${resolvedMessage}`
       const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md")
       const graphReport = await fs.readFile(graphReportPath, "utf8")
       
-      // Extract only first 3 god nodes for speed
+      const overviewMatch = graphReport.match(/## Overview[\s\S]*?(?=##|$)/)
       const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
-      
-      if (godNodesMatch) {
-        const firstThreeNodes = godNodesMatch[0].split('###').slice(0, 4).join('###')
-        return `\n**Knowledge Graph (Top 3 Central Files):**\n${firstThreeNodes.slice(0, 800)}\n`
+      const directoryMatch = graphReport.match(/## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/)
+      const insightsMatch = graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/)
+
+      const sections = []
+
+      if (overviewMatch) {
+        sections.push(overviewMatch[0].trim())
       }
-      
+
+      if (godNodesMatch) {
+        const firstThreeNodes = godNodesMatch[0].split("###").slice(0, 4).join("###").trim()
+        sections.push(firstThreeNodes)
+      }
+
+      if (directoryMatch) {
+        const topDirectories = directoryMatch[0].split("###").slice(0, 7).join("###").trim()
+        sections.push(topDirectories)
+      }
+
+      if (insightsMatch) {
+        sections.push(insightsMatch[0].trim())
+      }
+
+      if (sections.length > 0) {
+        return `\n**Knowledge Graph Context**\nA Graphify knowledge-graph report is available at \`graphify-out/GRAPH_REPORT.md\`. Use it first for architecture, codebase navigation, multi-file debugging, and refactors.\n${sections.join("\n\n").slice(0, 1800)}\n`
+      }
+
       return ""
     } catch (err) {
       return ""
@@ -1528,13 +1637,16 @@ ${resolvedMessage}`
 
   _buildSystemInstruction(intent, workspaceFolder) {
     const base =
-      "You are a coding assistant embedded in Arduino IDE ,named Code Janitor."
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Source control integration, including branch, commit, push, pull, and status workflows"
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
-- If a command is likely to fail, propose a corrected safer command immediately.`
+- If a command is likely to fail, propose a corrected safer command immediately.
+- When the workspace contains \`graphify-out/GRAPH_REPORT.md\`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.
+- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.
+- If the user wants to visualize architecture, dependencies, or the project graph, use the \`GRAPHIFY: open\` action instead of only describing it.`
     switch (intent) {
       case "greeting":
         return `${base}
@@ -2409,8 +2521,15 @@ ${userMessage}`
       "wmic path win32_pnpentity",
       "mode",
       "arduino-cli board list",
+      "arduino-cli lib list",
+      "arduino-cli lib search",
+      "arduino-cli lib install",
       "arduino-cli compile",
-      "arduino-cli upload"
+      "arduino-cli upload",
+      "pip list",
+      "pip3 list",
+      "pip show",
+      "pip3 show"
     ]
 
     if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {

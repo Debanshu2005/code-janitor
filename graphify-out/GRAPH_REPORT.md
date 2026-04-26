@@ -1,12 +1,12 @@
 # Codebase Knowledge Graph Report
 
-Generated: 2026-04-13T15:52:04.570Z
+Generated: 2026-04-16T09:28:53.022Z
 
 ## Overview
 
-- **Total Files**: 41
-- **Total Dependencies**: 50
-- **Communities**: 18
+- **Total Files**: 51
+- **Total Dependencies**: 55
+- **Communities**: 19
 
 ## God Nodes (High Connectivity)
 
@@ -15,15 +15,15 @@ These files are central to the codebase architecture. Changes here affect many o
 ### src/extension.js
 
 - **Type**: javascript
-- **Lines**: 779
+- **Lines**: 1453
 - **Incoming Dependencies**: 0
-- **Outgoing Dependencies**: 14
-- **Total Connections**: 14
+- **Outgoing Dependencies**: 16
+- **Total Connections**: 16
 
 ### src/core/fixers/fixer-wrapper.js
 
 - **Type**: javascript
-- **Lines**: 210
+- **Lines**: 218
 - **Incoming Dependencies**: 0
 - **Outgoing Dependencies**: 6
 - **Total Connections**: 6
@@ -40,7 +40,7 @@ These files are central to the codebase architecture. Changes here affect many o
 
 ### .
 
-- **Files**: 4
+- **Files**: 12
 - **Types**: javascript, python
 
 ### .tmp-vsix-100/extension/src/ai-agent
@@ -119,6 +119,11 @@ These files are central to the codebase architecture. Changes here affect many o
 - **Types**: javascript, python
 
 ### src/graphify
+
+- **Files**: 2
+- **Types**: javascript
+
+### src/self-healing
 
 - **Files**: 2
 - **Types**: javascript

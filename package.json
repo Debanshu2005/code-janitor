@@ -1,8 +1,8 @@
 {
   "name": "code-janitor",
   "displayName": "Code Janitor",
-  "description": "Autocorrect and format code syntax for C, C++, .ino, Java, JavaScript, Python, and HTML inside VS Code.",
-  "version": "1.6.1",
+  "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
+  "version": "1.11.7",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -112,17 +112,15 @@
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
-          "default": "meta/llama-3.1-8b-instruct",
+          "default": "minimaxai/minimax-m2.7",
           "enum": [
+            "minimaxai/minimax-m2.7",
             "meta/llama-3.1-8b-instruct",
             "meta/llama-3.1-70b-instruct",
-            "meta/llama-3.1-405b-instruct",
-            "mistralai/mistral-7b-instruct-v0.3",
-            "mistralai/mixtral-8x7b-instruct-v0.1",
-            "google/gemma-2-9b-it",
-            "google/gemma-2-27b-it"
+            "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+            "mistralai/mistral-nemotron"
           ],
-          "description": "NVIDIA NIM model (free tier: llama-3.1-8b-instruct, mistral-7b, gemma-2-9b)"
+          "description": "NVIDIA NIM model (recommended: meta/llama-3.1-8b-instruct for speed, meta/llama-3.1-70b-instruct for quality. Note: minimaxai/minimax-m2.7 may be slower)"
         },
         "codeJanitor.ai.groqApiKey": {
           "type": "string",
@@ -142,12 +140,48 @@
         "codeJanitor.ai.model": {
           "type": "string",
           "default": "",
-          "description": "AI model to use. Leave empty to use the provider default. For OpenRouter use slugs like qwen/qwen-2.5-coder-32b-instruct. For Ollama use qwen2.5-coder:1.5b. For NVIDIA NIM use nvidia/minimax-m2.7 or nvidia/llama-3.1-nemotron-70b-instruct."
+          "description": "AI model to use. Leave empty to use the provider default. For OpenRouter use slugs like qwen/qwen-2.5-coder-32b-instruct. For Ollama use qwen2.5-coder:1.5b. For NVIDIA NIM use minimaxai/minimax-m2.7 or meta/llama-3.1-70b-instruct."
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 180000,
-          "description": "AI request timeout in milliseconds (default: 3 minutes, increase if using slow models)"
+          "default": 300000,
+          "description": "AI request timeout in milliseconds (default: 5 minutes, increase if using slow models like MiniMax M2.7)"
+        },
+        "codeJanitor.ai.showParsedActionsDebug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show parsed AI actions in chat status messages for debugging"
+        },
+        "codeJanitor.ai.selfHealing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic performance monitoring and optimization (self-healing)"
+        },
+        "codeJanitor.ai.selfHealing.slowThreshold": {
+          "type": "number",
+          "default": 30000,
+          "description": "Response time threshold in milliseconds to trigger self-healing (default: 30 seconds)"
+        },
+        "codeJanitor.ai.maxTokens.fast": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens for fast mode responses (default: 4096, range: 512-8192)",
+          "minimum": 512,
+          "maximum": 8192
+        },
+        "codeJanitor.ai.maxTokens.heavy": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens for heavy mode responses (default: 8192, range: 1024-16384)",
+          "minimum": 1024,
+          "maximum": 16384
+        },
+        "codeJanitor.ai.maxTokens.create": {
+          "type": "number",
+          "default": 16384,
+          "description": "Maximum tokens for create mode (file generation) responses (default: 16384, range: 2048-32768)",
+          "minimum": 2048,
+          "maximum": 32768
         }
       }
     },
@@ -181,6 +215,21 @@
         "command": "codeJanitor.openGraphify",
         "title": "Visualize Codebase Graph",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.showPerformance",
+        "title": "Show AI Performance Report",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.quickFixWithAI",
+        "title": "Quick Fix with AI",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.quickFixAllWithAI",
+        "title": "Quick Fix All with AI",
+        "category": "Code Janitor"
       }
     ],
     "menus": {
@@ -202,6 +251,9 @@
         },
         {
           "command": "codeJanitor.openGraphify"
+        },
+        {
+          "command": "codeJanitor.showPerformance"
         }
       ]
     },

@@ -1,12 +1,9 @@
 # Code Janitor
-
 ![VS Code](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
 ![Node](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-
 ## Introduction
-
 Code Janitor is a VS Code extension designed to enhance the coding experience by providing tools for formatting, repairing, and validating code. It supports multiple programming languages including Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte, and more.
 
 Website for the extension: https://code-janitor-web.vercel.app/
@@ -19,9 +16,12 @@ Website for the extension: https://code-janitor-web.vercel.app/
 4. **Live Preview**: Preview HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte and more in a live webview.
 5. **Frontend Dependency Validation**: Validate frontend dependencies for HTML, CSS, and JavaScript files.
 6. **AI Chat Panel**: Open an AI chat panel to interact with the Code Janitor AI assistant.
+7. **Self-Healing Performance**: Automatically detects slow AI responses and optimizes settings for better performance.
+8. **Self-Diagnosing Errors**: When FILE operations fail, automatically detects the cause, explains what's blocking it, and attempts to fix it.
+9. **Workspace Scanning and Knowledge Graph Integration**: Scan your workspace and integrate with a knowledge graph to provide better code suggestions and insights.
+10. **Graphify**: Visualize your codebase as a graph to better understand the relationships between different components.
 
 ### Install
-
 To install Code Janitor, follow these steps:
 
 1. Open Visual Studio Code.
@@ -31,13 +31,48 @@ To install Code Janitor, follow these steps:
 
 ### Usage
 
-1. **Format Code**: Use the Command Palette to run `Code Janitor: Format Code`.
-2. **Auto-Correction**: As you type, real-time auto-correction will help you improve your code quality.
-3. **Live Preview**: Open a file in the editor and press `Ctrl + Shift + P` (Windows/Linux) or `Cmd + Shift + P` (Mac), then select `Code Janitor: Live Preview`.
+**Keyboard Shortcuts:**
+
+- `Alt+D` - Format Code (applies code formatting and fixes)
+- `Ctrl+Alt+C` - Open AI Chat Panel
+- `Alt+P` - Live Preview
+- `Alt+L` - Lint Code (ESLint)
+- `Alt+V` - Validate Frontend Dependencies
+- `Ctrl+Alt+G` - Visualize Codebase Graph (Graphify)
+
+**Commands:**
+
+1. **Format Code**: Use `Alt+D` or Command Palette → `Code Janitor: Format Code`
+2. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
+3. **Live Preview**: Use `Alt+P` or Command Palette → `Code Janitor: Live Preview`
+
+
    <img width="1920" height="1020" alt="Screenshot 2026-04-06 205439" src="https://github.com/user-attachments/assets/5620f974-e99d-4447-85e2-5c2ba09a14e6" />
 
-4. **AI Chat Panel**: To interact with the AI assistant, open the Command Palette and type `Code Janitor: Open AI Chat`.
+   
+4. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
+
+   
    <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
+
+   
+5. **Graphify**: Use `Ctrl+Alt+G` or Command Palette → `Code Janitor: Graphify`
+   
+   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/2e7276ec-4fdf-4745-8fe3-83da20377be6" />
+
+**AI Chat Features:**
+
+
+- Syntax checking for JS, TS, Python, Java, C/C++, JSON, and HTML
+- Code generation and refactoring
+- Bug fixing and debugging assistance
+- Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
+- **Self-Healing**: Automatically detects slow models and switches to faster alternatives
+- **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
+   - Track response times
+   - Monitor model performance
+   - View auto-heal history
+   - Get optimization recommendations
    
 
 

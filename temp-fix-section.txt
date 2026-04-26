@@ -1,0 +1,105 @@
+﻿  // 1. Manual Fix Command with Syntax Check
+  const fixDisposable = vscode.commands.registerCommand(
+    "codeJanitor.fixCode",
+    async () => {
+      const editor = vscode.window.activeTextEditor
+      if (!editor) {
+        vscode.window.showInformationMessage("No active editor found!")
+        return
+      }
+
+      const document = editor.document
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+      const originalCode = document.getText()
+
+      console.log("ðŸ”§ Starting multi-stage fixing pipeline...")
+
+      // Step 1: Initial syntax check via CMD
+      const initialCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
+
+      if (!initialCheck.hasSyntaxErrors) {
+        vscode.window.showInformationMessage("âœ¨ No syntax errors found!")
+        const beforeFormatting = document.getText()
+        await runFixerAndApply(document, editor)
+        const afterFormattingCheck = await runSyntaxCheckAndFix(
+          document,
+          workspaceFolder
+        )
+        if (afterFormattingCheck.hasSyntaxErrors) {
+          await replaceDocumentText(document, beforeFormatting, true)
+          vscode.window.showWarningMessage(
+            "Formatting result was unsafe, so the original content was restored."
+          )
+        }
+        return
+      }
+
+      console.log("âš ï¸ Initial syntax errors:", initialCheck.output)
+
+      // Step 2: Apply rule-based fixes
+      console.log("ðŸ”§ Attempting rule-based fixes...")
+      const ruleBasedResult = await applyRuleBasedFixes(document, editor)
+      let afterRuleCheck = null
+
+      if (ruleBasedResult.success) {
+        // Cross-check after rule-based fixes
+        afterRuleCheck = await runSyntaxCheckAndFix(
+          document,
+          workspaceFolder
+        )
+        if (!afterRuleCheck.hasSyntaxErrors) {
+          vscode.window.showInformationMessage(
+            "âœ… Fixed with rule-based repairs!"
+          )
+          return
+        }
+        console.log(
+          "âš ï¸ Errors remain after rule-based fixes:",
+          afterRuleCheck.output
+        )
+      } else {
+        console.log("âš ï¸ Rule-based fixes made no changes")
+      }
+
+      // Step 3: Apply AI fixes
+      console.log("ðŸ¤– Attempting AI fixes...")
+      const beforeAI = document.getText()
+      const aiContext =
+        (ruleBasedResult.success && afterRuleCheck.output) || initialCheck.output
+      const aiResult = await applyAIFixes(document, editor, aiContext)
+      if (aiResult.applied) {
+        const afterAICheck = await runSyntaxCheckAndFix(
+          document,
+          workspaceFolder
+        )
+        if (!afterAICheck.hasSyntaxErrors) {
+          vscode.window.showInformationMessage("âœ… Fixed with AI repairs!")
+          return
+        }
+        console.log("âš ï¸ Errors remain after AI fixes:", afterAICheck.output)
+        await replaceDocumentText(document, beforeAI, true)
+        console.warn("Restored content after unsafe AI output")
+      } else {
+        console.log(`âš ï¸ AI skipped: ${aiResult.reason}`)
+      }
+
+      // Step 4: Apply formatting
+      const beforeFormatting = document.getText()
+      console.log("ðŸ“ Attempting formatting...")
+      await runFixerAndApply(document, editor)
+      const finalCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
+      if (!finalCheck.hasSyntaxErrors) {
+        vscode.window.showInformationMessage("âœ… Fixed with formatting!")
+      } else {
+        await replaceDocumentText(document, beforeFormatting || originalCode, true)
+        vscode.window.showWarningMessage(
+          `âš ï¸ Syntax errors remain. The previous file contents were restored.`
+        )
+        console.error("Final syntax errors:", finalCheck.output)
+      }
+    }
+  )
+  context.subscriptions.push(fixDisposable)
+
+  // Create diagnostics collection for linting issues
+  const diagnosticCollection =

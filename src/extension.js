@@ -166,17 +166,23 @@ function isCandidateValidForLanguage(candidateCode, language, ollamaClient) {
   return ollamaClient._passesLanguageValidation(candidateCode, language)
 }
 
-function getPreferredSyntaxFixRuntimeConfig() {
+async function getPreferredSyntaxFixRuntimeConfig(context) {
   const config = vscode.workspace.getConfiguration("codeJanitor.ai")
-  const nvidiaApiKey = config.get("nvidiaApiKey", "").trim()
+  let nvidiaApiKey = config.get("nvidiaApiKey", "").trim()
+  
+  // Try to get from secrets if not in config
+  if (!nvidiaApiKey && context?.secrets) {
+    nvidiaApiKey = String((await context.secrets.get("codeJanitor.ai.nvidiaApiKey")) || "").trim()
+  }
+  
   const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434")
   const timeout = config.get("timeout", 90_000)
 
   if (nvidiaApiKey) {
     return {
       provider: "nvidia",
-      model: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
-      nvidiaModel: config.get("nvidiaModel", "meta/llama-3.1-8b-instruct"),
+      model: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
+      nvidiaModel: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
       nvidiaApiKey,
       timeout
     }
@@ -341,6 +347,7 @@ async function runFixerAndApply(document, editor = null) {
 }
 
 let globalContext // Store context globally
+let chatPanelInstance = null // Shared chat panel instance
 
 function getApiKeyConfigKey(provider) {
   if (provider === "groq") return "groqApiKey"
@@ -397,8 +404,8 @@ async function restorePersistedApiKeys(context) {
 }
 
 async function activate(context) {
-  console.log("✓ Code Janitor extension is activating...")
   globalContext = context
+  console.log("✓ Code Janitor extension is activating...")
   await restorePersistedApiKeys(context)
 
   // Show setup guide on first install
@@ -424,7 +431,7 @@ async function activate(context) {
   let isAutoFixing = false
   let autoFixTimeout = null
 
-  // 1. Manual Fix Command with Syntax Check
+  // 1. Manual Fix Command - Open AI chat and trigger Fix issues
   const fixDisposable = vscode.commands.registerCommand(
     "codeJanitor.fixCode",
     async () => {
@@ -433,95 +440,17 @@ async function activate(context) {
         vscode.window.showInformationMessage("No active editor found!")
         return
       }
-
-      const document = editor.document
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      const originalCode = document.getText()
-
-      console.log("🔧 Starting multi-stage fixing pipeline...")
-
-      // Step 1: Initial syntax check via CMD
-      const initialCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
-
-      if (!initialCheck.hasSyntaxErrors) {
-        vscode.window.showInformationMessage("✨ No syntax errors found!")
-        const beforeFormatting = document.getText()
-        await runFixerAndApply(document, editor)
-        const afterFormattingCheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (afterFormattingCheck.hasSyntaxErrors) {
-          await replaceDocumentText(document, beforeFormatting, true)
-          vscode.window.showWarningMessage(
-            "Formatting result was unsafe, so the original content was restored."
-          )
-        }
-        return
+      // Always create fresh instance or reuse if panel is still open
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
       }
-
-      console.log("⚠️ Initial syntax errors:", initialCheck.output)
-
-      // Step 2: Apply rule-based fixes
-      console.log("🔧 Attempting rule-based fixes...")
-      const ruleBasedResult = await applyRuleBasedFixes(document, editor)
-      let afterRuleCheck = null
-
-      if (ruleBasedResult.success) {
-        // Cross-check after rule-based fixes
-        afterRuleCheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (!afterRuleCheck.hasSyntaxErrors) {
-          vscode.window.showInformationMessage(
-            "✅ Fixed with rule-based repairs!"
-          )
-          return
-        }
-        console.log(
-          "⚠️ Errors remain after rule-based fixes:",
-          afterRuleCheck.output
-        )
-      } else {
-        console.log("⚠️ Rule-based fixes made no changes")
-      }
-
-      // Step 3: Apply AI fixes
-      console.log("🤖 Attempting AI fixes...")
-      const beforeAI = document.getText()
-      const aiContext =
-        (ruleBasedResult.success && afterRuleCheck.output) || initialCheck.output
-      const aiResult = await applyAIFixes(document, editor, aiContext)
-      if (aiResult.applied) {
-        const afterAICheck = await runSyntaxCheckAndFix(
-          document,
-          workspaceFolder
-        )
-        if (!afterAICheck.hasSyntaxErrors) {
-          vscode.window.showInformationMessage("✅ Fixed with AI repairs!")
-          return
-        }
-        console.log("⚠️ Errors remain after AI fixes:", afterAICheck.output)
-        await replaceDocumentText(document, beforeAI, true)
-        console.warn("Restored content after unsafe AI output")
-      } else {
-        console.log(`⚠️ AI skipped: ${aiResult.reason}`)
-      }
-
-      // Step 4: Apply formatting
-      const beforeFormatting = document.getText()
-      console.log("📝 Attempting formatting...")
-      await runFixerAndApply(document, editor)
-      const finalCheck = await runSyntaxCheckAndFix(document, workspaceFolder)
-      if (!finalCheck.hasSyntaxErrors) {
-        vscode.window.showInformationMessage("✅ Fixed with formatting!")
-      } else {
-        await replaceDocumentText(document, beforeFormatting || originalCode, true)
-        vscode.window.showWarningMessage(
-          `⚠️ Syntax errors remain. The previous file contents were restored.`
-        )
-        console.error("Final syntax errors:", finalCheck.output)
+      // Show panel and trigger fix
+      await chatPanelInstance.show()
+      // Wait for webview to be ready
+      await new Promise(resolve => setTimeout(resolve, 500))
+      // Trigger Fix issues action
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ type: "triggerFix" })
       }
     }
   )
@@ -531,6 +460,54 @@ async function activate(context) {
   const diagnosticCollection =
     vscode.languages.createDiagnosticCollection("codeJanitor")
   context.subscriptions.push(diagnosticCollection)
+
+  // Register Code Action Provider for "Quick Fix with AI"
+  const codeActionProvider = vscode.languages.registerCodeActionsProvider(
+    ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'python', 'java', 'c', 'cpp', 'html'],
+    {
+      provideCodeActions(document, range, context) {
+        const diagnostics = context.diagnostics.filter(d => d.source === 'Code Janitor')
+        if (diagnostics.length === 0) return []
+
+        const fixes = []
+        
+        // Create "Fix with AI" action for each diagnostic
+        for (const diagnostic of diagnostics) {
+          const fix = new vscode.CodeAction(
+            `🤖 Fix with AI: ${diagnostic.message}`,
+            vscode.CodeActionKind.QuickFix
+          )
+          fix.command = {
+            command: 'codeJanitor.quickFixWithAI',
+            title: 'Fix with AI',
+            arguments: [document, diagnostic]
+          }
+          fix.diagnostics = [diagnostic]
+          fix.isPreferred = true
+          fixes.push(fix)
+        }
+
+        // Create "Fix All with AI" action if multiple issues
+        if (diagnostics.length > 1) {
+          const fixAll = new vscode.CodeAction(
+            `🤖 Fix All ${diagnostics.length} Issues with AI`,
+            vscode.CodeActionKind.QuickFix
+          )
+          fixAll.command = {
+            command: 'codeJanitor.quickFixAllWithAI',
+            title: 'Fix All with AI',
+            arguments: [document, diagnostics]
+          }
+          fixAll.diagnostics = diagnostics
+          fixes.push(fixAll)
+        }
+
+        return fixes
+      }
+    },
+    { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+  )
+  context.subscriptions.push(codeActionProvider)
 
   // 2. Lint Command
   const lintDisposable = vscode.commands.registerCommand(
@@ -602,6 +579,58 @@ async function activate(context) {
     }
   )
   context.subscriptions.push(lintDisposable)
+
+  // Quick Fix with AI Command - Single issue
+  const quickFixDisposable = vscode.commands.registerCommand(
+    "codeJanitor.quickFixWithAI",
+    async (document, diagnostic) => {
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      await chatPanelInstance.show()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Build pre-filled message with error context
+      const line = diagnostic.range.start.line + 1
+      const message = `Fix this error on line ${line}:\n\n**Error:** ${diagnostic.message}\n**Rule:** ${diagnostic.code || 'N/A'}\n\nPlease fix this issue in the file.`
+      
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ 
+          type: "prefillMessage", 
+          message 
+        })
+      }
+    }
+  )
+  context.subscriptions.push(quickFixDisposable)
+
+  // Quick Fix All with AI Command - Multiple issues
+  const quickFixAllDisposable = vscode.commands.registerCommand(
+    "codeJanitor.quickFixAllWithAI",
+    async (document, diagnostics) => {
+      if (!chatPanelInstance || !chatPanelInstance.panel) {
+        chatPanelInstance = new ChatPanel(context)
+      }
+      await chatPanelInstance.show()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Build pre-filled message with all errors
+      const errorList = diagnostics.map((d, i) => {
+        const line = d.range.start.line + 1
+        return `${i + 1}. Line ${line}: ${d.message} (${d.code || 'N/A'})`
+      }).join('\n')
+      
+      const message = `Fix these ${diagnostics.length} errors:\n\n${errorList}\n\nPlease fix all these issues in the file.`
+      
+      if (chatPanelInstance.panel?.webview) {
+        chatPanelInstance.panel.webview.postMessage({ 
+          type: "prefillMessage", 
+          message 
+        })
+      }
+    }
+  )
+  context.subscriptions.push(quickFixAllDisposable)
 
   // 3. Frontend Validation Command
   const validateDisposable = vscode.commands.registerCommand(
@@ -675,13 +704,33 @@ async function activate(context) {
     () => livePreviewer(context)
   )
   context.subscriptions.push(previewDisposable)
+  const inspectPreviewDisposable = vscode.commands.registerCommand(
+    "codeJanitor.inspectLivePreview",
+    () => livePreviewer(context, { inspect: true })
+  )
+  context.subscriptions.push(inspectPreviewDisposable)
   console.log("✓ Enhanced Live Preview command registered.")
 
   // 5. AI Chat Command
-  const chatPanel = new ChatPanel(context)
   const chatDisposable = vscode.commands.registerCommand(
     "codeJanitor.openChat",
-    () => chatPanel.show()
+    async () => {
+      try {
+        console.log("[Extension] codeJanitor.openChat command triggered");
+        // Always create fresh instance or reuse if panel is still open
+        if (!chatPanelInstance || !chatPanelInstance.panel) {
+          console.log("[Extension] Creating new ChatPanel instance");
+          chatPanelInstance = new ChatPanel(context);
+        }
+        console.log("[Extension] Calling chatPanelInstance.show()");
+        await chatPanelInstance.show();
+        console.log("[Extension] ChatPanel shown successfully");
+      } catch (error) {
+        console.error("[Extension] CRITICAL ERROR in openChat command:", error);
+        console.error("[Extension] Error stack:", error.stack);
+        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}\n\nCheck Developer Console (Help → Toggle Developer Tools) for details.`);
+      }
+    }
   )
   context.subscriptions.push(chatDisposable)
   console.log("✓ AI Chat command registered.")
@@ -690,16 +739,37 @@ async function activate(context) {
   const graphifyPanel = new GraphifyPanel(context)
   const graphifyDisposable = vscode.commands.registerCommand(
     "codeJanitor.openGraphify",
-    () => graphifyPanel.show()
+    () => {
+      console.log("[Extension] codeJanitor.openGraphify command triggered");
+      graphifyPanel.show();
+    }
   )
   context.subscriptions.push(graphifyDisposable)
   console.log("✓ Graphify command registered.")
+
+  // 7. Performance Report Command
+  const performanceDisposable = vscode.commands.registerCommand(
+    "codeJanitor.showPerformance",
+    () => {
+      if (chatPanelInstance && chatPanelInstance.performanceMonitor) {
+        const analysis = chatPanelInstance.performanceMonitor.analyzePerformance();
+        chatPanelInstance.performanceMonitor._showPerformanceReport(analysis);
+      } else {
+        vscode.window.showInformationMessage("Performance monitoring not available. Open AI Chat first.");
+      }
+    }
+  )
+  context.subscriptions.push(performanceDisposable)
+  console.log("✓ Performance report command registered.")
 
   // URI handler: vscode://Debanshu2005.code-janitor/check-models
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
       if (uri.path === "/check-models") {
-        chatPanel.show()
+        if (!chatPanelInstance || !chatPanelInstance.panel) {
+          chatPanelInstance = new ChatPanel(context)
+        }
+        chatPanelInstance.show()
       }
     }
   })
@@ -862,10 +932,21 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
         console.log(`Command stderr: ${stderr}`)
         console.log(`Combined output: ${output}`)
 
-        // For Python: py_compile writes errors to stderr and exits with non-zero code
-        // For Node: --check writes errors to stderr and exits with non-zero code
-        // For Java: javac writes errors to stderr and exits with non-zero code
-        const hasSyntaxErrors = !!error
+        // Detect syntax errors:
+        // 1. Non-zero exit code = definite error
+        // 2. stderr with error keywords = likely error
+        const stderrText = (stderr || "").trim().toLowerCase()
+        const hasErrorKeywords = stderrText && (
+          stderrText.includes("error") ||
+          stderrText.includes("syntaxerror") ||
+          stderrText.includes("exception") ||
+          stderrText.includes("invalid") ||
+          stderrText.includes("unexpected") ||
+          stderrText.includes("failed") ||
+          /line \d+/.test(stderrText) // Error messages often include line numbers
+        )
+        
+        const hasSyntaxErrors = !!error || hasErrorKeywords
 
         if (hasSyntaxErrors) {
           console.log(`✗ Syntax errors detected in ${fileName}`)
@@ -1018,20 +1099,21 @@ async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
     const targetPaths = Array.from(
       getDocumentPathCandidates(document, workspaceFolder)
     ).join(", ")
-    const fixRequest = `Fix syntax errors in the current ${language} file only.
-Return exactly one FILE action for this file and include the complete corrected file contents.
-Do not remove unrelated code. Do not return an empty file.
-Target file path must match one of: ${targetPaths}
+    const fixRequest = `Fix the syntax errors in this ${language} file.
 
-Current file path: ${fileName.replace(/\\/g, "/")}
+**File Information:**
+File path: ${fileName.replace(/\\\\/g, "/")}
+Language: ${language}
 
-Current syntax-check output:
+**Syntax Errors from Compiler:**
 ${syntaxErrorOutput || "No syntax checker output was provided."}
 
-Current file contents:
+**Current File Contents:**
 \`\`\`${language}
 ${code}
-\`\`\``
+\`\`\`
+
+IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not truncate or omit any code. Include the entire file from start to finish.`
 
     let fullResponse = ""
     const streamCallback = (token) => {

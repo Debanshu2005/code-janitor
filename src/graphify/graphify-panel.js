@@ -10,11 +10,14 @@ class GraphifyPanel {
   }
 
   async show() {
+    console.log("[GraphifyPanel] show() called");
     if (this.panel) {
+      console.log("[GraphifyPanel] Panel already exists, revealing it");
       this.panel.reveal(vscode.ViewColumn.One)
       return
     }
 
+    console.log("[GraphifyPanel] Creating new webview panel");
     this.panel = vscode.window.createWebviewPanel(
       "codeJanitorGraphify",
       "Code Janitor - Codebase Graph",
@@ -24,6 +27,7 @@ class GraphifyPanel {
         retainContextWhenHidden: true
       }
     )
+    console.log("[GraphifyPanel] Webview panel created successfully");
 
     this.panel.onDidDispose(() => {
       this.panel = null

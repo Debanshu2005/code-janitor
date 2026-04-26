@@ -8,8 +8,10 @@ This package is focused on AI chat, guided edits, and Git integration. It does n
 
 - Opens a dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
 - Opens a source control panel with `Code Janitor Arduino: Open Source Control`
+- Opens a Graphify visualization panel with `Code Janitor Arduino: Visualize Project Graph`
 - Supports `ollama`, `groq`, `openrouter`, and `anthropic`
 - Scans the workspace for relevant context before answering
+- Uses Graphify knowledge-graph reports (`graphify-out/GRAPH_REPORT.md`) to improve architecture-aware answers when available
 - Can generate structured `FILE`, `MKDIR`, and `CMD` actions with safety checks
 - Preserves the last selected model per provider
 - Includes quick actions such as explain, review, fix, refactor, tests, and syntax scan
@@ -21,6 +23,7 @@ This package is focused on AI chat, guided edits, and Git integration. It does n
 - `src/ai-agent/chat-panel.js`: webview bridge, command handling, and settings sync
 - `src/ai-agent/agent.js`: prompt building, provider requests, parsing, and action safety
 - `src/ai-agent/chat-panel.html`: chat UI
+- `src/graphify/graphify-panel.js`: Graphify visualization and knowledge-graph generation UI
 - `src/source-control/git-panel.js`: Git operations controller
 - `src/source-control/git-panel.html`: Source control UI
 
@@ -28,8 +31,10 @@ This package is focused on AI chat, guided edits, and Git integration. It does n
 
 - `Code Janitor Arduino: Open Arduino AI Chat`
 - `Code Janitor Arduino: Open Source Control`
+- `Code Janitor Arduino: Visualize Project Graph`
 
 Default keybindings:
 
 - `Ctrl+Alt+A` (Windows/Linux) or `Cmd+Alt+A` (Mac) - Open AI Chat
 - `Ctrl+Alt+G` (Windows/Linux) or `Cmd+Alt+G` (Mac) - Open Source Control
+- `Ctrl+Alt+V` (Windows/Linux) or `Cmd+Alt+V` (Mac) - Visualize Project Graph
