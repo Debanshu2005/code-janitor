@@ -37,7 +37,6 @@ class ChatPanel {
   }
 
   async show() {
-    let provider = forceProvider || "ollama";
     try {
       console.log("[ChatPanel] show() called");
       this.lastActiveEditor = vscode.window.activeTextEditor || this.lastActiveEditor;

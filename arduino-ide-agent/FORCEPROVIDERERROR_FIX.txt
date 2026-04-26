@@ -1,0 +1,19 @@
+# Fix for "forceProvider is not defined" Error
+
+## Issue
+Error: "Failed to open AI Chat: forceProvider is not defined"
+
+## Root Cause
+This error occurs when there's a cached version of the extension or stale build artifacts.
+
+## Solution
+1. Reload the VS Code/Arduino IDE window: Press `Ctrl+Shift+P` → "Developer: Reload Window"
+2. If that doesn't work, rebuild the extension:
+   ```bash
+   cd arduino-ide-agent
+   npm install
+   ```
+3. Reinstall the .vsix file
+
+## Verification
+The code has been checked and `forceProvider` does not exist in any source files. The error is from cached artifacts.
