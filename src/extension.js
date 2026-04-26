@@ -1,16 +1,16 @@
-const vscode = require("vscode")
-const Linter = require("./core/linter")
-const FrontendValidator = require("./core/frontend-validator")
-const livePreviewer = require("./live-preview")
-const OllamaClient = require("./core/ai/ollama-client")
-const ChatPanel = require("./ai-agent/chat-panel")
-const GraphifyPanel = require("./graphify/graphify-panel")
-const AIAgent = require("./ai-agent/agent")
-const path = require("path")
+const vscode = require("vscode");
+const Linter = require("./core/linter");
+const FrontendValidator = require("./core/frontend-validator");
+const livePreviewer = require("./live-preview");
+const OllamaClient = require("./core/ai/ollama-client");
+const ChatPanel = require("./ai-agent/chat-panel");
+const GraphifyPanel = require("./graphify/graphify-panel");
+const AIAgent = require("./ai-agent/agent");
+const path = require("path");
 
 // Map file extensions / languageIds → fixer
 function getFixerForDocument(document, code, fileName) {
-  console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`)
+  console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`);
 
   const fixerMap = {
     c: () => new (require("./core/fixers/EmbeddedCFixer"))(code, fileName),
@@ -26,28 +26,28 @@ function getFixerForDocument(document, code, fileName) {
         verbose: true
       }),
     html: () => new (require("./core/fixers/html-fixer"))(code, fileName)
-  }
+  };
 
   // Check by language ID first
   if (fixerMap[document.languageId]) {
-    console.log(`Found fixer by language ID: ${document.languageId}`)
-    return fixerMap[document.languageId]()
+    console.log(`Found fixer by language ID: ${document.languageId}`);
+    return fixerMap[document.languageId]();
   }
 
   // Check by file extension
-  if (/\.(c|h|cpp|ino)$/i.test(fileName)) return fixerMap.c()
+  if (/\.(c|h|cpp|ino)$/i.test(fileName)) return fixerMap.c();
   if (/\.(js|jsx)$/i.test(fileName)) {
-    console.log("Found JS file by extension")
-    return fixerMap.javascript()
+    console.log("Found JS file by extension");
+    return fixerMap.javascript();
   }
-  if (fileName.endsWith(".java")) return fixerMap.java()
-  if (fileName.endsWith(".py")) return fixerMap.python()
-  if (fileName.endsWith(".html")) return fixerMap.html()
+  if (fileName.endsWith(".java")) return fixerMap.java();
+  if (fileName.endsWith(".py")) return fixerMap.python();
+  if (fileName.endsWith(".html")) return fixerMap.html();
 
   console.log(
     `No fixer found for languageId: ${document.languageId}, fileName: ${fileName}`
-  )
-  return null
+  );
+  return null;
 }
 
 function getNormalizedLanguageId(document) {
@@ -55,61 +55,61 @@ function getNormalizedLanguageId(document) {
     ? "javascript"
     : document.languageId === "cppm"
       ? "cpp"
-      : document.languageId
+      : document.languageId;
 }
 
 function getFullDocumentRange(document) {
   return new vscode.Range(
     document.positionAt(0),
     document.lineAt(document.lineCount - 1).range.end
-  )
+  );
 }
 
 async function replaceDocumentText(document, nextCode, save = false) {
-  const edit = new vscode.WorkspaceEdit()
-  edit.replace(document.uri, getFullDocumentRange(document), nextCode)
-  await vscode.workspace.applyEdit(edit)
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(document.uri, getFullDocumentRange(document), nextCode);
+  await vscode.workspace.applyEdit(edit);
 
   if (save) {
-    await document.save()
+    await document.save();
   }
 }
 
 function getDocumentPathCandidates(document, workspaceFolder) {
-  const absolutePath = document.fileName.replace(/\\/g, "/")
-  const candidates = new Set([absolutePath, path.basename(absolutePath)])
+  const absolutePath = document.fileName.replace(/\\/g, "/");
+  const candidates = new Set([absolutePath, path.basename(absolutePath)]);
 
   if (workspaceFolder) {
     candidates.add(
       path.relative(workspaceFolder, document.fileName).replace(/\\/g, "/")
-    )
+    );
   }
 
-  return candidates
+  return candidates;
 }
 
 function getIdentifierSet(code) {
-  return new Set((code.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []).slice(0, 500))
+  return new Set((code.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []).slice(0, 500));
 }
 
 function assessReplacementSafety(originalCode, candidateCode) {
-  const original = originalCode || ""
-  const candidate = candidateCode || ""
+  const original = originalCode || "";
+  const candidate = candidateCode || "";
 
   if (typeof candidateCode !== "string") {
-    return { safe: false, reason: "Replacement is not a string" }
+    return { safe: false, reason: "Replacement is not a string" };
   }
 
   if (candidate === original) {
-    return { safe: true, reason: "No content change" }
+    return { safe: true, reason: "No content change" };
   }
 
-  const trimmed = candidate.trim()
+  const trimmed = candidate.trim();
   if (!trimmed) {
-    return { safe: false, reason: "Replacement is empty" }
+    return { safe: false, reason: "Replacement is empty" };
   }
 
-  const originalTrimmed = original.trim()
+  const originalTrimmed = original.trim();
   if (
     originalTrimmed.length > 80 &&
     trimmed.length < Math.max(40, Math.floor(originalTrimmed.length * 0.5))
@@ -117,15 +117,15 @@ function assessReplacementSafety(originalCode, candidateCode) {
     return {
       safe: false,
       reason: "Replacement is much shorter than the original"
-    }
+    };
   }
 
   const originalNonEmptyLines = original
     .split(/\r?\n/)
-    .filter((line) => line.trim()).length
+    .filter((line) => line.trim()).length;
   const candidateNonEmptyLines = candidate
     .split(/\r?\n/)
-    .filter((line) => line.trim()).length
+    .filter((line) => line.trim()).length;
   if (
     originalNonEmptyLines >= 8 &&
     candidateNonEmptyLines < Math.max(3, Math.floor(originalNonEmptyLines * 0.5))
@@ -133,17 +133,17 @@ function assessReplacementSafety(originalCode, candidateCode) {
     return {
       safe: false,
       reason: "Replacement removes too much non-empty content"
-    }
+    };
   }
 
-  const originalIdentifiers = getIdentifierSet(original)
+  const originalIdentifiers = getIdentifierSet(original);
   if (originalIdentifiers.size >= 4) {
-    const candidateIdentifiers = getIdentifierSet(candidate)
-    let sharedIdentifiers = 0
+    const candidateIdentifiers = getIdentifierSet(candidate);
+    let sharedIdentifiers = 0;
 
     for (const token of originalIdentifiers) {
       if (candidateIdentifiers.has(token)) {
-        sharedIdentifiers += 1
+        sharedIdentifiers += 1;
       }
     }
 
@@ -151,32 +151,32 @@ function assessReplacementSafety(originalCode, candidateCode) {
       return {
         safe: false,
         reason: "Replacement does not preserve enough original identifiers"
-      }
+      };
     }
   }
 
-  return { safe: true, reason: "Replacement passed safety checks" }
+  return { safe: true, reason: "Replacement passed safety checks" };
 }
 
 function isCandidateValidForLanguage(candidateCode, language, ollamaClient) {
   if (!candidateCode || !language || !ollamaClient) {
-    return true
+    return true;
   }
 
-  return ollamaClient._passesLanguageValidation(candidateCode, language)
+  return ollamaClient._passesLanguageValidation(candidateCode, language);
 }
 
 async function getPreferredSyntaxFixRuntimeConfig(context) {
-  const config = vscode.workspace.getConfiguration("codeJanitor.ai")
-  let nvidiaApiKey = config.get("nvidiaApiKey", "").trim()
+  const config = vscode.workspace.getConfiguration("codeJanitor.ai");
+  let nvidiaApiKey = config.get("nvidiaApiKey", "").trim();
   
   // Try to get from secrets if not in config
   if (!nvidiaApiKey && context?.secrets) {
-    nvidiaApiKey = String((await context.secrets.get("codeJanitor.ai.nvidiaApiKey")) || "").trim()
+    nvidiaApiKey = String((await context.secrets.get("codeJanitor.ai.nvidiaApiKey")) || "").trim();
   }
   
-  const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434")
-  const timeout = config.get("timeout", 90_000)
+  const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434");
+  const timeout = config.get("timeout", 90_000);
 
   if (nvidiaApiKey) {
     return {
@@ -185,7 +185,7 @@ async function getPreferredSyntaxFixRuntimeConfig(context) {
       nvidiaModel: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
       nvidiaApiKey,
       timeout
-    }
+    };
   }
 
   return {
@@ -193,48 +193,48 @@ async function getPreferredSyntaxFixRuntimeConfig(context) {
     model: "qwen2.5-coder:1.5b",
     ollamaUrl,
     timeout
-  }
+  };
 }
 
 async function runFixerAndApply(document, editor = null) {
-  const code = document.getText()
-  const fileName = document.fileName
-  const language = getNormalizedLanguageId(document)
+  const code = document.getText();
+  const fileName = document.fileName;
+  const language = getNormalizedLanguageId(document);
 
-  console.log(`✓ Processing file: ${fileName}`)
-  console.log(`✓ File languageId: ${document.languageId}`)
+  console.log(`✓ Processing file: ${fileName}`);
+  console.log(`✓ File languageId: ${document.languageId}`);
 
-  const fixer = getFixerForDocument(document, code, fileName)
+  const fixer = getFixerForDocument(document, code, fileName);
   if (!fixer) {
-    vscode.window.showInformationMessage("Unsupported file type!")
-    return false
+    vscode.window.showInformationMessage("Unsupported file type!");
+    return false;
   }
 
   try {
-    console.log("✓ Fixer loaded successfully, analyzing code...")
-    let result = null
+    console.log("✓ Fixer loaded successfully, analyzing code...");
+    let result = null;
 
     if (fixer.analyze) {
-      result = await fixer.analyze()
+      result = await fixer.analyze();
     }
 
-    let fixedCode = code
+    let fixedCode = code;
     if (result && typeof result.fixedCode === "string") {
-      fixedCode = result.fixedCode
+      fixedCode = result.fixedCode;
     } else if (result && result.formatted) {
-      fixedCode = result.formatted
+      fixedCode = result.formatted;
     } else if (fixer.applyFixes) {
-      fixedCode = fixer.applyFixes()
+      fixedCode = fixer.applyFixes();
     } else if (fixer.getFixedCode) {
-      fixedCode = fixer.getFixedCode()
+      fixedCode = fixer.getFixedCode();
     }
 
     // AI validation and enhancement (skip for fixer files)
     const isFixerFile =
-      fileName.includes("\\fixers\\") || fileName.includes("/fixers/")
-    const ollamaClient = new OllamaClient()
-    const shouldSkipAI = result && result.skipAI === true
-    const shouldTryAI = !shouldSkipAI || (result && result.shouldTryAI === true)
+      fileName.includes("\\fixers\\") || fileName.includes("/fixers/");
+    const ollamaClient = new OllamaClient();
+    const shouldSkipAI = result && result.skipAI === true;
+    const shouldTryAI = !shouldSkipAI || (result && result.shouldTryAI === true);
 
     if (!isFixerFile && shouldTryAI && (await ollamaClient.isAvailable())) {
       const supportedLanguages = [
@@ -244,34 +244,34 @@ async function runFixerAndApply(document, editor = null) {
         "c",
         "cpp",
         "html"
-      ]
+      ];
       if (supportedLanguages.includes(language)) {
-        console.log(`🤖 Using AI-only fixing for ${language}...`)
+        console.log(`🤖 Using AI-only fixing for ${language}...`);
         const aiResult = await ollamaClient.validateAndFix(
           code,
           fixedCode,
           language
-        )
+        );
         if (aiResult && aiResult.shouldUseAI) {
-          console.log(`🤖 AI fixed code: ${aiResult.reason}`)
-          fixedCode = aiResult.fixedCode
-          const aiSafety = assessReplacementSafety(code, fixedCode)
+          console.log(`🤖 AI fixed code: ${aiResult.reason}`);
+          fixedCode = aiResult.fixedCode;
+          const aiSafety = assessReplacementSafety(code, fixedCode);
           if (
             !aiSafety.safe ||
             !isCandidateValidForLanguage(fixedCode, language, ollamaClient)
           ) {
             console.warn(
               `Skipping AI output for ${fileName}: ${aiSafety.reason}`
-            )
-            fixedCode = code
+            );
+            fixedCode = code;
           }
         } else {
-          console.log(`✓ No AI changes needed`)
+          console.log("✓ No AI changes needed");
         }
       }
     }
 
-    const replacementSafety = assessReplacementSafety(code, fixedCode)
+    const replacementSafety = assessReplacementSafety(code, fixedCode);
     if (
       fixedCode !== code &&
       (!replacementSafety.safe ||
@@ -279,20 +279,20 @@ async function runFixerAndApply(document, editor = null) {
     ) {
       console.warn(
         `Skipping unsafe replacement for ${fileName}: ${replacementSafety.reason}`
-      )
-      return false
+      );
+      return false;
     }
     if (fixedCode === code) {
 
-      console.log("✨ No changes detected")
-      return false
+      console.log("✨ No changes detected");
+      return false;
     }
 
-    console.log("✓ Code analysis complete, applying fixes...")
-    await replaceDocumentText(document, fixedCode)
+    console.log("✓ Code analysis complete, applying fixes...");
+    await replaceDocumentText(document, fixedCode);
 
     if (editor) {
-      await document.save()
+      await document.save();
     }
 
     // Show change log for HTML files
@@ -302,13 +302,13 @@ async function runFixerAndApply(document, editor = null) {
       result.changeLog.length > 0 &&
       fileName.endsWith(".html")
     ) {
-      const changes = result.changeLog.join("\n• ")
+      const changes = result.changeLog.join("\n• ");
 
       if (result.warning) {
         vscode.window.showWarningMessage(
           `${result.warning}\n\nFixes applied:\n• ${changes}`,
           { modal: false }
-        )
+        );
       } else {
         // Show changes with preview option
         vscode.window
@@ -318,98 +318,98 @@ async function runFixerAndApply(document, editor = null) {
           )
           .then((selection) => {
             if (selection === "Show Preview") {
-              livePreviewer(globalContext)
+              livePreviewer(globalContext);
             }
-          })
+          });
 
         // Also auto-show preview if enabled
         if (result.shouldShowPreview) {
           setTimeout(async () => {
             try {
-              await livePreviewer(globalContext)
+              await livePreviewer(globalContext);
             } catch (error) {
-              console.warn("Could not show preview:", error.message)
+              console.warn("Could not show preview:", error.message);
             }
-          }, 1000) // Delay to let user read the changes first
+          }, 1000); // Delay to let user read the changes first
         }
       }
     } else if (result && result.warning && fileName.endsWith(".html")) {
-      vscode.window.showWarningMessage(result.warning)
+      vscode.window.showWarningMessage(result.warning);
     }
 
-    console.log("✓ Code formatted successfully!")
-    return true
+    console.log("✓ Code formatted successfully!");
+    return true;
   } catch (error) {
-    console.error("✗ Code Janitor error:", error)
-    vscode.window.showErrorMessage(`Code Janitor Error: ${error.message}`)
-    return false
+    console.error("✗ Code Janitor error:", error);
+    vscode.window.showErrorMessage(`Code Janitor Error: ${error.message}`);
+    return false;
   }
 }
 
-let globalContext // Store context globally
-let chatPanelInstance = null // Shared chat panel instance
+let globalContext; // Store context globally
+let chatPanelInstance = null; // Shared chat panel instance
 
 function getApiKeyConfigKey(provider) {
-  if (provider === "groq") return "groqApiKey"
-  if (provider === "openrouter") return "openrouterApiKey"
-  if (provider === "anthropic") return "anthropicApiKey"
-  if (provider === "nvidia") return "nvidiaApiKey"
-  return null
+  if (provider === "groq") return "groqApiKey";
+  if (provider === "openrouter") return "openrouterApiKey";
+  if (provider === "anthropic") return "anthropicApiKey";
+  if (provider === "nvidia") return "nvidiaApiKey";
+  return null;
 }
 
 function getApiSecretKey(provider) {
-  return `codeJanitor.ai.${provider}.apiKey`
+  return `codeJanitor.ai.${provider}.apiKey`;
 }
 
 function getConfigTargetForKey(key) {
-  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai")
-  const inspected = cfg.inspect(key)
+  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+  const inspected = cfg.inspect(key);
   const hasWorkspaceOverride =
     inspected &&
     (inspected.workspaceValue !== undefined ||
-      inspected.workspaceFolderValue !== undefined)
+      inspected.workspaceFolderValue !== undefined);
 
   if (hasWorkspaceOverride && vscode.workspace.workspaceFolders?.length) {
-    return vscode.ConfigurationTarget.Workspace
+    return vscode.ConfigurationTarget.Workspace;
   }
 
-  return vscode.ConfigurationTarget.Global
+  return vscode.ConfigurationTarget.Global;
 }
 
 async function restorePersistedApiKeys(context) {
-  if (!context?.secrets) return
+  if (!context?.secrets) return;
 
-  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai")
-  const providers = ["groq", "openrouter", "anthropic", "nvidia"]
+  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+  const providers = ["groq", "openrouter", "anthropic", "nvidia"];
 
   for (const provider of providers) {
-    const configKey = getApiKeyConfigKey(provider)
-    if (!configKey) continue
+    const configKey = getApiKeyConfigKey(provider);
+    if (!configKey) continue;
 
-    const configValue = String(cfg.get(configKey, "") || "").trim()
+    const configValue = String(cfg.get(configKey, "") || "").trim();
     const secretValue = String(
       (await context.secrets.get(getApiSecretKey(provider))) || ""
     )
       .trim()
-      .replace(/^['"`]|['"`]$/g, "")
-    if (!secretValue) continue
+      .replace(/^['"`]|['"`]$/g, "");
+    if (!secretValue) continue;
 
     if (configValue && configValue === secretValue) {
-      continue
+      continue;
     }
 
-    const target = getConfigTargetForKey(configKey)
-    await cfg.update(configKey, secretValue, target)
+    const target = getConfigTargetForKey(configKey);
+    await cfg.update(configKey, secretValue, target);
   }
 }
 
 async function activate(context) {
-  globalContext = context
-  console.log("✓ Code Janitor extension is activating...")
-  await restorePersistedApiKeys(context)
+  globalContext = context;
+  console.log("✓ Code Janitor extension is activating...");
+  await restorePersistedApiKeys(context);
 
   // Show setup guide on first install
-  const hasSeenSetup = context.globalState.get("codeJanitor.seenSetup", false)
+  const hasSeenSetup = context.globalState.get("codeJanitor.seenSetup", false);
   if (!hasSeenSetup) {
     vscode.window
       .showInformationMessage(
@@ -419,72 +419,72 @@ async function activate(context) {
       )
       .then((selection) => {
         if (selection === "Open Setup Guide") {
-          context.globalState.update("codeJanitor.seenSetup", true)
+          context.globalState.update("codeJanitor.seenSetup", true);
           vscode.env.openExternal(
             vscode.Uri.parse("https://code-janitor-web.vercel.app")
-          )
+          );
         }
-      })
+      });
   }
 
   // Auto-correction state
-  let isAutoFixing = false
-  let autoFixTimeout = null
+  let isAutoFixing = false;
+  let autoFixTimeout = null;
 
   // 1. Manual Fix Command - Open AI chat and trigger Fix issues
   const fixDisposable = vscode.commands.registerCommand(
     "codeJanitor.fixCode",
     async () => {
-      const editor = vscode.window.activeTextEditor
+      const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        vscode.window.showInformationMessage("No active editor found!")
-        return
+        vscode.window.showInformationMessage("No active editor found!");
+        return;
       }
       // Always create fresh instance or reuse if panel is still open
       if (!chatPanelInstance || !chatPanelInstance.panel) {
-        chatPanelInstance = new ChatPanel(context)
+        chatPanelInstance = new ChatPanel(context);
       }
       // Show panel and trigger fix
-      await chatPanelInstance.show()
+      await chatPanelInstance.show();
       // Wait for webview to be ready
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 500));
       // Trigger Fix issues action
       if (chatPanelInstance.panel?.webview) {
-        chatPanelInstance.panel.webview.postMessage({ type: "triggerFix" })
+        chatPanelInstance.panel.webview.postMessage({ type: "triggerFix" });
       }
     }
-  )
-  context.subscriptions.push(fixDisposable)
+  );
+  context.subscriptions.push(fixDisposable);
 
   // Create diagnostics collection for linting issues
   const diagnosticCollection =
-    vscode.languages.createDiagnosticCollection("codeJanitor")
-  context.subscriptions.push(diagnosticCollection)
+    vscode.languages.createDiagnosticCollection("codeJanitor");
+  context.subscriptions.push(diagnosticCollection);
 
   // Register Code Action Provider for "Quick Fix with AI"
   const codeActionProvider = vscode.languages.registerCodeActionsProvider(
-    ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'python', 'java', 'c', 'cpp', 'html'],
+    ["javascript", "javascriptreact", "typescript", "typescriptreact", "python", "java", "c", "cpp", "html"],
     {
       provideCodeActions(document, range, context) {
-        const diagnostics = context.diagnostics.filter(d => d.source === 'Code Janitor')
-        if (diagnostics.length === 0) return []
+        const diagnostics = context.diagnostics.filter(d => d.source === "Code Janitor");
+        if (diagnostics.length === 0) return [];
 
-        const fixes = []
+        const fixes = [];
         
         // Create "Fix with AI" action for each diagnostic
         for (const diagnostic of diagnostics) {
           const fix = new vscode.CodeAction(
             `🤖 Fix with AI: ${diagnostic.message}`,
             vscode.CodeActionKind.QuickFix
-          )
+          );
           fix.command = {
-            command: 'codeJanitor.quickFixWithAI',
-            title: 'Fix with AI',
+            command: "codeJanitor.quickFixWithAI",
+            title: "Fix with AI",
             arguments: [document, diagnostic]
-          }
-          fix.diagnostics = [diagnostic]
-          fix.isPreferred = true
-          fixes.push(fix)
+          };
+          fix.diagnostics = [diagnostic];
+          fix.isPreferred = true;
+          fixes.push(fix);
         }
 
         // Create "Fix All with AI" action if multiple issues
@@ -492,47 +492,47 @@ async function activate(context) {
           const fixAll = new vscode.CodeAction(
             `🤖 Fix All ${diagnostics.length} Issues with AI`,
             vscode.CodeActionKind.QuickFix
-          )
+          );
           fixAll.command = {
-            command: 'codeJanitor.quickFixAllWithAI',
-            title: 'Fix All with AI',
+            command: "codeJanitor.quickFixAllWithAI",
+            title: "Fix All with AI",
             arguments: [document, diagnostics]
-          }
-          fixAll.diagnostics = diagnostics
-          fixes.push(fixAll)
+          };
+          fixAll.diagnostics = diagnostics;
+          fixes.push(fixAll);
         }
 
-        return fixes
+        return fixes;
       }
     },
     { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
-  )
-  context.subscriptions.push(codeActionProvider)
+  );
+  context.subscriptions.push(codeActionProvider);
 
   // 2. Lint Command
   const lintDisposable = vscode.commands.registerCommand(
     "codeJanitor.lintCode",
     async () => {
-      const editor = vscode.window.activeTextEditor
+      const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        vscode.window.showInformationMessage("No active editor found!")
-        return
+        vscode.window.showInformationMessage("No active editor found!");
+        return;
       }
 
-      const document = editor.document
+      const document = editor.document;
       if (
         document.languageId !== "javascript" &&
         document.languageId !== "javascriptreact"
       ) {
         vscode.window.showInformationMessage(
           "Linting is currently only supported for JavaScript files."
-        )
-        return
+        );
+        return;
       }
 
       try {
-        const linter = new Linter(document.fileName)
-        const result = await linter.lint()
+        const linter = new Linter(document.fileName);
+        const result = await linter.lint();
 
         if (result.success) {
           if (result.issues && result.issues.length > 0) {
@@ -541,109 +541,109 @@ async function activate(context) {
               const range = new vscode.Range(
                 new vscode.Position(issue.line - 1, issue.column - 1),
                 new vscode.Position(issue.line - 1, issue.column - 1 + 10)
-              )
+              );
               const severity =
                 issue.severity === 2
                   ? vscode.DiagnosticSeverity.Error
-                  : vscode.DiagnosticSeverity.Warning
+                  : vscode.DiagnosticSeverity.Warning;
               const diagnostic = new vscode.Diagnostic(
                 range,
                 issue.message,
                 severity
-              )
-              diagnostic.source = "Code Janitor"
+              );
+              diagnostic.source = "Code Janitor";
               if (issue.ruleId) {
-                diagnostic.code = issue.ruleId
+                diagnostic.code = issue.ruleId;
               }
-              return diagnostic
-            })
+              return diagnostic;
+            });
 
             // Set diagnostics in Problems panel
-            diagnosticCollection.set(document.uri, diagnostics)
+            diagnosticCollection.set(document.uri, diagnostics);
 
-            const issueCount = result.issues.length
+            const issueCount = result.issues.length;
             vscode.window.showWarningMessage(
               `Found ${issueCount} linting issue(s). Check Problems panel for details.`
-            )
+            );
           } else {
             // Clear diagnostics if no issues
-            diagnosticCollection.set(document.uri, [])
-            vscode.window.showInformationMessage("✅ No linting issues found!")
+            diagnosticCollection.set(document.uri, []);
+            vscode.window.showInformationMessage("✅ No linting issues found!");
           }
         } else {
-          vscode.window.showErrorMessage(`Linting failed: ${result.message}`)
+          vscode.window.showErrorMessage(`Linting failed: ${result.message}`);
         }
       } catch (error) {
-        vscode.window.showErrorMessage(`Linter error: ${error.message}`)
+        vscode.window.showErrorMessage(`Linter error: ${error.message}`);
       }
     }
-  )
-  context.subscriptions.push(lintDisposable)
+  );
+  context.subscriptions.push(lintDisposable);
 
   // Quick Fix with AI Command - Single issue
   const quickFixDisposable = vscode.commands.registerCommand(
     "codeJanitor.quickFixWithAI",
     async (document, diagnostic) => {
       if (!chatPanelInstance || !chatPanelInstance.panel) {
-        chatPanelInstance = new ChatPanel(context)
+        chatPanelInstance = new ChatPanel(context);
       }
-      await chatPanelInstance.show()
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await chatPanelInstance.show();
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Build pre-filled message with error context
-      const line = diagnostic.range.start.line + 1
-      const message = `Fix this error on line ${line}:\n\n**Error:** ${diagnostic.message}\n**Rule:** ${diagnostic.code || 'N/A'}\n\nPlease fix this issue in the file.`
+      const line = diagnostic.range.start.line + 1;
+      const message = `Fix this error on line ${line}:\n\n**Error:** ${diagnostic.message}\n**Rule:** ${diagnostic.code || "N/A"}\n\nPlease fix this issue in the file.`;
       
       if (chatPanelInstance.panel?.webview) {
         chatPanelInstance.panel.webview.postMessage({ 
           type: "prefillMessage", 
           message 
-        })
+        });
       }
     }
-  )
-  context.subscriptions.push(quickFixDisposable)
+  );
+  context.subscriptions.push(quickFixDisposable);
 
   // Quick Fix All with AI Command - Multiple issues
   const quickFixAllDisposable = vscode.commands.registerCommand(
     "codeJanitor.quickFixAllWithAI",
     async (document, diagnostics) => {
       if (!chatPanelInstance || !chatPanelInstance.panel) {
-        chatPanelInstance = new ChatPanel(context)
+        chatPanelInstance = new ChatPanel(context);
       }
-      await chatPanelInstance.show()
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await chatPanelInstance.show();
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Build pre-filled message with all errors
       const errorList = diagnostics.map((d, i) => {
-        const line = d.range.start.line + 1
-        return `${i + 1}. Line ${line}: ${d.message} (${d.code || 'N/A'})`
-      }).join('\n')
+        const line = d.range.start.line + 1;
+        return `${i + 1}. Line ${line}: ${d.message} (${d.code || "N/A"})`;
+      }).join("\n");
       
-      const message = `Fix these ${diagnostics.length} errors:\n\n${errorList}\n\nPlease fix all these issues in the file.`
+      const message = `Fix these ${diagnostics.length} errors:\n\n${errorList}\n\nPlease fix all these issues in the file.`;
       
       if (chatPanelInstance.panel?.webview) {
         chatPanelInstance.panel.webview.postMessage({ 
           type: "prefillMessage", 
           message 
-        })
+        });
       }
     }
-  )
-  context.subscriptions.push(quickFixAllDisposable)
+  );
+  context.subscriptions.push(quickFixAllDisposable);
 
   // 3. Frontend Validation Command
   const validateDisposable = vscode.commands.registerCommand(
     "codeJanitor.validateFrontend",
     async () => {
-      const editor = vscode.window.activeTextEditor
+      const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        vscode.window.showInformationMessage("No active editor found!")
-        return
+        vscode.window.showInformationMessage("No active editor found!");
+        return;
       }
 
-      const document = editor.document
-      const ext = document.fileName.toLowerCase()
+      const document = editor.document;
+      const ext = document.fileName.toLowerCase();
 
       if (
         !ext.endsWith(".html") &&
@@ -652,64 +652,64 @@ async function activate(context) {
       ) {
         vscode.window.showInformationMessage(
           "Frontend validation is only supported for HTML, CSS, and JS files."
-        )
-        return
+        );
+        return;
       }
 
       try {
         const validator = new FrontendValidator(
           document.fileName,
           document.getText()
-        )
-        const result = validator.validate()
+        );
+        const result = validator.validate();
 
         if (result.hasIssues) {
-          const issueCount = result.issues.length
+          const issueCount = result.issues.length;
           const message =
             `Found ${issueCount} frontend issue(s):\n` +
-            result.issues.map((issue) => `• ${issue.message}`).join("\n")
+            result.issues.map((issue) => `• ${issue.message}`).join("\n");
 
           const action = await vscode.window.showWarningMessage(
             `Found ${issueCount} missing file(s). Create missing files?`,
             "Create Files",
             "Show Details",
             "Cancel"
-          )
+          );
 
           if (action === "Create Files") {
-            result._applyFixes()
+            result._applyFixes();
             vscode.window.showInformationMessage(
               "✅ Missing files created successfully!"
-            )
+            );
           } else if (action === "Show Details") {
-            vscode.window.showInformationMessage(message)
+            vscode.window.showInformationMessage(message);
           }
         } else {
           vscode.window.showInformationMessage(
             "✅ No frontend validation issues found!"
-          )
+          );
         }
       } catch (error) {
         vscode.window.showErrorMessage(
           `Frontend validation error: ${error.message}`
-        )
+        );
       }
     }
-  )
-  context.subscriptions.push(validateDisposable)
+  );
+  context.subscriptions.push(validateDisposable);
 
   // 4. Live Preview Command (Enhanced for React)
   const previewDisposable = vscode.commands.registerCommand(
     "codeJanitor.livePreview",
     () => livePreviewer(context)
-  )
-  context.subscriptions.push(previewDisposable)
+  );
+  context.subscriptions.push(previewDisposable);
   const inspectPreviewDisposable = vscode.commands.registerCommand(
     "codeJanitor.inspectLivePreview",
     () => livePreviewer(context, { inspect: true })
-  )
-  context.subscriptions.push(inspectPreviewDisposable)
-  console.log("✓ Enhanced Live Preview command registered.")
+  );
+  context.subscriptions.push(inspectPreviewDisposable);
+  console.log("✓ Enhanced Live Preview command registered.");
 
   // 5. AI Chat Command
   const chatDisposable = vscode.commands.registerCommand(
@@ -731,21 +731,21 @@ async function activate(context) {
         vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}\n\nCheck Developer Console (Help → Toggle Developer Tools) for details.`);
       }
     }
-  )
-  context.subscriptions.push(chatDisposable)
-  console.log("✓ AI Chat command registered.")
+  );
+  context.subscriptions.push(chatDisposable);
+  console.log("✓ AI Chat command registered.");
 
   // 6. Graphify Command
-  const graphifyPanel = new GraphifyPanel(context)
+  const graphifyPanel = new GraphifyPanel(context);
   const graphifyDisposable = vscode.commands.registerCommand(
     "codeJanitor.openGraphify",
     () => {
       console.log("[Extension] codeJanitor.openGraphify command triggered");
       graphifyPanel.show();
     }
-  )
-  context.subscriptions.push(graphifyDisposable)
-  console.log("✓ Graphify command registered.")
+  );
+  context.subscriptions.push(graphifyDisposable);
+  console.log("✓ Graphify command registered.");
 
   // 7. Performance Report Command
   const performanceDisposable = vscode.commands.registerCommand(
@@ -758,31 +758,31 @@ async function activate(context) {
         vscode.window.showInformationMessage("Performance monitoring not available. Open AI Chat first.");
       }
     }
-  )
-  context.subscriptions.push(performanceDisposable)
-  console.log("✓ Performance report command registered.")
+  );
+  context.subscriptions.push(performanceDisposable);
+  console.log("✓ Performance report command registered.");
 
   // URI handler: vscode://Debanshu2005.code-janitor/check-models
   const uriHandler = vscode.window.registerUriHandler({
     handleUri(uri) {
       if (uri.path === "/check-models") {
         if (!chatPanelInstance || !chatPanelInstance.panel) {
-          chatPanelInstance = new ChatPanel(context)
+          chatPanelInstance = new ChatPanel(context);
         }
-        chatPanelInstance.show()
+        chatPanelInstance.show();
       }
     }
-  })
-  context.subscriptions.push(uriHandler)
+  });
+  context.subscriptions.push(uriHandler);
 
   // 7. Real-time Auto-correction (DISABLED BY DEFAULT)
   const changeDisposable = vscode.workspace.onDidChangeTextDocument(
     async (event) => {
-      const config = vscode.workspace.getConfiguration("codeJanitor")
+      const config = vscode.workspace.getConfiguration("codeJanitor");
       // Auto-correction is now DISABLED by default to prevent code corruption
-      if (!config.get("autoCorrection.enabled", false)) return
+      if (!config.get("autoCorrection.enabled", false)) return;
 
-      const document = event.document
+      const document = event.document;
       const supportedLanguages = config.get("autoCorrection.languages", [
         "python",
         "javascript",
@@ -790,73 +790,73 @@ async function activate(context) {
         "c",
         "cpp",
         "html"
-      ])
+      ]);
 
-      if (!supportedLanguages.includes(document.languageId)) return
-      if (isAutoFixing) return
+      if (!supportedLanguages.includes(document.languageId)) return;
+      if (isAutoFixing) return;
 
       // Clear previous timeout
       if (autoFixTimeout) {
-        clearTimeout(autoFixTimeout)
+        clearTimeout(autoFixTimeout);
       }
 
       // Set new timeout for debounced auto-correction
-      const delay = config.get("autoCorrection.delay", 500)
+      const delay = config.get("autoCorrection.delay", 500);
       autoFixTimeout = setTimeout(async () => {
-        if (isAutoFixing) return
+        if (isAutoFixing) return;
 
         try {
-          isAutoFixing = true
+          isAutoFixing = true;
           await autoFixLine(
             document,
             vscode.window.activeTextEditor,
             event.contentChanges
-          )
+          );
         } catch (error) {
-          console.warn("Auto-correction error:", error.message)
+          console.warn("Auto-correction error:", error.message);
         } finally {
-          isAutoFixing = false
+          isAutoFixing = false;
         }
-      }, delay)
+      }, delay);
     }
-  )
-  context.subscriptions.push(changeDisposable)
+  );
+  context.subscriptions.push(changeDisposable);
 
   // 8. Auto-fix and validate before save (ENABLED BY DEFAULT)
   const saveDisposable = vscode.workspace.onWillSaveTextDocument(
     async (event) => {
-      const config = vscode.workspace.getConfiguration("codeJanitor")
+      const config = vscode.workspace.getConfiguration("codeJanitor");
       // Auto-fix on save is now ENABLED by default
-      if (!config.get("autoFixOnSave.enabled", true)) return
+      if (!config.get("autoFixOnSave.enabled", true)) return;
 
-      console.log("🧹 Auto-fix triggered before save...")
+      console.log("🧹 Auto-fix triggered before save...");
 
       // Validate frontend files
-      const ext = event.document.fileName.toLowerCase()
+      const ext = event.document.fileName.toLowerCase();
       if (
         ext.endsWith(".html") ||
         ext.endsWith(".css") ||
         ext.endsWith(".js")
       ) {
-        await validateFrontendFile(event.document)
+        await validateFrontendFile(event.document);
       }
 
       // Apply fixes and show preview for HTML files
-      const changed = await runFixerAndApply(event.document)
+      const changed = await runFixerAndApply(event.document);
 
       // For HTML files, the preview is already handled in runFixerAndApply
       // No additional action needed here
     }
-  )
-  context.subscriptions.push(saveDisposable)
+  );
+  context.subscriptions.push(saveDisposable);
 
-  console.log("✓ Code Janitor extension activated successfully!")
+  console.log("✓ Code Janitor extension activated successfully!");
 }
 
 // Helper function to run syntax check via CMD
 async function runSyntaxCheckAndFix(document, workspaceFolder) {
-  const fileName = document.fileName
-  const ext = require("path").extname(fileName).toLowerCase()
+  const fileName = document.fileName;
+  const ext = require("path").extname(fileName).toLowerCase();
 
   // Only check supported file types
   const supportedExts = [
@@ -871,53 +871,53 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
     ".h",
     ".hpp",
     ".ino"
-  ]
+  ];
   if (!supportedExts.includes(ext)) {
-    return { hasSyntaxErrors: false, output: "" }
+    return { hasSyntaxErrors: false, output: "" };
   }
 
   // Save the file first before checking
   try {
-    await document.save()
+    await document.save();
   } catch (saveError) {
-    console.warn("Could not save file before syntax check:", saveError.message)
+    console.warn("Could not save file before syntax check:", saveError.message);
   }
 
   // Get syntax check command
-  let cmd = null
+  let cmd = null;
   const relativePath = workspaceFolder
     ? require("path").relative(workspaceFolder, fileName).replace(/\\/g, "/")
-    : fileName
+    : fileName;
 
-  console.log(`Running syntax check for: ${relativePath}`)
+  console.log(`Running syntax check for: ${relativePath}`);
 
   if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
-    cmd = `node --check "${relativePath}"`
+    cmd = `node --check "${relativePath}"`;
   } else if (ext === ".py") {
-    cmd = `python -m py_compile "${relativePath}"`
+    cmd = `python -m py_compile "${relativePath}"`;
   } else if (ext === ".java") {
-    cmd = `javac -Xdiags:verbose "${relativePath}"`
+    cmd = `javac -Xdiags:verbose "${relativePath}"`;
   } else if (
     [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext)
   ) {
     // C/C++ requires compiler - skip for now
-    console.log("C/C++ syntax check requires gcc compiler")
+    console.log("C/C++ syntax check requires gcc compiler");
     return {
       hasSyntaxErrors: false,
       output: "C/C++ syntax check requires gcc compiler"
-    }
+    };
   }
 
   if (!cmd) {
-    return { hasSyntaxErrors: false, output: "" }
+    return { hasSyntaxErrors: false, output: "" };
   }
 
-  console.log(`Executing command: ${cmd}`)
-  console.log(`Working directory: ${workspaceFolder || process.cwd()}`)
+  console.log(`Executing command: ${cmd}`);
+  console.log(`Working directory: ${workspaceFolder || process.cwd()}`);
 
   // Run the command
   return new Promise((resolve) => {
-    const { exec } = require("child_process")
+    const { exec } = require("child_process");
     exec(
       cmd,
       {
@@ -925,17 +925,17 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
         timeout: 10000
       },
       (error, stdout, stderr) => {
-        const output = [stdout, stderr].filter(Boolean).join("\n").trim()
+        const output = [stdout, stderr].filter(Boolean).join("\n").trim();
 
-        console.log(`Command exit code: ${error ? error.code : 0}`)
-        console.log(`Command stdout: ${stdout}`)
-        console.log(`Command stderr: ${stderr}`)
-        console.log(`Combined output: ${output}`)
+        console.log(`Command exit code: ${error ? error.code : 0}`);
+        console.log(`Command stdout: ${stdout}`);
+        console.log(`Command stderr: ${stderr}`);
+        console.log(`Combined output: ${output}`);
 
         // Detect syntax errors:
         // 1. Non-zero exit code = definite error
         // 2. stderr with error keywords = likely error
-        const stderrText = (stderr || "").trim().toLowerCase()
+        const stderrText = (stderr || "").trim().toLowerCase();
         const hasErrorKeywords = stderrText && (
           stderrText.includes("error") ||
           stderrText.includes("syntaxerror") ||
@@ -944,137 +944,137 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
           stderrText.includes("unexpected") ||
           stderrText.includes("failed") ||
           /line \d+/.test(stderrText) // Error messages often include line numbers
-        )
+        );
         
-        const hasSyntaxErrors = !!error || hasErrorKeywords
+        const hasSyntaxErrors = !!error || hasErrorKeywords;
 
         if (hasSyntaxErrors) {
-          console.log(`✗ Syntax errors detected in ${fileName}`)
-          console.log(`Error details:`, output || error.message)
+          console.log(`✗ Syntax errors detected in ${fileName}`);
+          console.log("Error details:", output || error.message);
         } else {
-          console.log(`✓ No syntax errors in ${fileName}`)
+          console.log(`✓ No syntax errors in ${fileName}`);
         }
 
         resolve({
           hasSyntaxErrors,
           output: output || (error ? error.message : "")
-        })
+        });
       }
-    )
-  })
+    );
+  });
 }
 
 // Helper function to apply rule-based fixes only
 async function applyRuleBasedFixes(document, editor) {
-  const code = document.getText()
-  const fileName = document.fileName
-  const ext = require("path").extname(fileName).toLowerCase()
+  const code = document.getText();
+  const fileName = document.fileName;
+  const ext = require("path").extname(fileName).toLowerCase();
 
   try {
     // For Python, use the full fixer pipeline first, then safe fallbacks
     if (ext === ".py") {
-      const PythonFixer = require("./core/fixers/python-fixer")
-      const fixer = new PythonFixer(code, fileName, { verbose: true })
+      const PythonFixer = require("./core/fixers/python-fixer");
+      const fixer = new PythonFixer(code, fileName, { verbose: true });
 
-      console.log("Applying Python fixer pipeline...")
-      console.log("Original code:", code.slice(0, 200))
+      console.log("Applying Python fixer pipeline...");
+      console.log("Original code:", code.slice(0, 200));
 
-      const result = await fixer.analyze()
-      let fixed = code
+      const result = await fixer.analyze();
+      let fixed = code;
 
       if (result && typeof result.fixedCode === "string") {
-        fixed = result.fixedCode
+        fixed = result.fixedCode;
       } else if (fixer.getFixedCode) {
-        fixed = fixer.getFixedCode()
+        fixed = fixer.getFixedCode();
       }
 
       if (fixed === code) {
-        fixed = fixer._applySafeInlineFixes(code)
-        console.log(`  Safe inline fixes: ${fixed !== code ? "APPLIED" : "none"}`)
+        fixed = fixer._applySafeInlineFixes(code);
+        console.log(`  Safe inline fixes: ${fixed !== code ? "APPLIED" : "none"}`);
 
         if ((await fixer._isValidPython(fixed)) === false) {
-          console.log("  Code still invalid, trying repair fallback...")
-          fixed = await fixer._repairInvalidPython(fixed)
-          console.log(`  Repair result: ${fixed !== code ? "APPLIED" : "none"}`)
+          console.log("  Code still invalid, trying repair fallback...");
+          fixed = await fixer._repairInvalidPython(fixed);
+          console.log(`  Repair result: ${fixed !== code ? "APPLIED" : "none"}`);
         }
       }
 
       if (fixed !== code) {
-        console.log("✓ Applying changes to document...")
-        const edit = new vscode.WorkspaceEdit()
+        console.log("✓ Applying changes to document...");
+        const edit = new vscode.WorkspaceEdit();
         const fullRange = new vscode.Range(
           document.positionAt(0),
           document.lineAt(document.lineCount - 1).range.end
-        )
-        edit.replace(document.uri, fullRange, fixed)
-        await vscode.workspace.applyEdit(edit)
-        await document.save()
-        console.log("✓ Rule-based fixes applied and saved")
-        return { success: true, fixedCode: fixed }
+        );
+        edit.replace(document.uri, fullRange, fixed);
+        await vscode.workspace.applyEdit(edit);
+        await document.save();
+        console.log("✓ Rule-based fixes applied and saved");
+        return { success: true, fixedCode: fixed };
       } else {
-        console.log("✗ No changes made by rule-based fixes")
+        console.log("✗ No changes made by rule-based fixes");
       }
     }
 
     // For other languages, use their fixers
-    const fixer = getFixerForDocument(document, code, fileName)
+    const fixer = getFixerForDocument(document, code, fileName);
     if (!fixer) {
-      return { success: false, fixedCode: code }
+      return { success: false, fixedCode: code };
     }
 
-    console.log(`🔧 Applying ${document.languageId} rule-based fixes...`)
-    const result = await fixer.analyze()
-    let fixed = code
+    console.log(`🔧 Applying ${document.languageId} rule-based fixes...`);
+    const result = await fixer.analyze();
+    let fixed = code;
 
     if (result && typeof result.fixedCode === "string") {
-      fixed = result.fixedCode
+      fixed = result.fixedCode;
     } else if (fixer.getFixedCode) {
-      fixed = fixer.getFixedCode()
+      fixed = fixer.getFixedCode();
     }
 
     if (fixed !== code) {
-      const edit = new vscode.WorkspaceEdit()
+      const edit = new vscode.WorkspaceEdit();
       const fullRange = new vscode.Range(
         document.positionAt(0),
         document.lineAt(document.lineCount - 1).range.end
-      )
-      edit.replace(document.uri, fullRange, fixed)
-      await vscode.workspace.applyEdit(edit)
-      await document.save()
-      console.log("✓ Rule-based fixes applied")
-      return { success: true, fixedCode: fixed }
+      );
+      edit.replace(document.uri, fullRange, fixed);
+      await vscode.workspace.applyEdit(edit);
+      await document.save();
+      console.log("✓ Rule-based fixes applied");
+      return { success: true, fixedCode: fixed };
     }
 
-    console.log("  No rule-based fixes needed")
-    return { success: false, fixedCode: code }
+    console.log("  No rule-based fixes needed");
+    return { success: false, fixedCode: code };
   } catch (error) {
-    console.error("✗ Rule-based fix error:", error.message)
-    console.error("Stack:", error.stack)
-    return { success: false, fixedCode: code }
+    console.error("✗ Rule-based fix error:", error.message);
+    console.error("Stack:", error.stack);
+    return { success: false, fixedCode: code };
   }
 }
 
 // Helper function to apply AI fixes only
 async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
-  const code = document.getText()
-  const languageId = document.languageId
-  const fileName = document.fileName
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  const code = document.getText();
+  const languageId = document.languageId;
+  const fileName = document.fileName;
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   try {
-    const aiAgent = new AIAgent()
-    const config = aiAgent.getConfig()
-    const runtimeConfig = getPreferredSyntaxFixRuntimeConfig()
+    const aiAgent = new AIAgent();
+    const config = aiAgent.getConfig();
+    const runtimeConfig = getPreferredSyntaxFixRuntimeConfig();
 
     if (!config.enabled) {
       return {
         applied: false,
         fixedCode: code,
         reason: "AI disabled in settings"
-      }
+      };
     }
 
-    const language = getNormalizedLanguageId(document)
+    const language = getNormalizedLanguageId(document);
 
     const supportedLanguages = [
       "python",
@@ -1083,22 +1083,22 @@ async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
       "c",
       "cpp",
       "html"
-    ]
+    ];
     if (!supportedLanguages.includes(language)) {
       return {
         applied: false,
         fixedCode: code,
         reason: `${language} not supported`
-      }
+      };
     }
 
 
-    console.log(`Using AI agent (${runtimeConfig.provider}) to fix ${language}...`)
+    console.log(`Using AI agent (${runtimeConfig.provider}) to fix ${language}...`);
 
     // Build a fix request message
     const targetPaths = Array.from(
       getDocumentPathCandidates(document, workspaceFolder)
-    ).join(", ")
+    ).join(", ");
     const fixRequest = `Fix the syntax errors in this ${language} file.
 
 **File Information:**
@@ -1113,12 +1113,12 @@ ${syntaxErrorOutput || "No syntax checker output was provided."}
 ${code}
 \`\`\`
 
-IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not truncate or omit any code. Include the entire file from start to finish.`
+IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not truncate or omit any code. Include the entire file from start to finish.`;
 
-    let fullResponse = ""
+    let fullResponse = "";
     const streamCallback = (token) => {
-      fullResponse += token
-    }
+      fullResponse += token;
+    };
 
     const result = await aiAgent.chat(
       fixRequest,
@@ -1126,34 +1126,34 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
       streamCallback,
       null,
       { mode: "heavy", runtimeConfig }
-    )
+    );
 
     if (result.error) {
-      console.error(`✗ AI agent error: ${result.error}`)
-      return { applied: false, fixedCode: code, reason: result.error }
+      console.error(`✗ AI agent error: ${result.error}`);
+      return { applied: false, fixedCode: code, reason: result.error };
     }
 
     // Check if AI provided FILE actions
     if (result.actions && result.actions.length > 0) {
-      const pathCandidates = getDocumentPathCandidates(document, workspaceFolder)
+      const pathCandidates = getDocumentPathCandidates(document, workspaceFolder);
       const fileAction = result.actions.find(
         (a) =>
           a.type === "file" &&
           a.path &&
           pathCandidates.has(a.path.replace(/\\/g, "/"))
-      )
+      );
       if (fileAction && fileAction.content) {
-        const safety = assessReplacementSafety(code, fileAction.content)
+        const safety = assessReplacementSafety(code, fileAction.content);
         if (!safety.safe) {
-          console.warn(`Rejected AI output for ${fileName}: ${safety.reason}`)
+          console.warn(`Rejected AI output for ${fileName}: ${safety.reason}`);
           return {
             applied: false,
             fixedCode: code,
             reason: safety.reason
-          }
+          };
         }
 
-        const ollamaClient = new OllamaClient()
+        const ollamaClient = new OllamaClient();
         if (
           !isCandidateValidForLanguage(
             fileAction.content,
@@ -1165,30 +1165,30 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
             applied: false,
             fixedCode: code,
             reason: "AI output failed language validation"
-          }
+          };
         }
 
-        console.log(`✓ AI agent provided fix`)
-        await replaceDocumentText(document, fileAction.content, true)
-        return { applied: true, fixedCode: fileAction.content }
+        console.log("✓ AI agent provided fix");
+        await replaceDocumentText(document, fileAction.content, true);
+        return { applied: true, fixedCode: fileAction.content };
       }
     }
 
-    console.log(`✗ AI agent didn't provide file actions`)
+    console.log("✗ AI agent didn't provide file actions");
     return {
       applied: false,
       fixedCode: code,
       reason: "No file actions generated"
-    }
+    };
   } catch (error) {
-    console.error("✗ AI agent error:", error.message)
-    return { applied: false, fixedCode: code, reason: error.message }
+    console.error("✗ AI agent error:", error.message);
+    return { applied: false, fixedCode: code, reason: error.message };
   }
 }
 
 // Helper function to check if file is supported
 function isSupportedFile(fileName, languageId) {
-  const supportedExtensions = /\.(c|h|cpp|ino|java|js|jsx|py|html)$/i
+  const supportedExtensions = /\.(c|h|cpp|ino|java|js|jsx|py|html)$/i;
   const supportedLanguages = [
     "c",
     "cpp",
@@ -1198,12 +1198,12 @@ function isSupportedFile(fileName, languageId) {
     "javascriptreact",
     "python",
     "html"
-  ]
+  ];
 
   return (
     supportedExtensions.test(fileName) ||
     supportedLanguages.includes(languageId)
-  )
+  );
 }
 
 // Helper function to validate frontend files
@@ -1212,35 +1212,35 @@ async function validateFrontendFile(document) {
     const validator = new FrontendValidator(
       document.fileName,
       document.getText()
-    )
-    const result = validator.validate()
+    );
+    const result = validator.validate();
 
     if (result.hasIssues) {
       console.log(
         `Frontend validation found ${result.issues.length} issues in ${document.fileName}`
-      )
+      );
       // Silently log issues during save, don't interrupt the save process
       result.issues.forEach((issue) => {
-        console.log(`  - ${issue.message}`)
-      })
+        console.log(`  - ${issue.message}`);
+      });
     }
   } catch (error) {
     console.warn(
       `Frontend validation error for ${document.fileName}:`,
       error.message
-    )
+    );
   }
 }
 
 // Auto-fix specific lines that were changed
 async function autoFixLine(document, editor, contentChanges) {
   try {
-    const edit = new vscode.WorkspaceEdit()
-    let hasChanges = false
+    const edit = new vscode.WorkspaceEdit();
+    let hasChanges = false;
 
     for (const change of contentChanges) {
-      const startLine = change.range.start.line
-      const endLine = change.range.end.line
+      const startLine = change.range.start.line;
+      const endLine = change.range.end.line;
 
       // Get the affected line(s)
       for (
@@ -1249,132 +1249,132 @@ async function autoFixLine(document, editor, contentChanges) {
         lineNum++
       ) {
         try {
-          const line = document.lineAt(lineNum)
-          const lineText = line.text
+          const line = document.lineAt(lineNum);
+          const lineText = line.text;
 
-          if (!lineText.trim()) continue // Skip empty lines
+          if (!lineText.trim()) continue; // Skip empty lines
 
           const fixedLine = await fixSingleLine(
             lineText,
             document.languageId,
             document,
             lineNum
-          )
+          );
 
           if (fixedLine && fixedLine !== lineText) {
-            edit.replace(document.uri, line.range, fixedLine)
-            hasChanges = true
+            edit.replace(document.uri, line.range, fixedLine);
+            hasChanges = true;
           }
         } catch (lineError) {
           console.warn(
             `Auto-fix failed for line ${lineNum}:`,
             lineError.message
-          )
+          );
         }
       }
     }
 
     // Apply all changes in a single batch
     if (hasChanges) {
-      await vscode.workspace.applyEdit(edit)
+      await vscode.workspace.applyEdit(edit);
     }
   } catch (error) {
-    console.error("Auto-fix error:", error.message)
+    console.error("Auto-fix error:", error.message);
   }
 }
 
 // Fix a single line based on language
 async function fixSingleLine(lineText, languageId, document, lineNum) {
   try {
-    const trimmed = lineText.trim()
+    const trimmed = lineText.trim();
     if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#")) {
-      return null // Skip comments and empty lines
+      return null; // Skip comments and empty lines
     }
 
-    let fixed = lineText
+    let fixed = lineText;
 
     // Get proper indentation context
-    const indentLevel = getIndentLevel(document, lineNum)
-    const properIndent = " ".repeat(Math.max(0, indentLevel * 4))
+    const indentLevel = getIndentLevel(document, lineNum);
+    const properIndent = " ".repeat(Math.max(0, indentLevel * 4));
 
     switch (languageId) {
       case "python":
         // Use optimized Python line fixing for real-time
-        fixed = fixPythonLineOptimized(lineText, properIndent)
-        break
+        fixed = fixPythonLineOptimized(lineText, properIndent);
+        break;
       case "javascript":
       case "javascriptreact":
-        fixed = fixJavaScriptLine(lineText, properIndent)
-        break
+        fixed = fixJavaScriptLine(lineText, properIndent);
+        break;
       case "java":
-        fixed = fixJavaLine(lineText, properIndent)
-        break
+        fixed = fixJavaLine(lineText, properIndent);
+        break;
       case "c":
       case "cpp":
       case "cppm":
-        fixed = fixCLine(lineText, properIndent)
-        break
+        fixed = fixCLine(lineText, properIndent);
+        break;
       case "html":
-        fixed = fixHtmlLine(lineText, properIndent)
-        break
+        fixed = fixHtmlLine(lineText, properIndent);
+        break;
       default:
-        return lineText
+        return lineText;
     }
 
-    return fixed
+    return fixed;
   } catch (error) {
-    console.warn(`Fix single line error for ${languageId}:`, error.message)
-    return lineText
+    console.warn(`Fix single line error for ${languageId}:`, error.message);
+    return lineText;
   }
 }
 
 // Get proper indentation level for a line
 function getIndentLevel(document, lineNum) {
   try {
-    let indentLevel = 0
+    let indentLevel = 0;
 
     for (let i = lineNum - 1; i >= 0; i--) {
-      if (i < 0 || i >= document.lineCount) continue
+      if (i < 0 || i >= document.lineCount) continue;
 
-      const prevLine = document.lineAt(i).text.trim()
-      if (!prevLine) continue
+      const prevLine = document.lineAt(i).text.trim();
+      if (!prevLine) continue;
 
       if (prevLine.endsWith(":") || prevLine.endsWith("{")) {
-        indentLevel++
-        break
+        indentLevel++;
+        break;
       }
       if (
         prevLine.match(
           /^(if|for|while|def|class|function|try|catch|else|elif)\b/
         )
       ) {
-        indentLevel++
-        break
+        indentLevel++;
+        break;
       }
     }
 
-    return Math.max(0, indentLevel)
+    return Math.max(0, indentLevel);
   } catch (error) {
-    console.warn("Indent level calculation error:", error.message)
-    return 0
+    console.warn("Indent level calculation error:", error.message);
+    return 0;
   }
 }
 
 // Optimized Python line fixer for real-time auto-correction
 function fixPythonLineOptimized(line, properIndent) {
-  const trimmed = line.trim()
+  const trimmed = line.trim();
 
   // If line is empty or a comment, don't touch it
   if (!trimmed || trimmed.startsWith("#")) {
-    return line
+    return line;
   }
 
   // Preserve existing indentation if it looks correct
-  const currentIndent = line.match(/^\s*/)[0]
-  const hasValidIndent = currentIndent.length % 4 === 0
+  const currentIndent = line.match(/^\s*/)[0];
+  const hasValidIndent = currentIndent.length % 4 === 0;
 
   // Only fix actual syntax errors, not indentation
-  let fixed = trimmed
+  let fixed = trimmed;
 
   // Fix missing colons (most common Python syntax error)
   if (
@@ -1384,31 +1384,31 @@ function fixPythonLineOptimized(line, properIndent) {
     !fixed.endsWith(":") &&
     !fixed.includes("#")
   ) {
-    fixed += ":"
+    fixed += ":";
   }
 
   // Fix print statements (quick regex)
   if (/^print\s+[^\(]/.test(fixed)) {
-    fixed = fixed.replace(/^print\s+(.+)$/, "print($1)")
+    fixed = fixed.replace(/^print\s+(.+)$/, "print($1)");
   }
 
   // Fix most common boolean/null values
-  if (fixed.includes("true")) fixed = fixed.replace(/\btrue\b/g, "True")
-  if (fixed.includes("false")) fixed = fixed.replace(/\bfalse\b/g, "False")
-  if (fixed.includes("null")) fixed = fixed.replace(/\bnull\b/g, "None")
+  if (fixed.includes("true")) fixed = fixed.replace(/\btrue\b/g, "True");
+  if (fixed.includes("false")) fixed = fixed.replace(/\bfalse\b/g, "False");
+  if (fixed.includes("null")) fixed = fixed.replace(/\bnull\b/g, "None");
 
   // If nothing changed, return original line with original indentation
   if (fixed === trimmed) {
-    return line
+    return line;
   }
 
   // Use existing indentation if it's valid, otherwise use calculated indent
-  return (hasValidIndent ? currentIndent : properIndent) + fixed
+  return (hasValidIndent ? currentIndent : properIndent) + fixed;
 }
 
 // Language-specific line fixers
 function fixPythonLine(line, properIndent) {
-  let fixed = line.trim()
+  let fixed = line.trim();
 
   // Fix missing colons
   if (
@@ -1418,53 +1418,53 @@ function fixPythonLine(line, properIndent) {
     !fixed.endsWith(":") &&
     !fixed.includes("#")
   ) {
-    fixed += ":"
+    fixed += ":";
   }
 
   // Fix print statements
-  fixed = fixed.replace(/^print\s+([^\(].+)$/, "print($1)")
+  fixed = fixed.replace(/^print\s+([^\(].+)$/, "print($1)");
 
   // Fix boolean values
   fixed = fixed
     .replace(/\btrue\b/g, "True")
     .replace(/\bfalse\b/g, "False")
     .replace(/\bnull\b/g, "None")
-    .replace(/\bundefined\b/g, "None")
+    .replace(/\bundefined\b/g, "None");
 
   // Remove JS keywords only if they appear to be JavaScript syntax
   if (
     /^(var|let|const)\s+\w+\s*=/.test(fixed) ||
     /^function\s+\w+\s*\(/.test(fixed)
   ) {
-    fixed = fixed.replace(/^(var|let|const|function)\s+/, "")
+    fixed = fixed.replace(/^(var|let|const|function)\s+/, "");
   }
 
-  return properIndent + fixed
+  return properIndent + fixed;
 }
 
 function fixJavaScriptLine(line, properIndent) {
   // Disable auto-semicolon insertion - causes corruption
-  return line
+  return line;
 }
 
 function fixJavaLine(line, properIndent) {
   // Disable auto-semicolon insertion - causes corruption
-  return line
+  return line;
 }
 
 function fixCLine(line, properIndent) {
   // Disable auto-semicolon insertion - causes corruption
-  return line
+  return line;
 }
 
 function fixHtmlLine(line, properIndent) {
   // Basic HTML formatting - just apply proper indentation
-  return properIndent + line.trim()
+  return properIndent + line.trim();
 }
 
 function deactivate() {
-  console.log("✓ Code Janitor extension deactivated")
+  console.log("✓ Code Janitor extension deactivated");
 }
 
-module.exports = { activate, deactivate }
+module.exports = { activate, deactivate };
 

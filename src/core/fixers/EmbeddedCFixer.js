@@ -108,24 +108,24 @@ class EmbeddedCFixer extends BaseFixer {
       .replace(/\bstdlib\.g\b/g, "stdlib.h")
       .replace(/\bstring\.g\b/g, "string.h")
       // Fix array declarations
-      .replace(/(\w+)\s+(\w+)\[(\d+)\]\s*;/g, '$1 $2[$3];')
+      .replace(/(\w+)\s+(\w+)\[(\d+)\]\s*;/g, "$1 $2[$3];")
       // Fix pointer declarations
-      .replace(/(\w+)\s*\*\s*(\w+)/g, '$1 *$2')
+      .replace(/(\w+)\s*\*\s*(\w+)/g, "$1 *$2")
       // Fix function calls spacing
-      .replace(/(\w+)\s*\(\s*/g, '$1(')
+      .replace(/(\w+)\s*\(\s*/g, "$1(")
       // Fix assignment operators
-      .replace(/=\s*=/g, '==')
-      .replace(/!\s*=/g, '!=')
+      .replace(/=\s*=/g, "==")
+      .replace(/!\s*=/g, "!=")
       // Fix logical operators
-      .replace(/&\s*&/g, '&&')
-      .replace(/\|\s*\|/g, '||')
+      .replace(/&\s*&/g, "&&")
+      .replace(/\|\s*\|/g, "||")
       // Fix increment/decrement
-      .replace(/\+\s*\+/g, '++')
-      .replace(/-\s*-/g, '--')
+      .replace(/\+\s*\+/g, "++")
+      .replace(/-\s*-/g, "--")
       // Fix missing spaces around operators
-      .replace(/([a-zA-Z0-9_])([+\-*/%=<>!&|])([a-zA-Z0-9_])/g, '$1 $2 $3')
+      .replace(/([a-zA-Z0-9_])([+\-*/%=<>!&|])([a-zA-Z0-9_])/g, "$1 $2 $3")
       // Fix double spaces
-      .replace(/\s{2,}/g, ' ');
+      .replace(/\s{2,}/g, " ");
   }
 
   _detectMcuFamily(code) {
@@ -417,7 +417,7 @@ class EmbeddedCFixer extends BaseFixer {
         escapeNext = true;
         continue;
       }
-      if (char === '"' && !inComment) {
+      if (char === "\"" && !inComment) {
         inString = !inString;
         continue;
       }

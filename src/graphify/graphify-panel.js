@@ -1,20 +1,20 @@
-const vscode = require("vscode")
-const path = require("path")
-const fs = require("fs").promises
-const GraphifyAnalyzer = require("./graphify-analyzer")
+const vscode = require("vscode");
+const path = require("path");
+const fs = require("fs").promises;
+const GraphifyAnalyzer = require("./graphify-analyzer");
 
 class GraphifyPanel {
   constructor(context) {
-    this.context = context
-    this.panel = null
+    this.context = context;
+    this.panel = null;
   }
 
   async show() {
     console.log("[GraphifyPanel] show() called");
     if (this.panel) {
       console.log("[GraphifyPanel] Panel already exists, revealing it");
-      this.panel.reveal(vscode.ViewColumn.One)
-      return
+      this.panel.reveal(vscode.ViewColumn.One);
+      return;
     }
 
     console.log("[GraphifyPanel] Creating new webview panel");
@@ -26,129 +26,129 @@ class GraphifyPanel {
         enableScripts: true,
         retainContextWhenHidden: true
       }
-    )
+    );
     console.log("[GraphifyPanel] Webview panel created successfully");
 
     this.panel.onDidDispose(() => {
-      this.panel = null
-    })
+      this.panel = null;
+    });
 
     this.panel.webview.onDidReceiveMessage(
       async (message) => {
         switch (message.command) {
           case "analyze":
-            await this.analyzeCodebase()
-            break
+            await this.analyzeCodebase();
+            break;
           case "openFile":
-            await this.openFile(message.path)
-            break
+            await this.openFile(message.path);
+            break;
           case "generateKnowledgeGraph":
-            await this.generateKnowledgeGraph()
-            break
+            await this.generateKnowledgeGraph();
+            break;
         }
       },
       null,
       this.context.subscriptions
-    )
+    );
 
-    this.panel.webview.html = this.getHtmlContent()
+    this.panel.webview.html = this.getHtmlContent();
   }
 
   async generateKnowledgeGraph() {
-    const workspaceFolders = vscode.workspace.workspaceFolders
+    const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
-      vscode.window.showErrorMessage("No workspace folder open")
-      return
+      vscode.window.showErrorMessage("No workspace folder open");
+      return;
     }
 
-    const rootPath = workspaceFolders[0].uri.fsPath
+    const rootPath = workspaceFolders[0].uri.fsPath;
     
     this.panel.webview.postMessage({
       command: "showStatus",
       message: "Generating knowledge graph..."
-    })
+    });
 
     try {
-      const analyzer = new GraphifyAnalyzer(rootPath)
-      const result = await analyzer.generateKnowledgeGraph()
+      const analyzer = new GraphifyAnalyzer(rootPath);
+      const result = await analyzer.generateKnowledgeGraph();
 
       this.panel.webview.postMessage({
         command: "showStatus",
         message: `Knowledge graph generated! ${result.nodeCount} files, ${result.edgeCount} dependencies. Check graphify-out/GRAPH_REPORT.md`
-      })
+      });
 
       vscode.window.showInformationMessage(
         `✅ Knowledge graph generated! ${result.nodeCount} files analyzed. Check graphify-out/GRAPH_REPORT.md`,
         "Open Report"
       ).then(async (selection) => {
         if (selection === "Open Report") {
-          const reportPath = path.join(rootPath, "graphify-out", "GRAPH_REPORT.md")
-          const uri = vscode.Uri.file(reportPath)
-          const document = await vscode.workspace.openTextDocument(uri)
-          await vscode.window.showTextDocument(document)
+          const reportPath = path.join(rootPath, "graphify-out", "GRAPH_REPORT.md");
+          const uri = vscode.Uri.file(reportPath);
+          const document = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(document);
         }
-      })
+      });
     } catch (err) {
       this.panel.webview.postMessage({
         command: "showStatus",
         message: `Error: ${err.message}`
-      })
-      vscode.window.showErrorMessage(`Failed to generate knowledge graph: ${err.message}`)
+      });
+      vscode.window.showErrorMessage(`Failed to generate knowledge graph: ${err.message}`);
     }
   }
 
   async analyzeCodebase() {
-    const workspaceFolders = vscode.workspace.workspaceFolders
+    const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
-      vscode.window.showErrorMessage("No workspace folder open")
-      return
+      vscode.window.showErrorMessage("No workspace folder open");
+      return;
     }
 
-    const rootPath = workspaceFolders[0].uri.fsPath
-    const graphData = await this.buildGraphData(rootPath)
+    const rootPath = workspaceFolders[0].uri.fsPath;
+    const graphData = await this.buildGraphData(rootPath);
 
     this.panel.webview.postMessage({
       command: "renderGraph",
       data: graphData
-    })
+    });
   }
 
   async buildGraphData(rootPath) {
-    const nodes = []
-    const edges = []
-    const fileMap = new Map()
-    let nodeId = 0
+    const nodes = [];
+    const edges = [];
+    const fileMap = new Map();
+    let nodeId = 0;
 
-    const codeExtensions = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i
-    const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__"])
+    const codeExtensions = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i;
+    const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__"]);
 
     const scanDirectory = async (dirPath, depth = 0) => {
-      if (depth > 5) return
+      if (depth > 5) return;
 
       try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true })
+        const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
         for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name)
-          const relativePath = path.relative(rootPath, fullPath)
+          const fullPath = path.join(dirPath, entry.name);
+          const relativePath = path.relative(rootPath, fullPath);
 
           if (entry.isDirectory()) {
-            if (ignoreDirs.has(entry.name)) continue
+            if (ignoreDirs.has(entry.name)) continue;
 
-            const dirNodeId = nodeId++
+            const dirNodeId = nodeId++;
             nodes.push({
               id: dirNodeId,
               label: entry.name,
               type: "directory",
               path: relativePath,
               group: depth
-            })
+            });
 
-            fileMap.set(relativePath, dirNodeId)
-            await scanDirectory(fullPath, depth + 1)
+            fileMap.set(relativePath, dirNodeId);
+            await scanDirectory(fullPath, depth + 1);
           } else if (codeExtensions.test(entry.name)) {
-            const fileNodeId = nodeId++
-            const ext = path.extname(entry.name).slice(1)
+            const fileNodeId = nodeId++;
+            const ext = path.extname(entry.name).slice(1);
 
             nodes.push({
               id: fileNodeId,
@@ -157,22 +157,22 @@ class GraphifyPanel {
               extension: ext,
               path: relativePath,
               group: depth
-            })
+            });
 
-            fileMap.set(relativePath, fileNodeId)
+            fileMap.set(relativePath, fileNodeId);
 
             try {
-              const content = await fs.readFile(fullPath, "utf8")
-              const dependencies = this.extractDependencies(content, ext)
+              const content = await fs.readFile(fullPath, "utf8");
+              const dependencies = this.extractDependencies(content, ext);
 
               for (const dep of dependencies) {
-                const depPath = this.resolveDependencyPath(dep, dirPath, rootPath)
+                const depPath = this.resolveDependencyPath(dep, dirPath, rootPath);
                 if (depPath && fileMap.has(depPath)) {
                   edges.push({
                     from: fileNodeId,
                     to: fileMap.get(depPath),
                     label: "imports"
-                  })
+                  });
                 }
               }
             } catch (err) {
@@ -181,85 +181,85 @@ class GraphifyPanel {
           }
         }
       } catch (err) {
-        console.error(`Error scanning ${dirPath}:`, err)
+        console.error(`Error scanning ${dirPath}:`, err);
       }
-    }
+    };
 
-    await scanDirectory(rootPath)
+    await scanDirectory(rootPath);
 
-    return { nodes, edges }
+    return { nodes, edges };
   }
 
   extractDependencies(content, extension) {
-    const dependencies = []
+    const dependencies = [];
 
     if (["js", "jsx", "ts", "tsx"].includes(extension)) {
-      const importRegex = /import\s+.*?\s+from\s+['"](.+?)['"]/g
-      const requireRegex = /require\s*\(['"](.+?)['"]\)/g
+      const importRegex = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
+      const requireRegex = /require\s*\(['"](.+?)['"]\)/g;
 
-      let match
+      let match;
       while ((match = importRegex.exec(content)) !== null) {
-        if (!match[1].startsWith(".")) continue
-        dependencies.push(match[1])
+        if (!match[1].startsWith(".")) continue;
+        dependencies.push(match[1]);
       }
       while ((match = requireRegex.exec(content)) !== null) {
-        if (!match[1].startsWith(".")) continue
-        dependencies.push(match[1])
+        if (!match[1].startsWith(".")) continue;
+        dependencies.push(match[1]);
       }
     } else if (extension === "py") {
-      const importRegex = /^(?:from|import)\s+([\w.]+)/gm
-      let match
+      const importRegex = /^(?:from|import)\s+([\w.]+)/gm;
+      let match;
       while ((match = importRegex.exec(content)) !== null) {
-        dependencies.push(match[1])
+        dependencies.push(match[1]);
       }
     } else if (["c", "cpp", "h", "hpp", "ino"].includes(extension)) {
-      const includeRegex = /#include\s+["<](.+?)[">]/g
-      let match
+      const includeRegex = /#include\s+["<](.+?)[">]/g;
+      let match;
       while ((match = includeRegex.exec(content)) !== null) {
-        dependencies.push(match[1])
+        dependencies.push(match[1]);
       }
     } else if (extension === "java") {
-      const importRegex = /import\s+([\w.]+);/g
-      let match
+      const importRegex = /import\s+([\w.]+);/g;
+      let match;
       while ((match = importRegex.exec(content)) !== null) {
-        dependencies.push(match[1])
+        dependencies.push(match[1]);
       }
     }
 
-    return dependencies
+    return dependencies;
   }
 
   resolveDependencyPath(dep, currentDir, rootPath) {
     if (dep.startsWith(".")) {
-      const resolved = path.resolve(currentDir, dep)
-      const extensions = ["", ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".cpp", ".h", ".hpp"]
+      const resolved = path.resolve(currentDir, dep);
+      const extensions = ["", ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".cpp", ".h", ".hpp"];
 
       for (const ext of extensions) {
-        const testPath = resolved + ext
-        const relativePath = path.relative(rootPath, testPath)
+        const testPath = resolved + ext;
+        const relativePath = path.relative(rootPath, testPath);
         try {
-          require("fs").accessSync(testPath)
-          return relativePath
+          require("fs").accessSync(testPath);
+          return relativePath;
         } catch {
-          continue
+          continue;
         }
       }
     }
-    return null
+    return null;
   }
 
   async openFile(filePath) {
-    const workspaceFolders = vscode.workspace.workspaceFolders
-    if (!workspaceFolders) return
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) return;
 
-    const fullPath = path.join(workspaceFolders[0].uri.fsPath, filePath)
-    const uri = vscode.Uri.file(fullPath)
+    const fullPath = path.join(workspaceFolders[0].uri.fsPath, filePath);
+    const uri = vscode.Uri.file(fullPath);
 
     try {
-      const document = await vscode.workspace.openTextDocument(uri)
-      await vscode.window.showTextDocument(document)
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document);
     } catch (err) {
-      vscode.window.showErrorMessage(`Failed to open file: ${err.message}`)
+      vscode.window.showErrorMessage(`Failed to open file: ${err.message}`);
     }
   }
 
@@ -637,8 +637,8 @@ class GraphifyPanel {
     }, 500);
   </script>
 </body>
-</html>`
+</html>`;
   }
 }
 
-module.exports = GraphifyPanel
+module.exports = GraphifyPanel;

@@ -1,10 +1,10 @@
-const vscode = require("vscode")
-const fs = require("fs").promises
-const fsSync = require("fs")
-const os = require("os")
-const path = require("path")
-const AIAgent = require("./agent")
-const PerformanceMonitor = require("../self-healing/performance-monitor")
+const vscode = require("vscode");
+const fs = require("fs").promises;
+const fsSync = require("fs");
+const os = require("os");
+const path = require("path");
+const AIAgent = require("./agent");
+const PerformanceMonitor = require("../self-healing/performance-monitor");
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -216,15 +216,15 @@ class ChatPanel {
     
     for (const [filePath, imports] of importMap.entries()) {
       const ext = path.extname(filePath).toLowerCase();
-      let lang = 'unknown';
-      if (['.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.ino', '.pde'].includes(ext)) lang = 'C/C++';
-      else if (ext === '.py') lang = 'Python';
-      else if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) lang = 'JavaScript/TypeScript';
-      else if (ext === '.java') lang = 'Java';
-      else if (ext === '.go') lang = 'Go';
-      else if (ext === '.rs') lang = 'Rust';
-      else if (ext === '.rb') lang = 'Ruby';
-      else if (ext === '.php') lang = 'PHP';
+      let lang = "unknown";
+      if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino", ".pde"].includes(ext)) lang = "C/C++";
+      else if (ext === ".py") lang = "Python";
+      else if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) lang = "JavaScript/TypeScript";
+      else if (ext === ".java") lang = "Java";
+      else if (ext === ".go") lang = "Go";
+      else if (ext === ".rs") lang = "Rust";
+      else if (ext === ".rb") lang = "Ruby";
+      else if (ext === ".php") lang = "PHP";
       
       if (!importsByLanguage.has(lang)) importsByLanguage.set(lang, new Set());
       imports.forEach(imp => importsByLanguage.get(lang).add(imp));
@@ -239,18 +239,18 @@ class ChatPanel {
       return;
     }
 
-    let report = `Library Audit Report\n\n`;
-    report += `Languages detected: ${Array.from(importsByLanguage.keys()).join(', ')}\n\n`;
+    let report = "Library Audit Report\n\n";
+    report += `Languages detected: ${Array.from(importsByLanguage.keys()).join(", ")}\n\n`;
 
     // Check C/C++ libraries with arduino-cli
-    if (importsByLanguage.has('C/C++')) {
-      const importedHeaders = importsByLanguage.get('C/C++');
-      report += `=== C/C++/Arduino Libraries ===\n`;
+    if (importsByLanguage.has("C/C++")) {
+      const importedHeaders = importsByLanguage.get("C/C++");
+      report += "=== C/C++/Arduino Libraries ===\n";
       report += `Imported headers: ${importedHeaders.size}\n\n`;
 
       const installedResult = await this.agent.executeCommand("arduino-cli lib list --format json", workspaceFolder);
       if (!installedResult.success) {
-        report += `⚠️ Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n`;
+        report += "⚠️ Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n";
       } else {
 
         const installedLibraries = this._parseInstalledLibraries(installedResult.output);
@@ -286,20 +286,20 @@ class ChatPanel {
         report += `Missing imports: ${missing.length}\n`;
 
         if (matched.length > 0) {
-          report += `\nMatched imports:\n`;
+          report += "\nMatched imports:\n";
           for (const header of matched.slice(0, 10)) report += `- ${header}\n`;
         }
 
         if (ignoredCore.length > 0) {
-          report += `\nIgnored core/system headers:\n`;
+          report += "\nIgnored core/system headers:\n";
           for (const header of ignoredCore.slice(0, 10)) report += `- ${header}\n`;
         }
 
         if (missing.length === 0) {
-          report += `\n✅ All C/C++ libraries are installed.\n\n`;
+          report += "\n✅ All C/C++ libraries are installed.\n\n";
         } else {
 
-          report += `\nMissing C/C++ library candidates:\n`;
+          report += "\nMissing C/C++ library candidates:\n";
           for (const header of missing.slice(0, 5)) {
             const baseName = path.basename(header).replace(/\.(h|hpp)$/i, "");
             report += `\n- ${header}\n`;
@@ -307,15 +307,15 @@ class ChatPanel {
             report += `  Search: arduino-cli lib search "${baseName}"\n`;
           }
           if (missing.length > 5) report += `\n... and ${missing.length - 5} more\n`;
-          report += `\nArduino docs: https://support.arduino.cc/hc/en-us/articles/5145457742236\n\n`;
+          report += "\nArduino docs: https://support.arduino.cc/hc/en-us/articles/5145457742236\n\n";
         }
       }
     }
 
     // Check Python packages
-    if (importsByLanguage.has('Python')) {
-      const imports = importsByLanguage.get('Python');
-      report += `=== Python Packages ===\n`;
+    if (importsByLanguage.has("Python")) {
+      const imports = importsByLanguage.get("Python");
+      report += "=== Python Packages ===\n";
       report += `Imported modules: ${imports.size}\n`;
       const pipResult = await this.agent.executeCommand("pip list --format=json", workspaceFolder);
       if (pipResult.success) {
@@ -325,111 +325,111 @@ class ChatPanel {
           report += `Installed packages: ${installed.length}\n`;
           report += `Missing packages: ${missing.length}\n`;
           if (missing.length > 0) {
-            report += `\nInstall missing packages:\n`;
+            report += "\nInstall missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  pip install ${pkg}\n`;
           } else {
-            report += `✅ All Python packages are installed.\n`;
+            report += "✅ All Python packages are installed.\n";
           }
         } catch (_) {
-          report += `⚠️ Could not parse pip output.\n`;
+          report += "⚠️ Could not parse pip output.\n";
         }
       } else {
-        report += `⚠️ Could not check installed packages. Run 'pip list' manually.\n`;
+        report += "⚠️ Could not check installed packages. Run 'pip list' manually.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     // Check Node.js packages
-    if (importsByLanguage.has('JavaScript/TypeScript')) {
-      const imports = importsByLanguage.get('JavaScript/TypeScript');
-      report += `=== Node.js Packages ===\n`;
+    if (importsByLanguage.has("JavaScript/TypeScript")) {
+      const imports = importsByLanguage.get("JavaScript/TypeScript");
+      report += "=== Node.js Packages ===\n";
       report += `Imported modules: ${imports.size}\n`;
-      const pkgJsonPath = path.join(workspaceFolder, 'package.json');
+      const pkgJsonPath = path.join(workspaceFolder, "package.json");
       if (fsSync.existsSync(pkgJsonPath)) {
         try {
-          const pkgJson = JSON.parse(fsSync.readFileSync(pkgJsonPath, 'utf8'));
+          const pkgJson = JSON.parse(fsSync.readFileSync(pkgJsonPath, "utf8"));
           const deps = { ...pkgJson.dependencies, ...pkgJson.devDependencies };
           const missing = Array.from(imports).filter(m => !deps[m]);
           report += `Declared in package.json: ${Object.keys(deps).length}\n`;
           report += `Missing from package.json: ${missing.length}\n`;
           if (missing.length > 0) {
-            report += `\nAdd missing packages:\n`;
+            report += "\nAdd missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  npm install ${pkg}\n`;
           } else {
-            report += `✅ All imports are in package.json.\n`;
+            report += "✅ All imports are in package.json.\n";
           }
         } catch (_) {
-          report += `⚠️ Could not parse package.json.\n`;
+          report += "⚠️ Could not parse package.json.\n";
         }
       } else {
-        report += `⚠️ No package.json found.\n`;
+        report += "⚠️ No package.json found.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     // Check Java packages
-    if (importsByLanguage.has('Java')) {
-      const imports = importsByLanguage.get('Java');
-      report += `=== Java Packages ===\n`;
+    if (importsByLanguage.has("Java")) {
+      const imports = importsByLanguage.get("Java");
+      report += "=== Java Packages ===\n";
       report += `Imported packages: ${imports.size}\n`;
-      report += `Top imports: ${Array.from(imports).slice(0, 10).join(', ')}\n`;
-      report += `\nCheck Maven/Gradle dependencies manually.\n\n`;
+      report += `Top imports: ${Array.from(imports).slice(0, 10).join(", ")}\n`;
+      report += "\nCheck Maven/Gradle dependencies manually.\n\n";
     }
 
     // Check Go modules
-    if (importsByLanguage.has('Go')) {
-      const imports = importsByLanguage.get('Go');
-      report += `=== Go Modules ===\n`;
+    if (importsByLanguage.has("Go")) {
+      const imports = importsByLanguage.get("Go");
+      report += "=== Go Modules ===\n";
       report += `Imported packages: ${imports.size}\n`;
-      const goModPath = path.join(workspaceFolder, 'go.mod');
+      const goModPath = path.join(workspaceFolder, "go.mod");
       if (fsSync.existsSync(goModPath)) {
-        report += `✅ go.mod found. Run 'go mod tidy' to sync dependencies.\n`;
+        report += "✅ go.mod found. Run 'go mod tidy' to sync dependencies.\n";
       } else {
-        report += `⚠️ No go.mod found. Run 'go mod init' to create one.\n`;
+        report += "⚠️ No go.mod found. Run 'go mod init' to create one.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     // Check Rust crates
-    if (importsByLanguage.has('Rust')) {
-      const imports = importsByLanguage.get('Rust');
-      report += `=== Rust Crates ===\n`;
+    if (importsByLanguage.has("Rust")) {
+      const imports = importsByLanguage.get("Rust");
+      report += "=== Rust Crates ===\n";
       report += `Imported crates: ${imports.size}\n`;
-      const cargoPath = path.join(workspaceFolder, 'Cargo.toml');
+      const cargoPath = path.join(workspaceFolder, "Cargo.toml");
       if (fsSync.existsSync(cargoPath)) {
-        report += `✅ Cargo.toml found. Run 'cargo build' to fetch dependencies.\n`;
+        report += "✅ Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
       } else {
-        report += `⚠️ No Cargo.toml found.\n`;
+        report += "⚠️ No Cargo.toml found.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     // Check Ruby gems
-    if (importsByLanguage.has('Ruby')) {
-      const imports = importsByLanguage.get('Ruby');
-      report += `=== Ruby Gems ===\n`;
+    if (importsByLanguage.has("Ruby")) {
+      const imports = importsByLanguage.get("Ruby");
+      report += "=== Ruby Gems ===\n";
       report += `Required gems: ${imports.size}\n`;
-      const gemfilePath = path.join(workspaceFolder, 'Gemfile');
+      const gemfilePath = path.join(workspaceFolder, "Gemfile");
       if (fsSync.existsSync(gemfilePath)) {
-        report += `✅ Gemfile found. Run 'bundle install' to install gems.\n`;
+        report += "✅ Gemfile found. Run 'bundle install' to install gems.\n";
       } else {
-        report += `⚠️ No Gemfile found.\n`;
+        report += "⚠️ No Gemfile found.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     // Check PHP packages
-    if (importsByLanguage.has('PHP')) {
-      const imports = importsByLanguage.get('PHP');
-      report += `=== PHP Packages ===\n`;
+    if (importsByLanguage.has("PHP")) {
+      const imports = importsByLanguage.get("PHP");
+      report += "=== PHP Packages ===\n";
       report += `Imported namespaces: ${imports.size}\n`;
-      const composerPath = path.join(workspaceFolder, 'composer.json');
+      const composerPath = path.join(workspaceFolder, "composer.json");
       if (fsSync.existsSync(composerPath)) {
-        report += `✅ composer.json found. Run 'composer install' to install packages.\n`;
+        report += "✅ composer.json found. Run 'composer install' to install packages.\n";
       } else {
-        report += `⚠️ No composer.json found.\n`;
+        report += "⚠️ No composer.json found.\n";
       }
-      report += `\n`;
+      report += "\n";
     }
 
     this.panel.webview.postMessage({ type: "stream", text: report });
@@ -460,7 +460,7 @@ class ChatPanel {
     const imports = new Set();
     const text = content || "";
     
-    if (['.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.ino', '.pde'].includes(ext)) {
+    if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino", ".pde"].includes(ext)) {
       // C/C++/Arduino: #include <Library.h> or #include "Library.h"
       const includeRegex = /^\s*#include\s*[<"]([^">]+)[">]/gm;
       let match;
@@ -468,42 +468,42 @@ class ChatPanel {
         const header = (match[1] || "").trim();
         if (header) imports.add(header);
       }
-    } else if (ext === '.py') {
+    } else if (ext === ".py") {
       // Python: import module, from module import x, import module as alias
       const importRegex = /^\s*(?:from\s+([\w.]+)\s+)?import\s+([\w.,\s*]+)/gm;
       let match;
       while ((match = importRegex.exec(text)) !== null) {
         const fromModule = (match[1] || "").trim();
         const importedItems = (match[2] || "").trim();
-        if (fromModule) imports.add(fromModule.split('.')[0]);
+        if (fromModule) imports.add(fromModule.split(".")[0]);
         if (importedItems && !fromModule) {
-          importedItems.split(',').forEach(item => {
+          importedItems.split(",").forEach(item => {
             const module = item.trim().split(/\s+as\s+/)[0].trim();
-            if (module && module !== '*') imports.add(module);
+            if (module && module !== "*") imports.add(module);
           });
         }
       }
-    } else if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) {
+    } else if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
       // JavaScript/TypeScript: import x from 'module', require('module')
       const importRegex = /(?:import\s+.*?from\s+['"]([^'"]+)['"]|require\s*\(['"]([^'"]+)['"]\))/g;
       let match;
       while ((match = importRegex.exec(text)) !== null) {
         const module = (match[1] || match[2] || "").trim();
-        if (module && !module.startsWith('.') && !module.startsWith('/')) {
-          imports.add(module.split('/')[0]);
+        if (module && !module.startsWith(".") && !module.startsWith("/")) {
+          imports.add(module.split("/")[0]);
         }
       }
-    } else if (ext === '.java') {
+    } else if (ext === ".java") {
       // Java: import package.Class;
       const importRegex = /^\s*import\s+([\w.]+);/gm;
       let match;
       while ((match = importRegex.exec(text)) !== null) {
         const pkg = (match[1] || "").trim();
-        if (pkg && !pkg.startsWith('java.')) {
-          imports.add(pkg.split('.')[0]);
+        if (pkg && !pkg.startsWith("java.")) {
+          imports.add(pkg.split(".")[0]);
         }
       }
-    } else if (ext === '.go') {
+    } else if (ext === ".go") {
       // Go: import "package" or import ("package1" "package2")
       const importRegex = /import\s+(?:\(([^)]+)\)|"([^"]+)")/g;
       let match;
@@ -511,37 +511,37 @@ class ChatPanel {
         const block = match[1];
         const single = match[2];
         if (block) {
-          block.split('\n').forEach(line => {
+          block.split("\n").forEach(line => {
             const pkgMatch = line.match(/"([^"]+)"/);
-            if (pkgMatch) imports.add(pkgMatch[1].split('/').pop());
+            if (pkgMatch) imports.add(pkgMatch[1].split("/").pop());
           });
         } else if (single) {
-          imports.add(single.split('/').pop());
+          imports.add(single.split("/").pop());
         }
       }
-    } else if (ext === '.rs') {
+    } else if (ext === ".rs") {
       // Rust: use crate::module or extern crate name
       const useRegex = /(?:use\s+([\w:]+)|extern\s+crate\s+(\w+))/g;
       let match;
       while ((match = useRegex.exec(text)) !== null) {
         const module = (match[1] || match[2] || "").trim();
-        if (module) imports.add(module.split('::')[0]);
+        if (module) imports.add(module.split("::")[0]);
       }
-    } else if (ext === '.rb') {
+    } else if (ext === ".rb") {
       // Ruby: require 'gem' or gem 'name'
       const requireRegex = /(?:require|gem)\s+['"]([^'"]+)['"]/g;
       let match;
       while ((match = requireRegex.exec(text)) !== null) {
         const gem = (match[1] || "").trim();
-        if (gem) imports.add(gem.split('/')[0]);
+        if (gem) imports.add(gem.split("/")[0]);
       }
-    } else if (ext === '.php') {
+    } else if (ext === ".php") {
       // PHP: use Namespace\Class or require/include
       const useRegex = /(?:use\s+([\w\\]+)|(?:require|include)(?:_once)?\s*\(?['"]([^'"]+)['"])/g;
       let match;
       while ((match = useRegex.exec(text)) !== null) {
         const ns = (match[1] || match[2] || "").trim();
-        if (ns) imports.add(ns.split('\\')[0].split('/')[0]);
+        if (ns) imports.add(ns.split("\\")[0].split("/")[0]);
       }
     }
     
@@ -712,6 +712,50 @@ class ChatPanel {
     return null;
   }
 
+  _validateGeneratedFileContent(originalContent, nextContent, language, relativePath) {
+    const candidate = typeof nextContent === "string" ? nextContent.trim() : "";
+    const original = typeof originalContent === "string" ? originalContent : "";
+
+    if (!candidate) {
+      return { ok: false, reason: "AI returned an empty file." };
+    }
+
+    const placeholderPatterns = [
+      /\.\.\.\s*\(unchanged/i,
+      /unchanged\s+(html|css|javascript|js|content|code)/i,
+      /placeholder/i,
+      /your code here/i,
+      /existing (html|css|javascript|js|code)/i
+    ];
+
+    if (placeholderPatterns.some((pattern) => pattern.test(candidate))) {
+      return {
+        ok: false,
+        reason: `AI returned placeholder content for ${relativePath || "the file"} instead of a full file.`
+      };
+    }
+
+    if (original.trim() && candidate === original.trim()) {
+      return { ok: false, reason: "AI did not produce any file changes." };
+    }
+
+    if (language === "html") {
+      const hasHtmlShell =
+        /<!doctype html>/i.test(candidate) &&
+        /<html[\s>]/i.test(candidate) &&
+        /<body[\s>]/i.test(candidate);
+
+      if (!hasHtmlShell) {
+        return {
+          ok: false,
+          reason: "AI response does not look like a complete HTML document."
+        };
+      }
+    }
+
+    return { ok: true };
+  }
+
   async _runActiveSyntaxFix(workspaceFolder) {
     const activeEditor = this._getCurrentFileEditor();
     if (!activeEditor || activeEditor.document.uri.scheme !== "file") {
@@ -774,11 +818,11 @@ class ChatPanel {
     
     // Clean up error output: remove timestamps and date/time patterns
     errorOutput = errorOutput
-      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g, '') // YYYY-MM-DD HH:MM:SS
-      .replace(/\d{2}:\d{2}:\d{2}/g, '') // HH:MM:SS
-      .replace(/\d{2}\/\d{2}\/\d{4}/g, '') // MM/DD/YYYY
-      .replace(/\[\d{4}-\d{2}-\d{2}.*?\]/g, '') // [YYYY-MM-DD ...]
-      .replace(/\s{2,}/g, ' ') // collapse multiple spaces
+      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g, "") // YYYY-MM-DD HH:MM:SS
+      .replace(/\d{2}:\d{2}:\d{2}/g, "") // HH:MM:SS
+      .replace(/\d{2}\/\d{2}\/\d{4}/g, "") // MM/DD/YYYY
+      .replace(/\[\d{4}-\d{2}-\d{2}.*?\]/g, "") // [YYYY-MM-DD ...]
+      .replace(/\s{2,}/g, " ") // collapse multiple spaces
       .trim();
     
     this.panel.webview.postMessage({
@@ -828,6 +872,21 @@ class ChatPanel {
       return;
     }
 
+    const generatedContentCheck = this._validateGeneratedFileContent(
+      fileContent,
+      fileAction.content,
+      language,
+      relativePath
+    );
+    if (!generatedContentCheck.ok) {
+      this.panel.webview.postMessage({
+        type: "error",
+        text: generatedContentCheck.reason
+      });
+      this.panel.webview.postMessage({ type: "done" });
+      return;
+    }
+
     // Apply the fix
     const applied = await activeEditor.edit((editBuilder) => {
       const fullRange = new vscode.Range(
@@ -857,12 +916,12 @@ class ChatPanel {
     if (verifyCheck && verifyCheck.success) {
       this.panel.webview.postMessage({
         type: "stream",
-        text: `\n\n✅ Syntax errors fixed successfully!`
+        text: "\n\n✅ Syntax errors fixed successfully!"
       });
     } else {
       this.panel.webview.postMessage({
         type: "stream",
-        text: `\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes.`
+        text: "\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
 
@@ -1188,7 +1247,7 @@ class ChatPanel {
         const currentValue = cfg.get(configKey, "");
         console.log(`[ChatPanel] Current ${configKey} value exists:`, !!currentValue);
       } catch (readError) {
-        console.error(`[ChatPanel] Settings file is corrupted, skipping config update:`, readError);
+        console.error("[ChatPanel] Settings file is corrupted, skipping config update:", readError);
         // Don't try to write to corrupted settings - just use secrets
         return;
       }
@@ -1201,8 +1260,8 @@ class ChatPanel {
         const verify = cfg.get(configKey, "");
         console.log(`[ChatPanel] Verified ${provider} key saved in config:`, !!verify, `length: ${verify ? verify.length : 0}`);
       } catch (writeError) {
-        console.error(`[ChatPanel] Failed to write to settings.json (file may be corrupted):`, writeError);
-        console.log(`[ChatPanel] API key is still stored in secrets and will work`);
+        console.error("[ChatPanel] Failed to write to settings.json (file may be corrupted):", writeError);
+        console.log("[ChatPanel] API key is still stored in secrets and will work");
         // Don't throw - the key is in secrets which is enough
       }
     } catch (error) {
@@ -1680,13 +1739,13 @@ ${trimmedText}`;
         const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
         if (result && !result.success && !result.skipped) {
           results.success = false;
-          results.errors.push({ file, error: result.error || result.output, type: 'syntax' });
+          results.errors.push({ file, error: result.error || result.output, type: "syntax" });
           this.panel.webview.postMessage({
             type: "status",
             text: `❌ Python syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
-          results.checks.push({ file, check: 'python-syntax', passed: true });
+          results.checks.push({ file, check: "python-syntax", passed: true });
           this.panel.webview.postMessage({
             type: "status",
             text: `✅ Python syntax OK: ${file}`
@@ -1705,13 +1764,13 @@ ${trimmedText}`;
         const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
         if (result && !result.success && !result.skipped) {
           results.success = false;
-          results.errors.push({ file, error: result.error || result.output, type: 'syntax' });
+          results.errors.push({ file, error: result.error || result.output, type: "syntax" });
           this.panel.webview.postMessage({
             type: "status",
             text: `❌ Java syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
-          results.checks.push({ file, check: 'java-syntax', passed: true });
+          results.checks.push({ file, check: "java-syntax", passed: true });
           this.panel.webview.postMessage({
             type: "status",
             text: `✅ Java syntax OK: ${file}`
@@ -1774,7 +1833,7 @@ ${trimmedText}`;
         });
       } else {
         results.success = false;
-        results.errors.push({ command, error: result.error || result.output, type: 'npm' });
+        results.errors.push({ command, error: result.error || result.output, type: "npm" });
         this.panel.webview.postMessage({
           type: "status",
           text: `❌ ${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
@@ -1918,6 +1977,195 @@ ${trimmedText}`;
     return nextModel;
   }
 
+  async _searchYouTube(query) {
+    try {
+      console.log(`[YouTube] Searching for: ${query}`);
+      
+      // Scrape YouTube search results page
+      const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+      
+      try {
+        const response = await fetch(searchUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          },
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        if (response.ok) {
+          const html = await response.text();
+          
+          // Extract video IDs from YouTube's initial data
+          const videoIds = [];
+          const videoTitles = [];
+          
+          // Method 1: Extract from ytInitialData JSON
+          const ytDataMatch = html.match(/var ytInitialData = (\{.+?\});/);
+          if (ytDataMatch) {
+            try {
+              const ytData = JSON.parse(ytDataMatch[1]);
+              const contents = ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
+              
+              if (contents) {
+                for (const section of contents) {
+                  const items = section?.itemSectionRenderer?.contents || [];
+                  for (const item of items) {
+                    const videoRenderer = item?.videoRenderer;
+                    if (videoRenderer?.videoId) {
+                      videoIds.push(videoRenderer.videoId);
+                      videoTitles.push(videoRenderer.title?.runs?.[0]?.text || "YouTube Video");
+                      if (videoIds.length >= 5) break;
+                    }
+                  }
+                  if (videoIds.length >= 5) break;
+                }
+              }
+            } catch (parseError) {
+              console.log("[YouTube] Failed to parse ytInitialData:", parseError.message);
+            }
+          }
+          
+          // Method 2: Regex fallback - extract from watch URLs
+          if (videoIds.length === 0) {
+            const watchMatches = html.matchAll(/\/watch\?v=([a-zA-Z0-9_-]{11})/g);
+            const seenIds = new Set();
+            for (const match of watchMatches) {
+              if (!seenIds.has(match[1])) {
+                videoIds.push(match[1]);
+                videoTitles.push("YouTube Video");
+                seenIds.add(match[1]);
+                if (videoIds.length >= 5) break;
+              }
+            }
+          }
+          
+          if (videoIds.length > 0) {
+            console.log(`[YouTube] Scraped ${videoIds.length} videos from search page`);
+            const videos = videoIds.map((id, index) => ({
+              videoId: id,
+              title: videoTitles[index] || "YouTube Video",
+              url: `https://www.youtube.com/watch?v=${id}`
+            }));
+            return { videos };
+          }
+        }
+      } catch (scrapeError) {
+        console.log("[YouTube] Scraping failed:", scrapeError.message);
+      }
+      
+      // Fallback: Try Invidious API
+      const instances = ["https://invidious.io.lol", "https://inv.tux.pizza"];
+      
+      for (const instance of instances) {
+        try {
+          const apiUrl = `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video&sort=relevance`;
+          const apiResponse = await fetch(apiUrl, {
+            headers: { "User-Agent": "Code-Janitor/1.0" },
+            signal: AbortSignal.timeout(2000)
+          });
+
+          if (apiResponse.ok) {
+            const data = await apiResponse.json();
+            if (Array.isArray(data) && data.length > 0) {
+              const videos = data.slice(0, 5).map(video => ({
+                videoId: video.videoId,
+                title: video.title,
+                url: `https://www.youtube.com/watch?v=${video.videoId}`
+              }));
+              return { videos };
+            }
+          }
+        } catch (instanceError) {
+          continue;
+        }
+      }
+      
+      // Final fallback: Return YouTube search link
+      console.log("[YouTube] All methods failed, using search link");
+      const videos = [{
+        title: `Search "${query}" on YouTube`,
+        url: searchUrl,
+        isSearchLink: true
+      }];
+      
+      return { videos };
+    } catch (error) {
+      console.error("[YouTube] Search error:", error);
+      const fallbackVideos = this._getFallbackYouTubeVideos(query);
+      if (fallbackVideos.length > 0) {
+        return { 
+          videos: fallbackVideos,
+          fallback: true,
+          message: "Showing popular videos (search API unavailable)"
+        };
+      }
+      return { error: `Failed to search YouTube: ${error.message}` };
+    }
+  }
+
+  _getFallbackYouTubeVideos(query) {
+    const keywords = query.toLowerCase();
+    const fallbackMap = {
+      "vscode": [
+        { videoId: "B-s71n0dHUk", title: "VS Code Tutorial for Beginners", url: "https://www.youtube.com/watch?v=B-s71n0dHUk" },
+        { videoId: "WPqXP_kLzpo", title: "VS Code Crash Course", url: "https://www.youtube.com/watch?v=WPqXP_kLzpo" }
+      ],
+      "arduino": [
+        { videoId: "nL34zDTPkcs", title: "Arduino Tutorial for Beginners", url: "https://www.youtube.com/watch?v=nL34zDTPkcs" },
+        { videoId: "fJWR7dBuc18", title: "Arduino Programming Tutorial", url: "https://www.youtube.com/watch?v=fJWR7dBuc18" }
+      ],
+      "thunder": [
+        { videoId: "fKopy74weus", title: "Imagine Dragons - Thunder (Official Music Video)", url: "https://www.youtube.com/watch?v=fKopy74weus" },
+        { videoId: "W0DM5lcj6mw", title: "Imagine Dragons - Thunder (Lyrics)", url: "https://www.youtube.com/watch?v=W0DM5lcj6mw" }
+      ],
+      "imagine dragons": [
+        { videoId: "fKopy74weus", title: "Imagine Dragons - Thunder", url: "https://www.youtube.com/watch?v=fKopy74weus" },
+        { videoId: "ktvTqknDobU", title: "Imagine Dragons - Radioactive", url: "https://www.youtube.com/watch?v=ktvTqknDobU" },
+        { videoId: "7wtfhZwyrcc", title: "Imagine Dragons - Believer", url: "https://www.youtube.com/watch?v=7wtfhZwyrcc" }
+      ],
+      "javascript": [
+        { videoId: "PkZNo7MFNFg", title: "JavaScript Tutorial for Beginners", url: "https://www.youtube.com/watch?v=PkZNo7MFNFg" },
+        { videoId: "W6NZfCO5SIk", title: "JavaScript Programming - Full Course", url: "https://www.youtube.com/watch?v=W6NZfCO5SIk" }
+      ],
+      "python": [
+        { videoId: "_uQrJ0TkZlc", title: "Python Tutorial - Full Course", url: "https://www.youtube.com/watch?v=_uQrJ0TkZlc" },
+        { videoId: "rfscVS0vtbw", title: "Learn Python - Full Course", url: "https://www.youtube.com/watch?v=rfscVS0vtbw" }
+      ],
+      "react": [
+        { videoId: "Ke90Tje7VS0", title: "React Course - Beginner Tutorial", url: "https://www.youtube.com/watch?v=Ke90Tje7VS0" },
+        { videoId: "bMknfKXIFA8", title: "React Tutorial for Beginners", url: "https://www.youtube.com/watch?v=bMknfKXIFA8" }
+      ],
+      "music": [
+        { videoId: "fKopy74weus", title: "Imagine Dragons - Thunder", url: "https://www.youtube.com/watch?v=fKopy74weus" },
+        { videoId: "ktvTqknDobU", title: "Imagine Dragons - Radioactive", url: "https://www.youtube.com/watch?v=ktvTqknDobU" }
+      ]
+    };
+    
+    // Try exact match first
+    for (const [key, videos] of Object.entries(fallbackMap)) {
+      if (keywords.includes(key)) {
+        return videos;
+      }
+    }
+    
+    // Try partial match for programming topics
+    if (keywords.includes("tutorial") || keywords.includes("learn") || keywords.includes("course")) {
+      if (keywords.includes("js") || keywords.includes("javascript")) {
+        return fallbackMap["javascript"];
+      }
+      if (keywords.includes("py") || keywords.includes("python")) {
+        return fallbackMap["python"];
+      }
+      if (keywords.includes("code") || keywords.includes("vscode") || keywords.includes("vs code")) {
+        return fallbackMap["vscode"];
+      }
+    }
+    
+    return [];
+  }
+
+
+
   _setupMessageHandler() {
     this.panel.webview.onDidReceiveMessage(async (message) => {
       console.log("[ChatPanel] Received message:", message.type);
@@ -2060,7 +2308,7 @@ ${trimmedText}`;
         if (config.model === "minimaxai/minimax-m2.7") {
           this.panel.webview.postMessage({ 
             type: "status", 
-            text: `⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses.` 
+            text: "⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
           });
         }
         
@@ -2134,9 +2382,9 @@ ${trimmedText}`;
 
         if (showParsedActionsDebug && response.actions && response.actions.length > 0) {
           const actionSummary = response.actions.map(a => {
-            if (a.type === 'graphify') return 'graphify:open';
-            if (a.type === 'preview_inspect') return 'preview:inspect';
-            return `${a.type}:${a.path || a.command || ''}`;
+            if (a.type === "graphify") return "graphify:open";
+            if (a.type === "preview_inspect") return "preview:inspect";
+            return `${a.type}:${a.path || a.command || ""}`;
           }).join(", ");
           this.panel.webview.postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
         }
@@ -2363,9 +2611,9 @@ ${trimmedText}`;
               } else if (!result.success) {
                 // Log file operation error to performance monitor
                 if (global.performanceMonitor) {
-                  global.performanceMonitor.recordIssue('file_error', {
+                  global.performanceMonitor.recordIssue("file_error", {
                     file: action.path,
-                    operation: result.created ? 'create' : 'update',
+                    operation: result.created ? "create" : "update",
                     error: result.error
                   });
                 }
@@ -2606,6 +2854,13 @@ ${trimmedText}`;
                   text: `Failed to fetch ${action.url}: ${err.message}`
                 });
               }
+            } else if (action.type === "youtube") {
+              // YouTube actions are now handled only via the YouTube button
+              // Skip processing YouTube actions from AI responses to improve performance
+              this.panel.webview.postMessage({
+                type: "status",
+                text: "💡 Use the YouTube search button in the chat to search for videos"
+              });
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
                 this.panel.webview.postMessage({
@@ -2852,7 +3107,7 @@ ${trimmedText}`;
           const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
           
           const response = await fetch(searchUrl, {
-            headers: { 'User-Agent': 'Code-Janitor/1.0' },
+            headers: { "User-Agent": "Code-Janitor/1.0" },
             signal: AbortSignal.timeout(15000)
           });
 
@@ -2874,7 +3129,7 @@ ${trimmedText}`;
           }
 
           if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-            resultText += `📚 Related Topics:\n`;
+            resultText += "📚 Related Topics:\n";
             const topics = data.RelatedTopics.slice(0, 5);
             for (const topic of topics) {
               if (topic.Text && topic.FirstURL) {
@@ -2899,6 +3154,68 @@ ${trimmedText}`;
           });
           this.panel.webview.postMessage({ type: "done" });
           this.panel.webview.postMessage({ type: "searchError", error: error.message });
+        }
+      } else if (message.type === "openExternal") {
+        const targetUrl = String(message.url || "").trim();
+        if (!targetUrl) {
+          return;
+        }
+
+        try {
+          await vscode.env.openExternal(vscode.Uri.parse(targetUrl));
+        } catch (error) {
+          console.error("[ChatPanel] Failed to open external URL:", error);
+          this.panel.webview.postMessage({
+            type: "error",
+            text: `Could not open link: ${error.message}`
+          });
+        }
+      } else if (message.type === "youtubeSearch") {
+        try {
+          const query = (message.query || "").trim();
+          if (!query) {
+            this.panel.webview.postMessage({ type: "youtubeError", error: "Search query is empty" });
+            return;
+          }
+
+          this.panel.webview.postMessage({ type: "status", text: `▶️ Searching YouTube for: ${query}` });
+          this.panel.webview.postMessage({ type: "thinking" });
+
+          const results = await this._searchYouTube(query);
+          
+          if (results.error) {
+            throw new Error(results.error);
+          }
+
+          // Format results with embeds
+          let resultText = `▶️ YouTube results for "${query}":\n\n`;
+          
+          if (results.fallback) {
+            resultText += `ℹ️ ${results.message}\n\n`;
+          }
+          
+          if (results.videos && results.videos.length > 0) {
+            for (const video of results.videos) {
+              resultText += `📺 ${video.title}\n\n${video.url}\n\n`;
+            }
+          } else {
+            resultText += "No videos found. Try a different search term.";
+          }
+          
+          console.log("[YouTube Backend] Sending result text:", resultText);
+
+          this.panel.webview.postMessage({ type: "stream", text: resultText });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "youtubeComplete" });
+
+        } catch (error) {
+          console.error("[ChatPanel] YouTube search error:", error);
+          this.panel.webview.postMessage({ 
+            type: "error", 
+            text: `YouTube search failed: ${error.message}` 
+          });
+          this.panel.webview.postMessage({ type: "done" });
+          this.panel.webview.postMessage({ type: "youtubeError", error: error.message });
         }
       }
     });

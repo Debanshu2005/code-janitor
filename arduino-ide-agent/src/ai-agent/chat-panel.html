@@ -2,6 +2,17 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src https: data:; media-src https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src https:;" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        flowchart: { useMaxWidth: true, htmlLabels: false },
+        sequence: { useMaxWidth: true }
+      });
+    </script>
     <style>
       *,
       *::before,
@@ -13,12 +24,16 @@
 
       :root {
         --bg: #1a1a1a;
+        --bg-elevated: #1f1f1f;
         --panel: #242424;
         --panel-2: #2c2c2c;
         --panel-3: #333333;
         --border: #3d3d3d;
+        --border-subtle: #353535;
         --text: #ffffff;
-        --muted: #a0a0a0;
+        --text-secondary: #a0a0a0;
+        --text-muted: #808080;
+        --muted: #808080;
         --accent: #00979d;
         --accent-hover: #00b4ba;
         --accent-soft: rgba(0, 151, 157, 0.15);
@@ -28,53 +43,174 @@
         --red-soft: rgba(231, 76, 60, 0.15);
         --yellow: #f39c12;
         --orange: #ff6f00;
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+        --radius-sm: 6px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
       }
 
       body {
-        font-family: "Roboto", "Segoe UI", system-ui, sans-serif;
-        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+        background: var(--bg);
         color: var(--text);
         height: 100vh;
         display: flex;
         flex-direction: column;
         font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
 
       /* ── Header ── */
       #header {
-        padding: 8px 12px;
-        background: var(--panel);
-        border-bottom: 2px solid var(--accent);
+        padding: 10px 16px;
+        background: var(--bg-elevated);
+        border-bottom: 1px solid var(--border);
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
+        gap: 14px;
         flex-shrink: 0;
+        box-shadow: var(--shadow-sm);
       }
       #header-left {
         display: flex;
         align-items: center;
         gap: 12px;
+        flex-wrap: wrap;
+        min-width: 0;
       }
       #header-title {
         font-size: 13px;
-        font-weight: 700;
-        color: var(--accent);
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
+        font-weight: 600;
+        color: var(--text);
+        letter-spacing: -0.01em;
       }
       #header-sub {
         font-size: 10px;
-        color: var(--muted);
-        padding: 2px 6px;
-        background: var(--panel-2);
-        border-radius: 3px;
+        color: var(--text-secondary);
+        padding: 3px 7px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-sm);
+        font-weight: 500;
       }
 
       #header-controls {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        min-width: 0;
+      }
+      #session-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+      #session-select {
+        min-width: 120px;
+        max-width: 260px;
+        flex: 1 1 140px;
+      }
+
+      /* Action dropdown */
+      .dropdown {
+        position: relative;
+        display: inline-block;
+      }
+      .dropdown-btn {
+        padding: 6px 12px;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+      .dropdown-btn:hover {
+        border-color: var(--accent);
+        background: var(--panel-2);
+      }
+      .dropdown-content {
+        display: none;
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
+        z-index: 9999;
+        min-width: 220px;
+        max-height: 400px;
+        overflow-y: auto;
+        animation: dropdownFadeIn 0.15s ease;
+      }
+      @keyframes dropdownFadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .dropdown-content::-webkit-scrollbar {
+        width: 6px;
+      }
+      .dropdown-content::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+      .dropdown.open .dropdown-content {
+        display: block;
+      }
+      .dropdown-item {
+        padding: 10px 14px;
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        border-bottom: 1px solid var(--border-subtle);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+      }
+      .dropdown-item:first-child {
+        border-top-left-radius: var(--radius-md);
+        border-top-right-radius: var(--radius-md);
+      }
+      .dropdown-item:last-child {
+        border-bottom: none;
+        border-bottom-left-radius: var(--radius-md);
+        border-bottom-right-radius: var(--radius-md);
+      }
+      .dropdown-item:hover {
+        background: var(--accent);
+        color: #fff;
+      }
+      .dropdown-arrow {
+        font-size: 10px;
+        transition: transform 0.2s ease;
+        display: inline-block;
+      }
+      .dropdown.open .dropdown-arrow {
+        transform: rotate(180deg);
       }
 
       /* Connectivity status */
@@ -119,49 +255,79 @@
         margin: 0 4px;
       }
 
-      select {
-        background: var(--panel-2);
+      .pill-btn {
+        padding: 6px 12px;
+        background: var(--panel);
         color: var(--text);
-        border: 1px solid var(--border);
-        border-radius: 3px;
-        font-size: 11px;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        font-size: 12px;
         cursor: pointer;
-        transition: all 0.2s;
-        padding: 5px 8px;
+        transition: all 0.2s ease;
+        font-weight: 500;
+        flex-shrink: 0;
+      }
+      .pill-btn:hover {
+        border-color: var(--accent);
+        background: var(--panel-2);
+      }
+      .pill-btn.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+
+      select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        padding: 5px 9px;
         max-width: 180px;
+        font-weight: 500;
+        min-width: 0;
       }
       select:hover {
         border-color: var(--accent);
+        background: var(--panel-2);
       }
       select:focus {
         outline: none;
         border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
 
       .icon-btn {
-        width: 32px;
-        height: 32px;
-        background: transparent;
-        color: var(--muted);
-        border: 1px solid transparent;
-        border-radius: 3px;
-        font-size: 16px;
+        width: 34px;
+        height: 34px;
+        background: var(--panel);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        font-size: 15px;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.2s ease;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 0;
+        flex-shrink: 0;
       }
       .icon-btn:hover {
         background: var(--panel-2);
         color: var(--text);
         border-color: var(--border);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
       }
       .icon-btn.active {
         background: var(--accent);
         color: #fff;
         border-color: var(--accent);
+        box-shadow: var(--shadow-sm);
       }
       .icon-btn[title]::after {
         content: attr(title);
@@ -258,33 +424,9 @@
         transition: width 0.2s ease;
       }
 
-      /* ── Action bar ── */
+      /* Action bar - hidden, actions moved to dropdown */
       #action-bar {
-        padding: 6px 14px;
-        background: transparent;
-        border-bottom: 1px solid var(--border);
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        flex-shrink: 0;
-      }
-      .action-chip {
-        padding: 5px 12px;
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        font-size: 11px;
-        color: var(--text);
-        cursor: pointer;
-        transition: all 0.2s;
-        white-space: nowrap;
-        font-weight: 500;
-      }
-      .action-chip:hover {
-        background: var(--accent);
-        color: #fff;
-        border-color: var(--accent);
-        transform: translateY(-1px);
+        display: none;
       }
 
       /* ── Search bar ── */
@@ -298,9 +440,11 @@
         display: flex;
         gap: 8px;
         align-items: center;
+        flex-wrap: wrap;
       }
       #search-input {
         flex: 1;
+        min-width: 180px;
         padding: 8px 14px;
         background: var(--panel);
         border: 2px solid var(--border);
@@ -317,11 +461,12 @@
       #search-input::placeholder {
         color: var(--muted);
       }
-      #search-btn {
+      #search-btn,
+      #youtube-btn {
         padding: 8px 18px;
-        background: var(--accent);
-        color: #fff;
-        border: none;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 2px solid var(--border);
         border-radius: 4px;
         cursor: pointer;
         font-size: 12px;
@@ -334,15 +479,25 @@
         letter-spacing: 0.5px;
         transition: all 0.2s;
       }
-      #search-btn:hover {
-        background: var(--accent-hover);
-        transform: translateY(-1px);
+      #search-btn:hover,
+      #youtube-btn:hover {
+        background: var(--panel-3);
+        color: var(--text);
+        border-color: var(--accent);
       }
-      #search-btn:disabled {
+      #search-btn.active,
+      #youtube-btn.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      #search-btn:disabled,
+      #youtube-btn:disabled {
         background: var(--panel-2);
         color: var(--muted);
         cursor: not-allowed;
         transform: none;
+        opacity: 0.5;
       }
       #activity-panel {
         margin: 10px 14px 0;
@@ -465,10 +620,11 @@
       #chat {
         flex: 1;
         overflow-y: auto;
-        padding: 18px 18px 22px;
+        padding: 18px 18px 24px;
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 16px;
+        background: var(--bg);
       }
       #chat::-webkit-scrollbar {
         width: 4px;
@@ -491,41 +647,43 @@
       }
 
       .avatar {
-        width: 28px;
-        height: 28px;
-        border-radius: 4px;
+        width: 30px;
+        height: 30px;
+        border-radius: var(--radius-md);
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 11px;
-        font-weight: 700;
+        font-weight: 600;
         flex-shrink: 0;
+        box-shadow: var(--shadow-sm);
       }
       .avatar.ai {
-        background: var(--accent);
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
         color: #fff;
       }
       .avatar.user {
-        background: var(--panel-3);
+        background: var(--panel-2);
         color: var(--accent);
         border: 2px solid var(--accent);
       }
 
       .bubble {
-        max-width: 92%;
+        max-width: 90%;
         padding: 12px 16px;
-        border-radius: 8px;
+        border-radius: var(--radius-lg);
         line-height: 1.6;
         word-break: break-word;
+        box-shadow: var(--shadow-sm);
       }
       .bubble.ai {
         background: var(--panel);
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-subtle);
         border-left: 3px solid var(--accent);
       }
       .bubble.user {
         background: var(--panel-2);
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-subtle);
         white-space: pre-wrap;
       }
       .msg-content {
@@ -547,20 +705,22 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 5px 12px;
-        border-radius: 4px;
-        border: 1px solid var(--border);
-        background: var(--panel-2);
-        color: var(--text);
+        padding: 5px 11px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+        background: var(--panel);
+        color: var(--text-secondary);
         font-size: 11px;
         cursor: pointer;
         font-weight: 500;
-        transition: all 0.2s;
+        transition: all 0.2s ease;
       }
       .msg-action-btn:hover {
         background: var(--accent);
         border-color: var(--accent);
         color: #fff;
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
       }
 
       /* status / system messages */
@@ -704,20 +864,21 @@
       /* code blocks */
       .cb-wrap {
         position: relative;
-        margin: 8px 0;
-        border-radius: 4px;
+        margin: 10px 0;
+        border-radius: var(--radius-md);
         overflow: hidden;
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-subtle);
+        box-shadow: var(--shadow-sm);
       }
       .cb-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 6px 12px;
+        padding: 7px 12px;
         background: var(--panel-2);
-        border-bottom: 1px solid var(--border);
+        border-bottom: 1px solid var(--border-subtle);
         font-size: 11px;
-        color: var(--text);
+        color: var(--text-secondary);
         font-weight: 600;
       }
       .cb-header.bash {
@@ -727,23 +888,27 @@
         background: var(--panel-2);
       }
       .cb-copy {
-        padding: 2px 8px;
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        color: var(--muted);
-        font-size: 10px;
+        padding: 4px 10px;
+        background: var(--panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        font-size: 11px;
         cursor: pointer;
+        font-weight: 500;
+        transition: all 0.2s ease;
       }
       .cb-copy:hover {
-        background: var(--panel-3);
-        color: var(--text);
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+        transform: translateY(-1px);
       }
       .cb-body {
-        background: #0f0f0f;
+        background: var(--bg);
         padding: 12px 14px;
         overflow-x: auto;
-        font-family: "Roboto Mono", "Fira Code", monospace;
+        font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace;
         font-size: 12px;
         white-space: pre;
         line-height: 1.6;
@@ -804,23 +969,26 @@
 
       /* ── Input area ── */
       #input-area {
-        padding: 10px 14px;
-        background: rgba(15, 20, 27, 0.96);
+        padding: 12px 16px;
+        background: var(--bg-elevated);
         border-top: 1px solid var(--border);
         flex-shrink: 0;
+        box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
       }
       #input-row {
         display: flex;
         gap: 8px;
         align-items: flex-end;
+        min-width: 0;
       }
       #input {
         flex: 1;
+        min-width: 0;
         padding: 10px 14px;
         background: var(--panel);
-        border: 2px solid var(--border);
+        border: 2px solid var(--border-subtle);
         color: var(--text);
-        border-radius: 4px;
+        border-radius: var(--radius-md);
         font-size: 13px;
         resize: none;
         min-height: 40px;
@@ -828,14 +996,16 @@
         overflow-y: auto;
         line-height: 1.5;
         font-family: inherit;
-        transition: border-color 0.2s;
+        transition: all 0.2s ease;
       }
       #input:focus {
         outline: none;
         border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+        background: var(--panel-2);
       }
       #input::placeholder {
-        color: var(--muted);
+        color: var(--text-muted);
       }
 
       .send-btn {
@@ -843,23 +1013,26 @@
         background: var(--accent);
         color: #fff;
         border: none;
-        border-radius: 4px;
+        border-radius: var(--radius-md);
         cursor: pointer;
         font-size: 13px;
-        font-weight: 700;
-        transition: all 0.2s;
+        font-weight: 600;
+        transition: all 0.2s ease;
         white-space: nowrap;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        box-shadow: var(--shadow-sm);
       }
       .send-btn:hover {
         background: var(--accent-hover);
-        transform: translateY(-1px);
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
       }
       .send-btn:disabled {
         background: var(--panel-2);
-        color: var(--muted);
+        color: var(--text-muted);
         cursor: not-allowed;
+        opacity: 0.5;
+        transform: none;
+        box-shadow: none;
       }
 
       /* Microphone button */
@@ -952,9 +1125,76 @@
 
       #input-hint {
         font-size: 10px;
-        color: var(--muted);
-        margin-top: 5px;
+        color: var(--text-muted);
+        margin-top: 6px;
         padding-left: 2px;
+      }
+      .mermaid-shell {
+        width: 100%;
+        overflow-x: auto;
+        display: flex;
+        justify-content: center;
+      }
+      .mermaid-diagram {
+        min-width: min-content;
+        max-width: 100%;
+      }
+      @media (max-width: 980px) {
+        #header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        #header-left,
+        #header-controls {
+          width: 100%;
+        }
+        #header-controls {
+          justify-content: flex-start;
+        }
+      }
+      @media (max-width: 760px) {
+        #header {
+          padding: 10px 12px;
+          gap: 10px;
+        }
+        #session-select,
+        #provider-select,
+        #model-select {
+          max-width: 100%;
+          flex: 1 1 180px;
+        }
+        #search-bar,
+        #input-area {
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        #search-btn,
+        #youtube-btn,
+        .send-btn,
+        #stop-btn {
+          flex: 1 1 auto;
+          justify-content: center;
+        }
+      }
+      @media (max-width: 560px) {
+        #header-title {
+          width: 100%;
+        }
+        #header-sub {
+          order: 3;
+        }
+        #search-input {
+          min-width: 0;
+          width: 100%;
+        }
+        #input-row {
+          flex-wrap: wrap;
+        }
+        #input,
+        .send-btn,
+        #stop-btn {
+          width: 100%;
+        }
       }
     </style>
   </head>
@@ -963,6 +1203,14 @@
       <div id="header-left">
         <div id="header-title">Code Janitor AI</div>
         <div id="header-sub">NVIDIA</div>
+        <div id="session-controls">
+          <select id="session-select" title="Chat sessions">
+            <option value="">Loading chats...</option>
+          </select>
+          <button class="pill-btn" id="btn-new-chat" title="New chat">
+            New
+          </button>
+        </div>
       </div>
       <div id="header-controls">
         <div id="connectivity-status" class="checking">
@@ -986,9 +1234,33 @@
         <button class="pill-btn" id="btn-heavy" title="Heavy mode">
           Heavy
         </button>
+        <button class="pill-btn" id="btn-deep" title="Deep mode">
+          Deep
+        </button>
+        <button class="pill-btn" id="btn-think" title="Show reasoning summary">
+          Think
+        </button>
         <button class="icon-btn" id="tts-toggle" title="Toggle text-to-speech">
           🔊
         </button>
+        <div class="dropdown" id="actions-dropdown">
+          <button class="dropdown-btn" id="actions-dropdown-btn">
+            <span>Actions</span>
+            <span class="dropdown-arrow">▼</span>
+          </button>
+          <div class="dropdown-content" id="actions-dropdown-content">
+            <div class="dropdown-item" data-action="git">🌿 Source Control</div>
+            <div class="dropdown-item" data-action="circuit">🔌 Generate Circuit</div>
+            <div class="dropdown-item" data-action="syntax">⚡ Check Syntax</div>
+            <div class="dropdown-item" data-action="scan">🔍 Scan Codebase</div>
+            <div class="dropdown-item" data-action="explain">💡 Explain File</div>
+            <div class="dropdown-item" data-action="fix">🔧 Fix Issues</div>
+            <div class="dropdown-item" data-action="refactor">♻️ Refactor</div>
+            <div class="dropdown-item" data-action="tests">🧪 Generate Tests</div>
+            <div class="dropdown-item" data-action="docs">📝 Add Docs</div>
+            <div class="dropdown-item" data-action="libraries">📚 Check Libraries</div>
+          </div>
+        </div>
         <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
       </div>
     </div>
@@ -1057,7 +1329,7 @@
       <div id="progress-track"><div id="progress-fill"></div></div>
     </div>
 
-    <div id="action-bar">
+    <div id="action-bar" style="display: none;">
       <div class="action-chip" data-action="git">🌿 Source Control</div>
       <div class="action-chip" data-action="circuit">🔌 Generate Circuit</div>
       <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
@@ -1073,7 +1345,8 @@
     <div id="search-bar">
       <div id="search-row">
         <input id="search-input" type="text" placeholder="🌐 Search the web..." />
-        <button id="search-btn">🔍 Search</button>
+        <button id="search-btn" class="active">🔍 Web</button>
+        <button id="youtube-btn">🎥 YouTube</button>
       </div>
     </div>
 
@@ -1110,7 +1383,7 @@
       </div>
       <div id="input-hint">
         Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; /scan
-        /fast /heavy
+        /fast /heavy /deep /think
       </div>
     </div>
 
@@ -1122,7 +1395,11 @@
       var stopBtn = document.getElementById("stop-btn");
       var btnFast = document.getElementById("btn-fast");
       var btnHeavy = document.getElementById("btn-heavy");
+      var btnDeep = document.getElementById("btn-deep");
+      var btnThink = document.getElementById("btn-think");
       var btnClear = document.getElementById("btn-clear");
+      var btnNewChat = document.getElementById("btn-new-chat");
+      var sessionSelect = document.getElementById("session-select");
       var providerSelect = document.getElementById("provider-select");
       var apiKeyRow = document.getElementById("api-key-row");
       var apiKeyInput = document.getElementById("api-key-input");
@@ -1135,6 +1412,7 @@
       var ttsToggle = document.getElementById("tts-toggle");
       var connectivityStatus = document.getElementById("connectivity-status");
       var connectivityText = document.getElementById("connectivity-text");
+      var headerSub = document.getElementById("header-sub");
 
       // Speech recognition
       var recognition = null;
@@ -1394,6 +1672,8 @@
         apiKeySave.style.display = "";
         apiKeyStatus.style.display = "none";
         apiKeyChange.style.display = "none";
+        apiKeySave.disabled = false;
+        apiKeySave.textContent = "Save";
       }
       apiKeyChange.onclick = function () {
         showKeyInput();
@@ -1444,13 +1724,24 @@
           "claude-3-opus-20240229",
         ],
         nvidia: [
+          "minimaxai/minimax-m2.7",
           "meta/llama-3.1-8b-instruct",
           "meta/llama-3.1-70b-instruct",
-          "nvidia/llama-3.1-nemotron-70b-instruct",
-          "mistralai/mistral-7b-instruct-v0.3",
-          "minimaxi/minimax-m2.7"
+          "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "mistralai/mistral-nemotron"
         ],
       };
+
+      function updateProviderBadge(provider) {
+        var labels = {
+          nvidia: "NVIDIA",
+          ollama: "OLLAMA",
+          groq: "GROQ",
+          openrouter: "OPENROUTER",
+          anthropic: "ANTHROPIC"
+        };
+        headerSub.textContent = labels[provider] || String(provider || "AI").toUpperCase();
+      }
 
       function populateModels(models) {
         modelSelect.innerHTML = "";
@@ -1477,9 +1768,12 @@
       var currentHasOpenrouterKey = false;
       var currentHasAnthropicKey = false;
       var currentHasNvidiaKey = false;
+      var suppressProviderModelEvents = false;
 
       providerSelect.onchange = function () {
+        if (suppressProviderModelEvents) return;
         var p = providerSelect.value;
+        updateProviderBadge(p);
         var needsKey = p === "groq" || p === "openrouter" || p === "anthropic" || p === "nvidia";
         apiKeyRow.classList.toggle("visible", needsKey);
         if (needsKey && providerLinks[p]) {
@@ -1508,18 +1802,16 @@
         var key = apiKeyInput.value.trim();
         if (!key) return;
         var p = providerSelect.value;
+        apiKeySave.disabled = true;
+        apiKeySave.textContent = "Saving...";
         vscode.postMessage({ type: "setProvider", provider: p, apiKey: key });
         apiKeyInput.value = "";
-        showKeySaved();
-        if (p === "groq") currentHasGroqKey = true;
-        if (p === "openrouter") currentHasOpenrouterKey = true;
-        if (p === "anthropic") currentHasAnthropicKey = true;
-        if (p === "nvidia") currentHasNvidiaKey = true;
-        if (modelsByProvider[p]) populateModels(modelsByProvider[p]);
-        addRow("API key saved for " + p + ".", "status");
+        addRow("Saving API key for " + p + "...", "status");
       };
       var currentMessage = null;
       var chatMode = "fast";
+      var currentSessionId = "";
+      var suppressSessionEvents = false;
       var activityEmptyMessage =
         "No activity yet. Start a task to see the agent workflow.";
 
@@ -1613,13 +1905,61 @@
       function copyText(text, btn) {
         navigator.clipboard.writeText(text).then(function () {
           btn.textContent = "Copied!";
+          var originalText = btn.dataset.originalText || "Copy";
           setTimeout(function () {
-            btn.textContent = "Copy";
+            btn.textContent = originalText;
           }, 1500);
         });
       }
 
       function makeCodeBlock(lang, code) {
+        // Check if it's a mermaid diagram
+        if (lang === 'mermaid') {
+          var wrap = document.createElement("div");
+          wrap.className = "cb-wrap";
+          var hdr = document.createElement("div");
+          hdr.className = "cb-header code";
+          var lbl = document.createElement("span");
+          lbl.textContent = "mermaid diagram";
+          var copyBtn = document.createElement("button");
+          copyBtn.className = "cb-copy";
+          copyBtn.textContent = "Copy";
+          copyBtn.onclick = function () {
+            copyText(code, copyBtn);
+          };
+          hdr.appendChild(lbl);
+          hdr.appendChild(copyBtn);
+          var body = document.createElement("div");
+          body.className = "cb-body code";
+          body.style.background = "#1a1a1a";
+          body.style.padding = "20px";
+          body.classList.add("mermaid-shell");
+          
+          // Create a unique ID for the mermaid diagram
+          var diagramId = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+          var diagramDiv = document.createElement("div");
+          diagramDiv.id = diagramId;
+          diagramDiv.className = "mermaid mermaid-diagram";
+          diagramDiv.textContent = normalizeMermaidCode(code);
+          body.appendChild(diagramDiv);
+          
+          wrap.appendChild(hdr);
+          wrap.appendChild(body);
+          
+          // Render the mermaid diagram after a short delay
+          setTimeout(function() {
+            try {
+              mermaid.run({ nodes: [diagramDiv] });
+            } catch (error) {
+              console.error('Mermaid rendering error:', error);
+              diagramDiv.textContent = 'Error rendering diagram: ' + error.message;
+              diagramDiv.style.color = 'var(--red)';
+            }
+          }, 100);
+          
+          return wrap;
+        }
+        
         var isBash = /^(bash|sh|shell|cmd|)$/i.test(lang);
         var cls = isBash ? "bash" : "code";
         var label = lang || (isBash ? "bash" : "code");
@@ -1643,6 +1983,54 @@
         wrap.appendChild(hdr);
         wrap.appendChild(body);
         return wrap;
+      }
+
+      function normalizeMermaidCode(code) {
+        var normalized = String(code || "")
+          .replace(/\r\n/g, "\n")
+          .replace(/^```mermaid\s*/i, "")
+          .replace(/```$/i, "")
+          .replace(/&gt;/g, ">")
+          .replace(/&lt;/g, "<")
+          .replace(/&amp;/g, "&")
+          .trim();
+
+        var lines = normalized
+          .split("\n")
+          .map(function (line) {
+            return line.replace(/\s+$/g, "");
+          })
+          .filter(function (line, index, arr) {
+            if (line.trim()) return true;
+            return index > 0 && index < arr.length - 1;
+          });
+
+        if (lines.length === 0) {
+          return "graph TD\nA[No diagram content]";
+        }
+
+        var firstLine = lines[0].trim();
+        var hasSequenceTokens = lines.some(function (line) {
+          return /\bparticipant\b|->>|-->>|activate\b|deactivate\b/.test(line);
+        });
+        var hasFlowTokens = lines.some(function (line) {
+          return /-->|^\s*[A-Za-z0-9_]+\s*\[|^\s*[A-Za-z0-9_]+\s*\(|^\s*[A-Za-z0-9_]+\s*\{/.test(line);
+        });
+        var hasKnownStart = /^(graph\s+(TD|LR|BT|RL)|sequenceDiagram|classDiagram|stateDiagram-v2|erDiagram|gantt|pie)\b/.test(firstLine);
+
+        if (!hasKnownStart) {
+          if (hasSequenceTokens) {
+            lines.unshift("sequenceDiagram");
+          } else if (hasFlowTokens) {
+            lines.unshift("graph TD");
+          }
+        } else if (/^graph\b/.test(firstLine) && hasSequenceTokens && !hasFlowTokens) {
+          lines[0] = "sequenceDiagram";
+        } else if (/^sequenceDiagram\b/.test(firstLine) && hasFlowTokens && !hasSequenceTokens) {
+          lines[0] = "graph TD";
+        }
+
+        return lines.join("\n");
       }
 
       function makeDiffBlock(lines) {
@@ -1747,6 +2135,110 @@
         return container;
       }
 
+      function extractYouTubeId(url) {
+        var cleanUrl = String(url || "").trim();
+        if (!cleanUrl) return null;
+        
+        // Decode HTML entities
+        var textarea = document.createElement('textarea');
+        textarea.innerHTML = cleanUrl;
+        cleanUrl = textarea.value;
+        
+        // Remove trailing HTML entities
+        cleanUrl = cleanUrl.replace(/&[a-z]+;.*$/i, '');
+        
+        // Try multiple patterns
+        var patterns = [
+          /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+          /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+          /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+          /(?:youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
+          /[?&]v=([a-zA-Z0-9_-]{11})/,
+          /^([a-zA-Z0-9_-]{11})$/
+        ];
+        
+        for (var i = 0; i < patterns.length; i++) {
+          var match = cleanUrl.match(patterns[i]);
+          if (match && match[1] && match[1].length === 11) {
+            return match[1];
+          }
+        }
+        return null;
+      }
+
+      function makeYouTubeEmbed(videoId) {
+        var wrap = document.createElement("div");
+        wrap.style.cssText = "position: relative; width: 100%; max-width: 560px; margin: 8px 0; border-radius: 4px; overflow: hidden; background: #000;";
+        
+        // Create thumbnail preview
+        var thumbnail = document.createElement("div");
+        thumbnail.style.cssText = "position: relative; width: 100%; cursor: pointer;";
+        
+        var img = document.createElement("img");
+        img.src = "https://img.youtube.com/vi/" + videoId + "/maxresdefault.jpg";
+        img.alt = "YouTube video thumbnail";
+        img.style.cssText = "width: 100%; display: block; border-radius: 4px;";
+        img.onerror = function() {
+          img.src = "https://img.youtube.com/vi/" + videoId + "/hqdefault.jpg";
+        };
+        
+        // Play button overlay
+        var playBtn = document.createElement("div");
+        playBtn.style.cssText = "position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 68px; height: 48px; background: rgba(255, 0, 0, 0.9); border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.2s;";
+        playBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>';
+        
+        thumbnail.appendChild(img);
+        thumbnail.appendChild(playBtn);
+        
+        // Click to load iframe
+        thumbnail.onclick = function() {
+          thumbnail.style.display = "none";
+          
+          var loading = document.createElement("div");
+          loading.style.cssText = "position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 14px;";
+          loading.textContent = "Loading video...";
+          wrap.appendChild(loading);
+          
+          var iframe = document.createElement("iframe");
+          iframe.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&rel=0&modestbranding=1";
+          iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+          iframe.allowFullscreen = true;
+          iframe.style.cssText = "position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; border-radius: 4px; display: none;";
+          
+          // Set aspect ratio
+          wrap.style.paddingTop = "56.25%";
+          
+          iframe.onload = function() {
+            loading.style.display = "none";
+            iframe.style.display = "block";
+          };
+          
+          iframe.onerror = function() {
+            wrap.innerHTML = "";
+            var errorMsg = document.createElement("div");
+            errorMsg.style.cssText = "padding: 20px; background: var(--red-soft); border: 1px solid var(--red); border-radius: 4px; color: var(--red); text-align: center;";
+            errorMsg.innerHTML = '<p style="margin: 0 0 10px 0; font-weight: 600;">⚠️ Video cannot be embedded</p>' +
+              '<a href="https://www.youtube.com/watch?v=' + videoId + '" target="_blank" style="display: inline-block; padding: 10px 20px; background: var(--red); color: white; text-decoration: none; border-radius: 4px; font-weight: 600;">▶️ Watch on YouTube</a>';
+            wrap.appendChild(errorMsg);
+          };
+          
+          wrap.appendChild(iframe);
+        };
+        
+        // Hover effect
+        thumbnail.onmouseenter = function() {
+          playBtn.style.background = "rgba(255, 0, 0, 1)";
+          playBtn.style.transform = "translate(-50%, -50%) scale(1.1)";
+        };
+        thumbnail.onmouseleave = function() {
+          playBtn.style.background = "rgba(255, 0, 0, 0.9)";
+          playBtn.style.transform = "translate(-50%, -50%) scale(1)";
+        };
+        
+        wrap.appendChild(thumbnail);
+        return wrap;
+      }
+
       function renderContent(text) {
         var container = document.createElement("div");
         var segments = [];
@@ -1789,6 +2281,65 @@
             var cm = line.match(/^CMD:\s*(.+)$/);
             if (cm) {
               container.appendChild(makeCodeBlock("bash", cm[1]));
+              continue;
+            }
+            // Check for YouTube URLs (both video and search URLs)
+            var youtubeMatch = line.match(/(https?:\/\/(?:www\.)?youtube\.com\/(?:watch\?[^\s]*v=[^\s&]+|results\?[^\s]+)|https?:\/\/youtu\.be\/[^\s?]+)/);
+            if (youtubeMatch) {
+              var url = youtubeMatch[0];
+              console.log('[YouTube] Detected URL:', url);
+              var videoId = extractYouTubeId(url);
+              console.log('[YouTube] Extracted video ID:', videoId);
+              
+              // Add text before URL
+              var beforeUrl = line.substring(0, youtubeMatch.index);
+              if (beforeUrl.trim()) {
+                var sp1 = document.createElement("span");
+                sp1.style.whiteSpace = "pre-wrap";
+                sp1.innerHTML = escapeHtml(beforeUrl);
+                container.appendChild(sp1);
+                container.appendChild(document.createElement("br"));
+              }
+              
+              // Check if it's a search results URL (no video ID)
+              if (!videoId || url.includes('/results?')) {
+                console.log('[YouTube] Creating search link button');
+                // Create clickable link for search results
+                var linkWrap = document.createElement("div");
+                linkWrap.style.cssText = "margin: 8px 0; padding: 12px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 4px;";
+                
+                var linkBtn = document.createElement("a");
+                linkBtn.href = url;
+                linkBtn.target = "_blank";
+                linkBtn.style.cssText = "display: inline-block; padding: 10px 20px; background: var(--accent); color: white; text-decoration: none; border-radius: 4px; font-weight: 600; transition: all 0.2s;";
+                linkBtn.textContent = "▶️ Search YouTube";
+                linkBtn.onmouseenter = function() {
+                  this.style.background = "var(--accent-hover)";
+                  this.style.transform = "translateY(-1px)";
+                };
+                linkBtn.onmouseleave = function() {
+                  this.style.background = "var(--accent)";
+                  this.style.transform = "translateY(0)";
+                };
+                
+                linkWrap.appendChild(linkBtn);
+                container.appendChild(linkWrap);
+              } else {
+                console.log('[YouTube] Creating video thumbnail');
+                // Add YouTube embed for video URLs
+                container.appendChild(makeYouTubeEmbed(videoId));
+              }
+              
+              // Add text after URL
+              var afterUrl = line.substring(youtubeMatch.index + youtubeMatch[0].length);
+              if (afterUrl.trim()) {
+                var sp2 = document.createElement("span");
+                sp2.style.whiteSpace = "pre-wrap";
+                sp2.innerHTML = escapeHtml(afterUrl);
+                container.appendChild(sp2);
+              }
+              if (i < lines.length - 1)
+                container.appendChild(document.createElement("br"));
               continue;
             }
             var sp = document.createElement("span");
@@ -1848,22 +2399,26 @@
         }
         var actions = document.createElement("div");
         actions.className = "msg-actions";
+        if (type === "user") {
+          var editBtn = document.createElement("button");
+          editBtn.className = "msg-action-btn";
+          editBtn.textContent = "Edit";
+          editBtn.dataset.originalText = "Edit";
+          editBtn.onclick = function () {
+            input.value = bubble._rawSource || bubble.textContent || "";
+            input.style.height = "38px";
+            input.style.height = Math.min(input.scrollHeight, 120) + "px";
+            input.focus();
+          };
+          actions.appendChild(editBtn);
+        }
         var copyBtn = document.createElement("button");
         copyBtn.className = "msg-action-btn";
         copyBtn.textContent = "Copy";
+        copyBtn.dataset.originalText = "Copy";
         copyBtn.onclick = function () {
           copyText(bubble._rawSource || bubble.textContent || "", copyBtn);
         };
-        var editBtn = document.createElement("button");
-        editBtn.className = "msg-action-btn";
-        editBtn.textContent = "Edit";
-        editBtn.onclick = function () {
-          input.value = bubble._rawSource || bubble.textContent || "";
-          input.style.height = "38px";
-          input.style.height = Math.min(input.scrollHeight, 120) + "px";
-          input.focus();
-        };
-        actions.appendChild(editBtn);
         actions.appendChild(copyBtn);
         contentWrap.appendChild(bubble);
         contentWrap.appendChild(actions);
@@ -1872,6 +2427,135 @@
         chat.appendChild(row);
         chat.scrollTop = chat.scrollHeight;
         return row;
+      }
+
+      function createAiMessageRow() {
+        var row = document.createElement("div");
+        row.className = "msg-row ai";
+
+        var av = document.createElement("div");
+        av.className = "avatar ai";
+        av.textContent = "AI";
+
+        var contentWrap = document.createElement("div");
+        contentWrap.className = "msg-content";
+
+        var bubble = document.createElement("div");
+        bubble.className = "bubble ai";
+        bubble._rawText = "";
+        bubble._rawSource = "";
+
+        var actions = document.createElement("div");
+        actions.className = "msg-actions";
+
+        var copyBtn = document.createElement("button");
+        copyBtn.className = "msg-action-btn";
+        copyBtn.textContent = "Copy";
+        copyBtn.dataset.originalText = "Copy";
+        copyBtn.onclick = function () {
+          copyText(bubble._rawSource || bubble._rawText || bubble.textContent || "", copyBtn);
+        };
+
+        actions.appendChild(copyBtn);
+
+        row._bubble = bubble;
+        row._streamBuffer = "";
+        row._flushTimer = null;
+
+        contentWrap.appendChild(bubble);
+        contentWrap.appendChild(actions);
+        row.appendChild(av);
+        row.appendChild(contentWrap);
+        chat.appendChild(row);
+        chat.scrollTop = chat.scrollHeight;
+        return row;
+      }
+
+      function flushStreamBuffer(row) {
+        if (!row) return;
+        var bubble = row._bubble || row.querySelector(".bubble");
+        if (!bubble) return;
+        var pending = row._streamBuffer || "";
+        row._streamBuffer = "";
+        row._flushTimer = null;
+        if (!pending) return;
+
+        var ind = bubble.querySelector(".typing");
+        if (ind) ind.remove();
+
+        bubble._rawText = (bubble._rawText || "") + pending;
+        if (!bubble._streamNode) {
+          bubble._streamNode = document.createElement("span");
+          bubble._streamNode.style.whiteSpace = "pre-wrap";
+          bubble.appendChild(bubble._streamNode);
+        }
+        bubble._streamNode.textContent = bubble._rawText;
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      function queueStreamChunk(row, text) {
+        if (!row || !text) return;
+        row._streamBuffer = (row._streamBuffer || "") + text;
+        if (row._flushTimer) return;
+        row._flushTimer = setTimeout(function () {
+          flushStreamBuffer(row);
+        }, 33);
+      }
+
+      function populateSessions(sessions, selectedId) {
+        suppressSessionEvents = true;
+        sessionSelect.innerHTML = "";
+
+        if (!Array.isArray(sessions) || sessions.length === 0) {
+          var emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "New Chat 1";
+          sessionSelect.appendChild(emptyOpt);
+          currentSessionId = "";
+          suppressSessionEvents = false;
+          return;
+        }
+
+        sessions.forEach(function(session, index) {
+          var opt = document.createElement("option");
+          opt.value = session.id;
+          var label = session.title || ("Chat " + (index + 1));
+          if (session.compactedCount > 0) {
+            label += " · compacted";
+          }
+          opt.textContent = label;
+          if (session.id === selectedId) {
+            opt.selected = true;
+          }
+          sessionSelect.appendChild(opt);
+        });
+
+        currentSessionId = selectedId || sessionSelect.value || "";
+        suppressSessionEvents = false;
+      }
+
+      function restoreConversation(history) {
+        chat.innerHTML = "";
+        currentMessage = null;
+
+        if (!Array.isArray(history) || history.length === 0) {
+          addRow(
+            "Ready. Select a model above, pick an action chip, or just ask.",
+            "status",
+          );
+          return;
+        }
+
+        history.forEach(function (entry) {
+          if (!entry || typeof entry.content !== "string") return;
+          if (entry.role === "user") {
+            addRow(entry.content, "user");
+          } else if (entry.role === "assistant") {
+            addRow(entry.content, "ai");
+          }
+        });
+
+        chat.scrollTop = chat.scrollHeight;
       }
 
       function setInputState(busy) {
@@ -1884,7 +2568,13 @@
         chatMode = m;
         btnFast.classList.toggle("active", m === "fast");
         btnHeavy.classList.toggle("active", m === "heavy");
+        btnDeep.classList.toggle("active", m === "deep");
         vscode.postMessage({ type: "mode", value: m });
+      }
+
+      function setThinkingState(enabled) {
+        btnThink.classList.toggle("active", !!enabled);
+        btnThink.textContent = enabled ? "Think On" : "Think";
       }
 
       // ── Send ─────────────────────────────────────────────────
@@ -1904,6 +2594,11 @@
         }
         if (/^\/heavy$/i.test(text)) {
           setMode("heavy");
+          setInputState(false);
+          return;
+        }
+        if (/^\/deep$/i.test(text)) {
+          setMode("deep");
           setInputState(false);
           return;
         }
@@ -1936,57 +2631,97 @@
         setMode("heavy");
         addRow("Switched to Heavy mode.", "status");
       };
+      btnDeep.onclick = function () {
+        setMode("deep");
+        addRow("Switched to Deep mode.", "status");
+      };
+      btnThink.onclick = function () {
+        vscode.postMessage({ type: "toggleThinking" });
+      };
       btnClear.onclick = function () {
         chat.innerHTML = "";
         vscode.postMessage({ type: "clear" });
         resetActivity();
         addRow("Conversation cleared.", "status");
       };
+      btnNewChat.onclick = function () {
+        vscode.postMessage({ type: "createSession" });
+      };
+      sessionSelect.onchange = function () {
+        if (suppressSessionEvents) return;
+        var nextSessionId = sessionSelect.value;
+        if (!nextSessionId || nextSessionId === currentSessionId) return;
+        currentSessionId = nextSessionId;
+        vscode.postMessage({ type: "switchSession", sessionId: nextSessionId });
+      };
 
       modelSelect.onchange = function () {
-        vscode.postMessage({ type: "setModel", model: modelSelect.value });
+        if (suppressProviderModelEvents) return;
+        vscode.postMessage({
+          type: "setModel",
+          provider: providerSelect.value,
+          model: modelSelect.value,
+        });
         addRow("Model switched to " + modelSelect.value, "status");
       };
 
       // Action chips
-      document
-        .getElementById("action-bar")
-        .addEventListener("click", function (e) {
-          var chip = e.target.closest(".action-chip");
-          if (!chip) return;
-          var action = chip.dataset.action;
-          // Git opens Source Control panel directly
-          if (action === "git") {
-            vscode.postMessage({ type: "openGit" });
-            return;
-          }
-          // Circuit diagram generation
-          if (action === "circuit") {
-            vscode.postMessage({ type: "generateCircuit" });
-            return;
-          }
-          // Syntax/scan chips run directly without the model
-          if (action === "syntax") {
-            vscode.postMessage({ type: "syntaxScan", activeOnly: true });
-            return;
-          }
-          if (action === "scan") {
-            vscode.postMessage({ type: "syntaxScan", activeOnly: false });
-            return;
-          }
-          if (action === "libraries") {
-            vscode.postMessage({ type: "libraryAudit" });
-            return;
-          }
-          var prompts = {
-            explain: "Explain what the active file does",
-            fix: "Fix all issues in the active file",
-            refactor: "Refactor the active file for clarity and performance",
-            tests: "Generate unit tests for the active file",
-            docs: "Add JSDoc/docstring comments to the active file",
-          };
-          if (prompts[action]) sendMessage(prompts[action]);
-        });
+      var actionsDropdown = document.getElementById("actions-dropdown");
+      var actionsDropdownBtn = document.getElementById("actions-dropdown-btn");
+      var actionsDropdownContent = document.getElementById("actions-dropdown-content");
+
+      // Toggle dropdown
+      actionsDropdownBtn.onclick = function(e) {
+        e.stopPropagation();
+        actionsDropdown.classList.toggle("open");
+      };
+
+      // Close dropdown when clicking outside
+      document.addEventListener("click", function(e) {
+        if (!actionsDropdown.contains(e.target)) {
+          actionsDropdown.classList.remove("open");
+        }
+      });
+
+      // Handle dropdown item clicks
+      actionsDropdownContent.addEventListener("click", function (e) {
+        var item = e.target.closest(".dropdown-item");
+        if (!item) return;
+        var action = item.dataset.action;
+        actionsDropdown.classList.remove("open");
+        
+        // Git opens Source Control panel directly
+        if (action === "git") {
+          vscode.postMessage({ type: "openGit" });
+          return;
+        }
+        // Circuit diagram generation
+        if (action === "circuit") {
+          vscode.postMessage({ type: "generateCircuit" });
+          return;
+        }
+        // Syntax/scan chips run directly without the model
+        if (action === "syntax") {
+          vscode.postMessage({ type: "syntaxScan", activeOnly: true });
+          return;
+        }
+        if (action === "scan") {
+          vscode.postMessage({ type: "syntaxScan", activeOnly: false });
+          return;
+        }
+        if (action === "libraries") {
+          vscode.postMessage({ type: "libraryAudit" });
+          return;
+        }
+        var prompts = {
+          explain: "Explain what the active file does",
+          fix: "Fix all issues in the active file",
+          refactor: "Refactor the active file for clarity and performance",
+          tests: "Generate unit tests for the active file",
+          docs: "Add JSDoc/docstring comments to the active file",
+        };
+        if (prompts[action]) sendMessage(prompts[action]);
+      });
 
       // Auto-resize textarea
       input.addEventListener("input", function () {
@@ -2008,7 +2743,6 @@
 
         if (msg.type === "status") {
           addActivity(msg.text);
-          addRow(msg.text, "status");
           if (/scanning/i.test(msg.text)) showProgress(msg.text, 20);
           else if (/contacting/i.test(msg.text)) showProgress(msg.text, 40);
           else if (/reading|indexing/i.test(msg.text))
@@ -2021,43 +2755,27 @@
         } else if (msg.type === "thinking") {
           addActivity("Generating response...", "info");
           showProgress("Thinking...", 50);
-          var row = document.createElement("div");
-          row.className = "msg-row ai";
-          var av = document.createElement("div");
-          av.className = "avatar ai";
-          av.textContent = "AI";
-          var bubble = document.createElement("div");
-          bubble.className = "bubble ai";
+          var row = createAiMessageRow();
+          var bubble = row._bubble;
           bubble.innerHTML =
             '<div class="typing"><span></span><span></span><span></span></div>';
-          bubble._rawText = "";
-          row.appendChild(av);
-          row.appendChild(bubble);
-          chat.appendChild(row);
           chat.scrollTop = chat.scrollHeight;
           currentMessage = row;
         } else if (msg.type === "stream" && currentMessage) {
-          var bubble = currentMessage.querySelector(".bubble");
-          var ind = bubble.querySelector(".typing");
-          if (ind) ind.remove();
-          bubble._rawText = (bubble._rawText || "") + msg.text;
-          if (!bubble._streamNode) {
-            bubble._streamNode = document.createElement("span");
-            bubble._streamNode.style.whiteSpace = "pre-wrap";
-            bubble.appendChild(bubble._streamNode);
-          }
-          bubble._streamNode.textContent = bubble._rawText;
-          chat.scrollTop = chat.scrollHeight;
+          queueStreamChunk(currentMessage, msg.text);
         } else if (msg.type === "done") {
           addActivity("Run finished.", "success");
           hideProgress();
           if (currentMessage) {
-            var bubble = currentMessage.querySelector(".bubble");
+            flushStreamBuffer(currentMessage);
+            var bubble = currentMessage._bubble || currentMessage.querySelector(".bubble");
             if (bubble && bubble._rawText) {
               bubble._rawSource = bubble._rawText;
               bubble.innerHTML = "";
               bubble.appendChild(renderContent(bubble._rawText));
               speakText(bubble._rawText);
+            } else if (bubble) {
+              bubble.textContent = "Done.";
             }
           }
           currentMessage = null;
@@ -2115,6 +2833,8 @@
           addActivity(msg.text, "error");
           hideProgress();
           setInputState(false);
+          apiKeySave.disabled = false;
+          apiKeySave.textContent = "Save";
           addRow("\u274c " + msg.text, "status");
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
@@ -2127,16 +2847,16 @@
             "Model:",
             msg.model,
           );
-
-          // Temporarily disable onchange to prevent circular updates
-          var oldOnChange = providerSelect.onchange;
-          providerSelect.onchange = null;
+          suppressProviderModelEvents = true;
 
           providerSelect.value = msg.provider;
+          updateProviderBadge(msg.provider);
           currentHasGroqKey = !!msg.hasGroqKey;
           currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
           currentHasAnthropicKey = !!msg.hasAnthropicKey;
           currentHasNvidiaKey = !!msg.hasNvidiaKey;
+          apiKeySave.disabled = false;
+          apiKeySave.textContent = "Save";
 
           var needsKey =
             msg.provider === "groq" ||
@@ -2172,9 +2892,8 @@
             if (needsKey) showNoModels("Save an API key to see models");
           }
 
-          // Restore onchange handler
           setTimeout(function () {
-            providerSelect.onchange = oldOnChange;
+            suppressProviderModelEvents = false;
           }, 100);
 
           addRow(
@@ -2183,11 +2902,15 @@
           );
         } else if (msg.type === "setCurrentProvider") {
           if (msg.provider) {
+            suppressProviderModelEvents = true;
             providerSelect.value = msg.provider;
+            updateProviderBadge(msg.provider);
             currentHasGroqKey = !!msg.hasGroqKey;
             currentHasOpenrouterKey = !!msg.hasOpenrouterKey;
             currentHasAnthropicKey = !!msg.hasAnthropicKey;
             currentHasNvidiaKey = !!msg.hasNvidiaKey;
+            apiKeySave.disabled = false;
+            apiKeySave.textContent = "Save";
             var needsKey =
               msg.provider === "groq" ||
               msg.provider === "openrouter" ||
@@ -2224,10 +2947,14 @@
               showKeyInput();
               if (needsKey) showNoModels("Save an API key to see models");
             }
+            setTimeout(function () {
+              suppressProviderModelEvents = false;
+            }, 100);
           }
         } else if (msg.type === "setModelOptions") {
           // Only update if this matches the currently selected provider
           if (msg.provider && msg.provider !== providerSelect.value) return;
+          suppressProviderModelEvents = true;
           var sel = modelSelect;
           var current = sel.value;
           sel.innerHTML = "";
@@ -2238,38 +2965,82 @@
             if (m === current) opt.selected = true;
             sel.appendChild(opt);
           });
+          setTimeout(function () {
+            suppressProviderModelEvents = false;
+          }, 0);
+        } else if (msg.type === "thinkingState") {
+          setThinkingState(!!msg.enabled);
+        } else if (msg.type === "sessionState") {
+          populateSessions(msg.sessions, msg.currentSessionId);
+          resetActivity();
+          restoreConversation(msg.history);
+        } else if (msg.type === "restoreConversation") {
+          restoreConversation(msg.history);
         }
       });
 
       // Init
       vscode.postMessage({ type: "ready" });
-      addRow(
-        "Ready. Select a model above, pick an action chip, or just ask.",
-        "status",
-      );
 
       // Web search functionality
       var searchInput = document.getElementById("search-input");
       var searchBtn = document.getElementById("search-btn");
+      var youtubeBtn = document.getElementById("youtube-btn");
+      var searchMode = "web"; // "web" or "youtube"
 
-      function performWebSearch() {
+      function setSearchMode(mode) {
+        searchMode = mode;
+        if (mode === "web") {
+          searchBtn.classList.add("active");
+          youtubeBtn.classList.remove("active");
+          searchInput.placeholder = "🌐 Search the web...";
+        } else {
+          searchBtn.classList.remove("active");
+          youtubeBtn.classList.add("active");
+          searchInput.placeholder = "🎥 Search YouTube...";
+        }
+      }
+
+      function performSearch() {
         var query = searchInput.value.trim();
         if (!query) return;
 
-        searchBtn.disabled = true;
-        searchBtn.textContent = "Searching...";
-        addActivity("Searching web for: " + query, "scan");
-        showProgress("Searching the web...", 30);
-
-        vscode.postMessage({ type: "webSearch", query: query });
+        if (searchMode === "web") {
+          searchBtn.disabled = true;
+          searchBtn.textContent = "Searching...";
+          addActivity("Searching web for: " + query, "scan");
+          showProgress("Searching the web...", 30);
+          vscode.postMessage({ type: "webSearch", query: query });
+        } else {
+          youtubeBtn.disabled = true;
+          youtubeBtn.textContent = "Searching...";
+          addActivity("Searching YouTube for: " + query, "scan");
+          showProgress("Searching YouTube...", 30);
+          vscode.postMessage({ type: "youtubeSearch", query: query });
+        }
         searchInput.value = "";
       }
 
-      searchBtn.onclick = performWebSearch;
+      searchBtn.onclick = function() {
+        if (searchMode === "web") {
+          performSearch();
+        } else {
+          setSearchMode("web");
+        }
+      };
+
+      youtubeBtn.onclick = function() {
+        if (searchMode === "youtube") {
+          performSearch();
+        } else {
+          setSearchMode("youtube");
+        }
+      };
+
       searchInput.addEventListener("keydown", function(e) {
         if (e.key === "Enter") {
           e.preventDefault();
-          performWebSearch();
+          performSearch();
         }
       });
 
@@ -2278,14 +3049,24 @@
         var msg = event.data;
         if (msg.type === "searchComplete") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "🔍 Web";
           hideProgress();
           addActivity("Search completed", "success");
         } else if (msg.type === "searchError") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "🔍 Web";
           hideProgress();
           addActivity("Search failed: " + msg.error, "error");
+        } else if (msg.type === "youtubeSearchComplete") {
+          youtubeBtn.disabled = false;
+          youtubeBtn.textContent = "🎥 YouTube";
+          hideProgress();
+          addActivity("YouTube search completed", "success");
+        } else if (msg.type === "youtubeSearchError") {
+          youtubeBtn.disabled = false;
+          youtubeBtn.textContent = "🎥 YouTube";
+          hideProgress();
+          addActivity("YouTube search failed: " + msg.error, "error");
         }
       });
     </script>

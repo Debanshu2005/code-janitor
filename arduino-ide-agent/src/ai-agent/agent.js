@@ -5,12 +5,17 @@ const path = require("path")
 const MAX_SCAN_FILE_SIZE = 200 * 1024
 const MAX_CONTEXT_CHARS = 8_000
 const MAX_FILE_SNIPPET = 1_200
-const MAX_RELEVANT_FILES = 4
-const MAX_OPEN_TAB_SNIPPETS = 2
-const MAX_HISTORY_ENTRIES = 4
-const REPETITION_WINDOW = 180
-const REPETITION_WINDOW_HEAVY = 400
-const SCAN_STALE_MS = 30_000
+const MAX_RELEVANT_FILES = 3  // Reduced from 4
+const MAX_OPEN_TAB_SNIPPETS = 1  // Reduced from 2
+const MAX_HISTORY_ENTRIES = 3  // Reduced from 4
+const MAX_SESSION_RECENT_ENTRIES = 8
+const MAX_SESSION_PERSISTED_ENTRIES = 24
+const MAX_SESSION_SUMMARY_CHARS = 2_400
+const MAX_CHAT_SESSIONS = 12
+const RELEVANT_FILE_CACHE_LIMIT = 30
+const REPETITION_WINDOW = 150  // Reduced from 180
+const REPETITION_WINDOW_HEAVY = 300  // Reduced from 400
+const SCAN_STALE_MS = 45_000  // Increased from 30000 to reduce rescans
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_COMMAND_OUTPUT_CHARS = 12_000
 const IGNORED_DIRS = new Set([
@@ -49,28 +54,75 @@ const STOP_WORDS = new Set([
   "with"
 ])
 const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|html|css|json|md)$/i
+const NVIDIA_MODEL_ALIASES = new Map([
+  ["nvidia/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["minimaxi/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-70b-instruct"],
+  ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
+  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+])
 const NVIDIA_MODELS = new Set([
+  "minimaxai/minimax-m2.7",
   "meta/llama-3.1-8b-instruct",
   "meta/llama-3.1-70b-instruct",
-  "nvidia/llama-3.1-nemotron-70b-instruct",
-  "mistralai/mistral-7b-instruct-v0.3",
-  "minimaxi/minimax-m2.7"
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "mistralai/mistral-nemotron"
 ])
+const MODELS_BY_PROVIDER = {
+  groq: ["llama-3.1-8b-instant"],
+  openrouter: [
+    "mistralai/mistral-7b-instruct:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemini-2.0-flash-exp:free"
+  ],
+  anthropic: [
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229"
+  ],
+  nvidia: Array.from(NVIDIA_MODELS)
+}
 
 class AIAgent {
   constructor(context) {
     this.codebaseContext = new Map()
+    this.context = context // Store context for globalState access
+    const persistedChatState = this._loadPersistedChatState()
+    this.chatSessions = persistedChatState.sessions
+    this.currentSessionId = persistedChatState.currentSessionId
     this.conversationHistory = []
     this.scanVersion = 0
     this.lastScanAt = 0
     this.workspaceRoot = null
     this.currentEditableTargets = null
     this._lastActiveEditor = vscode.window.activeTextEditor || null
-    this.context = context // Store context for globalState access
+    this._preparedWorkspaceContextCache = null
+    this._relevantFileCache = new Map()
+    this.showThinking = false // Toggle to show AI reasoning process
+    this._syncCurrentSessionReferences()
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
         this._lastActiveEditor = editor
+      }
+      this._invalidateContextCaches()
+    })
+
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      if (document?.uri?.scheme === "file") {
+        this._invalidateContextCaches()
+      }
+    })
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (document?.uri?.scheme === "file") {
+        this._invalidateContextCaches()
+      }
+    })
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (document?.uri?.scheme === "file") {
+        this._invalidateContextCaches()
       }
     })
   }
@@ -78,7 +130,327 @@ class AIAgent {
   setActiveEditor(editor) {
     if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor
+      this._invalidateContextCaches()
     }
+  }
+
+  _getConversationStateKey() {
+    return "codeJanitor.arduino.chatHistory"
+  }
+
+  _getChatSessionsStateKey() {
+    return "codeJanitor.arduino.chatSessions"
+  }
+
+  _sanitizeHistoryEntries(history) {
+    if (!Array.isArray(history)) return []
+    return history
+      .filter(
+        (entry) =>
+          entry &&
+          (entry.role === "user" || entry.role === "assistant") &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      .map((entry) => ({
+        role: entry.role,
+        content: entry.content.trim()
+      }))
+      .slice(-MAX_SESSION_PERSISTED_ENTRIES)
+  }
+
+  _createSessionId() {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  _buildDefaultSessionTitle() {
+    return `New Chat ${this.chatSessions?.length ? this.chatSessions.length + 1 : 1}`
+  }
+
+  _createSessionRecord(overrides = {}) {
+    const now = Date.now()
+    return {
+      id: overrides.id || this._createSessionId(),
+      title:
+        typeof overrides.title === "string" && overrides.title.trim()
+          ? overrides.title.trim()
+          : this._buildDefaultSessionTitle(),
+      createdAt:
+        Number.isFinite(overrides.createdAt) && overrides.createdAt > 0
+          ? overrides.createdAt
+          : now,
+      updatedAt:
+        Number.isFinite(overrides.updatedAt) && overrides.updatedAt > 0
+          ? overrides.updatedAt
+          : now,
+      summary:
+        typeof overrides.summary === "string" ? overrides.summary.trim() : "",
+      compactedCount:
+        Number.isFinite(overrides.compactedCount) && overrides.compactedCount > 0
+          ? overrides.compactedCount
+          : 0,
+      history: this._sanitizeHistoryEntries(overrides.history || [])
+    }
+  }
+
+  _loadPersistedChatState() {
+    const rawState = this.context?.globalState?.get(
+      this._getChatSessionsStateKey(),
+      null
+    )
+    if (
+      rawState &&
+      Array.isArray(rawState.sessions) &&
+      rawState.sessions.length > 0
+    ) {
+      const sessions = rawState.sessions.map((session) =>
+        this._createSessionRecord(session)
+      )
+      if (sessions.length > 0) {
+        const currentSessionId = sessions.some(
+          (session) => session.id === rawState.currentSessionId
+        )
+          ? rawState.currentSessionId
+          : sessions[0].id
+        return { sessions, currentSessionId }
+      }
+    }
+
+    const legacyHistory = this._sanitizeHistoryEntries(
+      this.context?.globalState?.get(this._getConversationStateKey(), [])
+    )
+    const defaultSession = this._createSessionRecord({
+      title: "New Chat 1",
+      history: legacyHistory
+    })
+    return {
+      sessions: [defaultSession],
+      currentSessionId: defaultSession.id
+    }
+  }
+
+  _getCurrentSession() {
+    let session = this.chatSessions.find(
+      (candidate) => candidate.id === this.currentSessionId
+    )
+    if (!session) {
+      session =
+        this.chatSessions[0] || this._createSessionRecord({ title: "New Chat 1" })
+      if (this.chatSessions.length === 0) {
+        this.chatSessions = [session]
+      }
+      this.currentSessionId = session.id
+    }
+    return session
+  }
+
+  _syncCurrentSessionReferences() {
+    const session = this._getCurrentSession()
+    this.conversationHistory = session.history
+    return session
+  }
+
+  _persistChatState() {
+    if (!this.context?.globalState) return
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_CHAT_SESSIONS)
+      .map((session) =>
+        this._createSessionRecord({
+          ...session,
+          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
+        })
+      )
+    this.chatSessions = sessions
+    if (!sessions.some((session) => session.id === this.currentSessionId)) {
+      this.currentSessionId = sessions[0]?.id || this._createSessionRecord().id
+    }
+    this.context.globalState.update(
+      this._getChatSessionsStateKey(),
+      {
+        currentSessionId: this.currentSessionId,
+        sessions
+      }
+    )
+    this.context.globalState.update(this._getConversationStateKey(), undefined)
+  }
+
+  _touchCurrentSession() {
+    const session = this._getCurrentSession()
+    session.updatedAt = Date.now()
+    return session
+  }
+
+  _condenseHistoryEntry(content, maxLength = 220) {
+    const normalized = String(content || "")
+      .replace(/```[\s\S]*?```/g, "[code block]")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (!normalized) return ""
+    return normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 3)}...`
+      : normalized
+  }
+
+  _buildHistorySummaryChunk(entries) {
+    return entries
+      .map((entry) => {
+        const condensed = this._condenseHistoryEntry(entry.content)
+        if (!condensed) return ""
+        return `- ${entry.role === "user" ? "User" : "Assistant"}: ${condensed}`
+      })
+      .filter(Boolean)
+      .join("\n")
+  }
+
+  _mergeSessionSummary(existingSummary, nextChunk) {
+    const sections = [String(existingSummary || "").trim(), String(nextChunk || "").trim()]
+      .filter(Boolean)
+      .join("\n")
+      .trim()
+    if (sections.length <= MAX_SESSION_SUMMARY_CHARS) {
+      return sections
+    }
+    return sections.slice(sections.length - MAX_SESSION_SUMMARY_CHARS)
+  }
+
+  _compactCurrentSessionHistory() {
+    const session = this._getCurrentSession()
+    if (session.history.length <= MAX_SESSION_RECENT_ENTRIES + 4) {
+      return false
+    }
+
+    const compactedEntries = session.history.slice(
+      0,
+      session.history.length - MAX_SESSION_RECENT_ENTRIES
+    )
+    if (compactedEntries.length === 0) {
+      return false
+    }
+
+    const summaryChunk = this._buildHistorySummaryChunk(compactedEntries)
+    session.summary = this._mergeSessionSummary(session.summary, summaryChunk)
+    session.compactedCount =
+      Number(session.compactedCount || 0) + compactedEntries.length
+    session.history = session.history.slice(-MAX_SESSION_RECENT_ENTRIES)
+    this.conversationHistory = session.history
+    return true
+  }
+
+  _maybeAutoTitleCurrentSession(content) {
+    const session = this._getCurrentSession()
+    const currentTitle = String(session.title || "").trim()
+    if (!/^New Chat(?: \d+)?$/i.test(currentTitle)) {
+      return
+    }
+
+    const title = this._condenseHistoryEntry(content, 42)
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .trim()
+    if (title) {
+      session.title = title
+    }
+  }
+
+  _appendConversationEntry(role, content) {
+    if (
+      (role !== "user" && role !== "assistant") ||
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      return
+    }
+
+    const session = this._touchCurrentSession()
+    session.history.push({ role, content: content.trim() })
+    if (role === "user") {
+      this._maybeAutoTitleCurrentSession(content)
+    }
+    this._compactCurrentSessionHistory()
+    this._persistChatState()
+  }
+
+  getConversationHistory() {
+    return this._getCurrentSession().history.slice()
+  }
+
+  getSessionState() {
+    const currentSession = this._syncCurrentSessionReferences()
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        compactedCount: session.compactedCount || 0
+      }))
+    return {
+      currentSessionId: currentSession.id,
+      currentSessionTitle: currentSession.title,
+      compactedCount: currentSession.compactedCount || 0,
+      sessions,
+      history: currentSession.history.slice()
+    }
+  }
+
+  createSession(title = "") {
+    const session = this._createSessionRecord({
+      title: title || this._buildDefaultSessionTitle()
+    })
+    this.chatSessions = [session].concat(
+      this.chatSessions.filter((candidate) => candidate.id !== session.id)
+    )
+    this.currentSessionId = session.id
+    this._syncCurrentSessionReferences()
+    this._persistChatState()
+    return this.getSessionState()
+  }
+
+  switchSession(sessionId) {
+    if (!sessionId) {
+      return this.getSessionState()
+    }
+    const sessionExists = this.chatSessions.some(
+      (session) => session.id === sessionId
+    )
+    if (!sessionExists) {
+      return this.getSessionState()
+    }
+    this.currentSessionId = sessionId
+    this._syncCurrentSessionReferences()
+    this._persistChatState()
+    return this.getSessionState()
+  }
+
+  _buildPromptHistoryContext(isTabQuestion = false) {
+    const session = this._getCurrentSession()
+    const parts = []
+    if (session.summary) {
+      parts.push(`Conversation summary:\n${session.summary}`)
+    }
+
+    const recentEntries = isTabQuestion
+      ? session.history.filter((entry) => entry.role === "user").slice(-2, -1)
+      : session.history.slice(-MAX_HISTORY_ENTRIES, -1)
+    const historyText = recentEntries
+      .map(
+        (entry) =>
+          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
+      )
+      .join("\n\n")
+    if (historyText) {
+      parts.push(historyText)
+    }
+
+    return parts.join("\n\n")
+  }
+
+  _invalidateContextCaches() {
+    this._preparedWorkspaceContextCache = null
+    this._relevantFileCache.clear()
   }
 
   getConfig() {
@@ -101,7 +473,7 @@ class AIAgent {
 
     const genericModel = String(config.get("model", "") || "").trim()
     const nvidiaModel = String(
-      config.get("nvidiaModel", "meta/llama-3.1-8b-instruct") || ""
+      config.get("nvidiaModel", "minimaxai/minimax-m2.7") || ""
     ).trim()
     const stateModel = this.context
       ? this.context.globalState.get("codeJanitor.ai.model", "")
@@ -118,14 +490,9 @@ class AIAgent {
         ? this._sanitizeNvidiaModel(normalizedStateModel)
         : normalizedStateModel
     const model =
-      normalizedStateProvider &&
-      normalizedConfigProvider &&
-      normalizedStateProvider !== normalizedConfigProvider &&
-      stateAwareModel
-        ? stateAwareModel
-        : preferredConfigModel ||
-          stateAwareModel ||
-          this._getDefaultModelForProvider(provider)
+      stateAwareModel ||
+      preferredConfigModel ||
+      this._getDefaultModelForProvider(provider)
 
     const rawOllamaUrl = config.get("ollamaUrl", "http://localhost:11434")
     const ollamaUrl = this._normalizeOllamaUrl(rawOllamaUrl)
@@ -140,7 +507,7 @@ class AIAgent {
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
       nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
-      timeout: config.get("timeout", 90_000)
+      timeout: config.get("timeout", 300_000)
     }
   }
   
@@ -148,29 +515,50 @@ class AIAgent {
     if (provider === "groq") return "llama-3.1-8b-instant"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
-    if (provider === "nvidia") return "meta/llama-3.1-8b-instruct"
+    if (provider === "nvidia") return "minimaxai/minimax-m2.7"
     return "qwen2.5-coder:1.5b"
+  }
+
+  _normalizeModelForProvider(provider, model) {
+    if (provider === "nvidia") {
+      return this._sanitizeNvidiaModel(model)
+    }
+
+    const trimmedModel = typeof model === "string" ? model.trim() : ""
+    const providerModels = MODELS_BY_PROVIDER[provider]
+    if (!Array.isArray(providerModels) || providerModels.length === 0) {
+      return trimmedModel || this._getDefaultModelForProvider(provider)
+    }
+
+    if (providerModels.includes(trimmedModel)) {
+      return trimmedModel
+    }
+
+    return providerModels[0]
   }
 
   _sanitizeNvidiaModel(model) {
     const value = typeof model === "string" ? model.trim() : ""
-    if (!value) return "meta/llama-3.1-8b-instruct"
+    if (!value) return "minimaxai/minimax-m2.7"
+    if (NVIDIA_MODEL_ALIASES.has(value)) {
+      return NVIDIA_MODEL_ALIASES.get(value)
+    }
     if (NVIDIA_MODELS.has(value)) return value
     if (
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
         value
       )
     ) {
-      return "meta/llama-3.1-8b-instruct"
+      return "minimaxai/minimax-m2.7"
     }
-    return "meta/llama-3.1-8b-instruct"
+    return "minimaxai/minimax-m2.7"
   }
 
   _resolveConfiguredModel(provider, genericModel, nvidiaModel) {
     if (provider === "nvidia") {
       return this._sanitizeNvidiaModel(nvidiaModel || genericModel)
     }
-    return genericModel || this._getDefaultModelForProvider(provider)
+    return this._normalizeModelForProvider(provider, genericModel)
   }
 
   _normalizeOllamaUrl(url) {
@@ -215,7 +603,18 @@ class AIAgent {
   }
 
   async _prepareRuntimeConfig(config, reportStatus) {
-    if (!config || config.provider !== "ollama") {
+    if (!config) {
+      return { ...config }
+    }
+
+    if (config.provider === "nvidia") {
+      return {
+        ...config,
+        timeout: Math.max(config.timeout || 0, 180_000)
+      }
+    }
+
+    if (config.provider !== "ollama") {
       return { ...config }
     }
 
@@ -234,7 +633,7 @@ class AIAgent {
     return {
       ...config,
       model: resolvedModel,
-      timeout: Math.max(config.timeout || 0, 180_000)
+      timeout: Math.max(config.timeout || 0, 300_000)
     }
   }
 
@@ -261,7 +660,7 @@ class AIAgent {
         return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
       }
       if (/\b404\b|page not found|not found/i.test(message)) {
-        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxi/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
+        return `NVIDIA error: ${message}. This usually means the provider was pointing at an old endpoint or invalid model. Try minimaxai/minimax-m2.7 or meta/llama-3.1-8b-instruct.`
       }
       if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
         return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`
@@ -277,10 +676,61 @@ class AIAgent {
     return `AI error: ${message}`
   }
 
+  _getLatencyProfile(config, mode = "fast", intent = "general") {
+    const resolvedModel =
+      config?.provider === "nvidia"
+        ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+        : String(config?.model || "").trim()
+    const profile = {
+      maxTokens: mode === "deep" ? 4608 : mode === "heavy" ? 3072 : 1024,
+      relevantFileCount: MAX_RELEVANT_FILES,
+      fileSnippetChars: MAX_FILE_SNIPPET,
+      contextChars: MAX_CONTEXT_CHARS,
+      repoContextPolicy: "normal"
+    }
+
+    if ((mode === "heavy" || mode === "deep") && intent === "create") {
+      profile.maxTokens = 8192
+    }
+
+    if (config?.provider === "nvidia" && mode === "fast") {
+      profile.maxTokens = 640
+      profile.relevantFileCount = 2
+      profile.fileSnippetChars = 700
+      profile.contextChars = 3500
+      profile.repoContextPolicy = "explicit"
+    }
+
+    if (
+      config?.provider === "nvidia" &&
+      resolvedModel === "meta/llama-3.1-70b-instruct"
+    ) {
+      if (mode === "fast") {
+        profile.maxTokens = 768
+        profile.relevantFileCount = 2
+        profile.fileSnippetChars = 850
+        profile.contextChars = 4200
+        profile.repoContextPolicy = "explicit"
+      } else if (mode === "heavy") {
+        profile.maxTokens = intent === "create" ? 4096 : 2304
+        profile.relevantFileCount = 3
+        profile.fileSnippetChars = 950
+        profile.contextChars = 5200
+      } else if (mode === "deep") {
+        profile.maxTokens = intent === "create" ? 8192 : 4608
+        profile.relevantFileCount = 3
+        profile.fileSnippetChars = 1100
+        profile.contextChars = 6500
+      }
+    }
+
+    return profile
+  }
+
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
-    const isUnlimited = mode === "heavy" && intent === "create"
-    // Increased token limits for Arduino IDE to prevent truncated responses
-    const maxTokens = isUnlimited ? 8192 : mode === "heavy" ? 4096 : 2048
+    const isUnlimited = mode === "deep" && intent === "create"
+    const latencyProfile = this._getLatencyProfile(config, mode, intent)
+    const maxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens
 
     // Split prompt into system + user parts using unique markers
     const SYS_END = "\n\n### USER_MESSAGE ###\n"
@@ -339,8 +789,10 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: maxTokens,
+          top_p: 0.9,
+          frequency_penalty: 0.2
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -370,8 +822,9 @@ class AIAgent {
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: 0.2,
+          max_tokens: maxTokens,
+          top_p: 0.9
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -387,6 +840,34 @@ class AIAgent {
     }
     if (config.provider === "nvidia") {
       const maskedKey = config.nvidiaApiKey ? `${config.nvidiaApiKey.slice(0, 8)}...${config.nvidiaApiKey.slice(-4)}` : "(none)";
+      const resolvedModel = this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+      const isMinimax = resolvedModel === "minimaxai/minimax-m2.7"
+      const isLlama70b = resolvedModel === "meta/llama-3.1-70b-instruct"
+      const isNemotron =
+        resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      const nvidiaMaxTokens = isUnlimited ? 8192 : maxTokens
+      const minimaxOptimizations = isMinimax
+        ? {
+            top_p: 0.8,
+            frequency_penalty: 0.3,
+            presence_penalty: 0.1
+          }
+        : {}
+      const nemotronOptimizations = isNemotron
+        ? {
+            top_p: 0.95,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0
+          }
+        : {}
+      const llama70bOptimizations = isLlama70b
+        ? {
+            top_p: 0.72,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0
+          }
+        : {}
+
       console.log(`[CodeJanitor] Using NVIDIA API key: ${maskedKey}`);
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -395,21 +876,28 @@ class AIAgent {
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
+          model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: 0.05,
-          max_tokens: maxTokens
+          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
+          max_tokens: nvidiaMaxTokens,
+          ...minimaxOptimizations,
+          ...llama70bOptimizations,
+          ...nemotronOptimizations
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
           try {
-            return (
+            const token =
               JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
-            )
+            if (!token) return null
+            if (token.includes("<think>") || token.includes("</think>")) {
+              return null
+            }
+            return token
           } catch {
             return null
           }
@@ -428,10 +916,11 @@ class AIAgent {
         ],
         stream: true,
         options: {
-          temperature: 0.05,
-          num_predict: mode === "heavy" ? -1 : 1024,
-          top_k: 10,
-          top_p: 0.7
+          temperature: 0.2,
+          num_predict: mode === "deep" ? -1 : mode === "heavy" ? 2048 : 1024,
+          top_k: 15,  // Reduced from 20 for faster sampling
+          top_p: 0.85,  // Reduced from 0.9 for faster sampling
+          repeat_penalty: 1.15  // Increased from 1.1 for less repetition
         }
       }),
       parseChunk: (line) => {
@@ -472,6 +961,66 @@ class AIAgent {
     return controller.signal
   }
 
+  _createIdleTimeoutError(timeoutMs) {
+    const error = new Error(
+      `Response stream was idle for more than ${timeoutMs}ms`
+    )
+    error.name = "TimeoutError"
+    error.code = "STREAM_IDLE_TIMEOUT"
+    return error
+  }
+
+  _readWithIdleTimeout(reader, timeoutMs) {
+    if (!(timeoutMs > 0)) {
+      return reader.read()
+    }
+
+    return Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        const timer = setTimeout(() => {
+          clearTimeout(timer)
+          reject(this._createIdleTimeoutError(timeoutMs))
+        }, timeoutMs)
+      })
+    ])
+  }
+
+  async _fetchWithConnectTimeout(url, options = {}, abortSignal, timeoutMs) {
+    if (!(timeoutMs > 0)) {
+      return fetch(url, {
+        ...options,
+        signal: abortSignal || options.signal
+      })
+    }
+
+    const controller = new AbortController()
+    const externalSignal = abortSignal || options.signal || null
+    const onAbort = () => controller.abort()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timer)
+        controller.abort()
+      } else {
+        externalSignal.addEventListener("abort", onAbort, { once: true })
+      }
+    }
+
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: controller.signal
+      })
+    } finally {
+      clearTimeout(timer)
+      if (externalSignal) {
+        externalSignal.removeEventListener("abort", onAbort)
+      }
+    }
+  }
+
   async _buildHttpError(response, prefix) {
     let details = ""
     try {
@@ -507,6 +1056,10 @@ class AIAgent {
         ? options.streamCallback
         : null
     const abortSignal = options.abortSignal || null
+    const idleTimeoutMs =
+      Number.isFinite(options.idleTimeoutMs) && options.idleTimeoutMs > 0
+        ? options.idleTimeoutMs
+        : 0
     const shouldStop =
       typeof options.shouldStop === "function" ? options.shouldStop : null
 
@@ -544,7 +1097,10 @@ class AIAgent {
         break
       }
 
-      const { done, value } = await reader.read()
+      const { done, value } = await this._readWithIdleTimeout(
+        reader,
+        idleTimeoutMs
+      )
       if (done) {
         streamDone = true
         pending += decoder.decode()
@@ -594,6 +1150,7 @@ class AIAgent {
     this.codebaseContext.clear()
     this.scanVersion += 1
     this.workspaceRoot = workspaceFolder
+    this._invalidateContextCaches()
 
     const files = await this._getAllFiles(workspaceFolder)
     for (const file of files) {
@@ -633,13 +1190,103 @@ class AIAgent {
     return this.codebaseContext.size
   }
 
+  _getOpenDocumentStateKey(workspaceFolder) {
+    return vscode.workspace.textDocuments
+      .filter((document) => document?.uri?.scheme === "file")
+      .map((document) => {
+        const filePath = this._formatContextPath(document.fileName, workspaceFolder)
+        return `${filePath}:${document.version}:${document.isDirty ? 1 : 0}`
+      })
+      .sort()
+      .join("|")
+  }
+
+  _buildPreparedWorkspaceContextKey(workspaceFolder) {
+    const editorState = this._getEditorState(workspaceFolder)
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor
+    const activeFile = this._formatContextPath(
+      activeEditor?.document?.fileName || "",
+      workspaceFolder
+    )
+    const activeVersion = activeEditor?.document?.version || 0
+    const activeDirty = activeEditor?.document?.isDirty ? 1 : 0
+    return [
+      workspaceFolder,
+      this.scanVersion,
+      activeFile,
+      activeVersion,
+      activeDirty,
+      editorState.activeTabPath || "",
+      editorState.visibleTabs.join(","),
+      editorState.allOpenTabs.join(","),
+      this._getOpenDocumentStateKey(workspaceFolder)
+    ].join("::")
+  }
+
+  _getPreparedWorkspaceContext(workspaceFolder) {
+    if (!workspaceFolder) {
+      return {
+        cacheHit: false,
+        editorState: this._getEditorState(workspaceFolder),
+        activeFileContext: "",
+        arduinoSketchContext: "",
+        editorStateContext: ""
+      }
+    }
+
+    const cacheKey = this._buildPreparedWorkspaceContextKey(workspaceFolder)
+    if (
+      this._preparedWorkspaceContextCache &&
+      this._preparedWorkspaceContextCache.key === cacheKey
+    ) {
+      return {
+        cacheHit: true,
+        ...this._preparedWorkspaceContextCache.value
+      }
+    }
+
+    const editorState = this._getEditorState(workspaceFolder)
+    const value = {
+      editorState,
+      activeFileContext: this._getActiveFileContext(workspaceFolder),
+      arduinoSketchContext: this._buildArduinoSketchContext(workspaceFolder),
+      editorStateContext: this._buildEditorStateContext(editorState)
+    }
+    this._preparedWorkspaceContextCache = {
+      key: cacheKey,
+      value
+    }
+    return {
+      cacheHit: false,
+      ...value
+    }
+  }
+
+  _buildRelevantFilesCacheKey(query, workspaceFolder, options = {}) {
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor
+    const activePath =
+      activeEditor && workspaceFolder
+        ? this._formatContextPath(activeEditor.document.fileName, workspaceFolder)
+        : ""
+    return [
+      workspaceFolder || "",
+      this.scanVersion,
+      activePath,
+      Number.isFinite(options.maxResults) ? options.maxResults : MAX_RELEVANT_FILES,
+      Number.isFinite(options.snippetChars) ? options.snippetChars : MAX_FILE_SNIPPET,
+      this._extractKeywords(query).join(","),
+      this._extractPathHints(query).join(",")
+    ].join("::")
+  }
+
   async prepareWorkspaceContext(userMessage, workspaceFolder, options = {}) {
     if (!workspaceFolder) {
       return {
         available: false,
         indexedFiles: 0,
         relevantFiles: [],
-        activeFile: null
+        activeFile: null,
+        cacheHit: false
       }
     }
 
@@ -647,17 +1294,18 @@ class AIAgent {
       workspaceFolder,
       !!options.force
     )
+    const preparedContext = this._getPreparedWorkspaceContext(workspaceFolder)
     const relevantFiles = this._findRelevantFiles(
       userMessage || "",
       workspaceFolder
     ).map((file) => file.path.replace(/\\/g, "/"))
-    const editorState = this._getEditorState(workspaceFolder)
 
     return {
       available: true,
       indexedFiles,
       relevantFiles,
-      activeFile: editorState.activeTabPath || null
+      activeFile: preparedContext.editorState.activeTabPath || null,
+      cacheHit: preparedContext.cacheHit
     }
   }
 
@@ -803,7 +1451,12 @@ class AIAgent {
   ) {
     // IMPORTANT: Always get fresh config to respect provider switches
     const config = this.getConfig()
-    const mode = options.mode === "heavy" ? "heavy" : "fast"
+    const mode =
+      options.mode === "deep"
+        ? "deep"
+        : options.mode === "heavy"
+          ? "heavy"
+          : "fast"
     const forcedIntent =
       typeof options.intentOverride === "string" && options.intentOverride.trim()
         ? options.intentOverride.trim().toLowerCase()
@@ -811,18 +1464,45 @@ class AIAgent {
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null
     const runtimeConfig = await this._prepareRuntimeConfig(config, reportStatus)
+    const earlyIntent = forcedIntent || this._detectIntent(userMessage)
+    const latencyProfile = this._getLatencyProfile(
+      runtimeConfig,
+      mode,
+      earlyIntent
+    )
     if (!runtimeConfig.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
     }
+    if (runtimeConfig.provider === "groq" && !runtimeConfig.groqApiKey) {
+      return {
+        error:
+          "Groq is selected but no API key is saved. Save a Groq key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "openrouter" && !runtimeConfig.openrouterApiKey) {
+      return {
+        error:
+          "OpenRouter is selected but no API key is saved. Save an OpenRouter key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "anthropic" && !runtimeConfig.anthropicApiKey) {
+      return {
+        error:
+          "Anthropic is selected but no API key is saved. Save an Anthropic key or switch the provider to Ollama."
+      }
+    }
+    if (runtimeConfig.provider === "nvidia" && !runtimeConfig.nvidiaApiKey) {
+      return {
+        error:
+          "NVIDIA is selected but no API key is saved. Save an NVIDIA key or switch the provider to Ollama."
+      }
+    }
 
-    this.conversationHistory.push({ role: "user", content: userMessage })
+    this._appendConversationEntry("user", userMessage)
     const isTabQuestion = this._isTabQuestion(userMessage)
 
-    // Detect intent early for knowledge graph decision
-    const earlyIntent = forcedIntent || this._detectIntent(userMessage)
-
-    // Check for knowledge graph only for code-related intents
-    const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent)
+    // Arduino IDE chat does not use Graphify context.
+    const knowledgeGraphContext = ""
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
@@ -853,7 +1533,7 @@ class AIAgent {
     ) {
       const reply = `Today is ${new Date().toDateString()}.`
       if (streamCallback) streamCallback(reply)
-      this.conversationHistory.push({ role: "assistant", content: reply })
+      this._appendConversationEntry("assistant", reply)
       return { text: reply, actions: [] }
     }
     if (
@@ -863,7 +1543,7 @@ class AIAgent {
     ) {
       const reply = `Current date and time: ${new Date().toString()}.`
       if (streamCallback) streamCallback(reply)
-      this.conversationHistory.push({ role: "assistant", content: reply })
+      this._appendConversationEntry("assistant", reply)
       return { text: reply, actions: [] }
     }
 
@@ -887,26 +1567,37 @@ class AIAgent {
     let prompt
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...")
-      const activeFileContext = this._getActiveFileContext(effectiveWorkspace)
-      const editorState = this._getEditorState(effectiveWorkspace)
+      const preparedContext = this._getPreparedWorkspaceContext(
+        effectiveWorkspace
+      )
+      const activeFileContext = preparedContext.activeFileContext
+      const arduinoSketchContext = preparedContext.arduinoSketchContext
+      const editorState = preparedContext.editorState
       let fastContext = ""
       if (
         effectiveWorkspace &&
-        this._shouldUseRepoContextInFastMode(userMessage)
+        this._shouldUseRepoContextInFastMode(
+          userMessage,
+          runtimeConfig.provider
+        )
       ) {
         reportStatus?.("Scanning relevant files for fast mode...")
         await this.ensureCodebaseScanned(effectiveWorkspace)
         const relevantFiles = this._findRelevantFiles(
           userMessage,
-          effectiveWorkspace
+          effectiveWorkspace,
+          {
+            maxResults: latencyProfile.relevantFileCount,
+            snippetChars: latencyProfile.fileSnippetChars
+          }
         )
-        fastContext = this._buildRelevantFileContext(relevantFiles)
+        fastContext = this._buildRelevantFileContext(
+          relevantFiles,
+          latencyProfile.contextChars
+        )
       }
-      const history = this.conversationHistory
-        .slice(-4, -1)
-        .map((e) => `${e.role === "user" ? "User" : "Assistant"}: ${e.content}`)
-        .join("\n\n")
-      const intent = forcedIntent || this._detectIntent(userMessage)
+      const history = this._buildPromptHistoryContext(false)
+      const intent = earlyIntent
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -918,23 +1609,28 @@ class AIAgent {
           : null
       const systemInstruction = this._buildSystemInstruction(
         intent,
-        effectiveWorkspace
+        effectiveWorkspace,
+        this.showThinking
       )
       const isCreateIntent = intent === "create"
       const isEditIntent =
         intent === "edit" || intent === "debug" || intent === "refactor"
       const contextToUse = isCreateIntent ? "" : fastContext
       const activeCtx = isCreateIntent ? "" : activeFileContext
+      const sketchCtx = isCreateIntent ? "" : arduinoSketchContext
       const editHint =
         isEditIntent && activeFileContext
           ? "\nOutput the complete updated file using FILE: path then a code block."
           : ""
-      prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${sketchCtx ? `\n\n${sketchCtx}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`
     } else {
-      const editorState = this._getEditorState(effectiveWorkspace)
+      const preparedContext = this._getPreparedWorkspaceContext(
+        effectiveWorkspace
+      )
+      const editorState = preparedContext.editorState
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -945,7 +1641,7 @@ ${resolvedMessage}`
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0
 
-      const intent = forcedIntent || this._detectIntent(userMessage)
+      const intent = earlyIntent
 
       reportStatus?.(
         isScopedActiveFileEdit
@@ -966,11 +1662,16 @@ ${resolvedMessage}`
             .map(([p, d]) => ({
               path: p.replace(/\\/g, "/"),
               score: 1,
-              content: d.content.slice(0, MAX_FILE_SNIPPET)
+              content: this._extractSmartSnippet(
+                d.content,
+                MAX_FILE_SNIPPET,
+                p
+              )
             }))
         : this._findRelevantFiles(userMessage, effectiveWorkspace)
-      const activeFileContext = this._getActiveFileContext(effectiveWorkspace)
-      const editorStateContext = this._buildEditorStateContext(editorState)
+      const activeFileContext = preparedContext.activeFileContext
+      const arduinoSketchContext = preparedContext.arduinoSketchContext
+      const editorStateContext = preparedContext.editorStateContext
       const openTabSnippetContext = isScopedActiveFileEdit
         ? this._getTargetSnippetContext(
             editableTargets.paths,
@@ -987,7 +1688,7 @@ ${resolvedMessage}`
       prompt = this._buildPrompt(
         resolvedMessage,
         relevantFiles,
-        activeFileContext,
+        [arduinoSketchContext, activeFileContext].filter(Boolean).join("\n\n"),
         editorStateContext,
         openTabSnippetContext,
         isTabQuestion,
@@ -1013,30 +1714,71 @@ ${resolvedMessage}`
         mode,
         reqIntent
       )
+      reportStatus?.(
+        `Request ready: provider=${runtimeConfig.provider}, model=${runtimeConfig.model}`
+      )
       console.log(
         `[CodeJanitor] Sending request to: ${reqOpts.url} with provider: ${runtimeConfig.provider}`
       )
-      const response = await fetch(reqOpts.url, {
-        method: "POST",
-        headers: reqOpts.headers,
-        signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-        body: reqOpts.body
-      })
+      console.log(`[CodeJanitor] Request headers:`, JSON.stringify(reqOpts.headers, null, 2))
+      console.log(`[CodeJanitor] Request body preview:`, reqOpts.body.substring(0, 200))
+      
+      const response = await this._fetchWithConnectTimeout(
+        reqOpts.url,
+        {
+          method: "POST",
+          headers: reqOpts.headers,
+          body: reqOpts.body
+        },
+        abortSignal,
+        runtimeConfig.timeout
+      )
 
       if (!response.ok) {
+        console.error(`[CodeJanitor] HTTP Error - Status: ${response.status}, StatusText: ${response.statusText}`);
+        const errorDetails = await this._buildHttpError(
+          response,
+          "AI request failed with status"
+        )
+        console.error(`[CodeJanitor] Error details:`, errorDetails);
+        if (
+          runtimeConfig.provider === "nvidia" &&
+          response.status === 400 &&
+          /max.*token|token.*limit|context.*length|too.*long/i.test(
+            errorDetails
+          )
+        ) {
+          throw new Error(
+            `NVIDIA NIM hit a token/context limit. Try a smaller request, Heavy mode, or a different NVIDIA model.\n\nOriginal error: ${errorDetails}`
+          )
+        }
         throw new Error(
-          await this._buildHttpError(response, "AI request failed with status")
+          errorDetails
         )
       }
+      reportStatus?.(`AI response headers received: HTTP ${response.status}.`)
+      console.log(`[CodeJanitor] Response OK - Status: ${response.status}, Content-Type: ${response.headers.get('content-type')}`);
 
       let fullResponse = ""
       let repetitionDetected = false
+      let sawFirstToken = false
 
       fullResponse = await this._readResponseText(
         response,
         (line) => {
           const token = reqOpts.parseChunk(line)
-          if (token === null) return null
+          if (token === null) {
+            // Log first few null responses to debug parsing
+            if (fullResponse.length < 100) {
+              console.log(`[CodeJanitor] Null token from line:`, line.substring(0, 100));
+            }
+            return null
+          }
+          if (!sawFirstToken) {
+            sawFirstToken = true
+            reportStatus?.("First response token received.")
+            console.log(`[CodeJanitor] First token received:`, token.substring(0, 50));
+          }
           const nextResponse = fullResponse + token
           if (
             shouldCheckRepetition &&
@@ -1062,17 +1804,29 @@ ${resolvedMessage}`
       if (repetitionDetected && !fullResponse) {
         fullResponse = this._getEmptyResponseFallback(mode)
       }
+      if (!sawFirstToken) {
+        console.error(`[CodeJanitor] No tokens received! Full response length: ${fullResponse.length}`);
+        console.error(`[CodeJanitor] Raw response preview:`, fullResponse.substring(0, 500));
+        reportStatus?.(
+          "No streamed response tokens were received before completion."
+        )
+      } else {
+        console.log(`[CodeJanitor] Response complete. Total length: ${fullResponse.length} chars`);
+      }
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
         : fullResponse || this._getEmptyResponseFallback(mode)
-      let parsedResponse = this._parseResponse(finalText)
+      const cleanedFinalText = finalText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .trim()
+      let parsedResponse = this._parseResponse(cleanedFinalText)
       const finalIntent = forcedIntent || this._detectIntent(userMessage)
       const requiresFileActions = this._shouldForceStructuredEdit(
         finalIntent,
         userMessage
       )
-      let assistantText = finalText
+      let assistantText = cleanedFinalText || finalText
       let firstRetryText = ""
 
       if (
@@ -1094,12 +1848,16 @@ ${resolvedMessage}`
           mode,
           "edit"
         )
-        const retryResponse = await fetch(retryOpts.url, {
-          method: "POST",
-          headers: retryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-          body: retryOpts.body
-        })
+        const retryResponse = await this._fetchWithConnectTimeout(
+          retryOpts.url,
+          {
+            method: "POST",
+            headers: retryOpts.headers,
+            body: retryOpts.body
+          },
+          abortSignal,
+          runtimeConfig.timeout
+        )
 
         if (!retryResponse.ok) {
           throw new Error(
@@ -1136,12 +1894,16 @@ ${resolvedMessage}`
           mode,
           "edit"
         )
-        const fileOnlyRetryResponse = await fetch(fileOnlyRetryOpts.url, {
-          method: "POST",
-          headers: fileOnlyRetryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, runtimeConfig.timeout),
-          body: fileOnlyRetryOpts.body
-        })
+        const fileOnlyRetryResponse = await this._fetchWithConnectTimeout(
+          fileOnlyRetryOpts.url,
+          {
+            method: "POST",
+            headers: fileOnlyRetryOpts.headers,
+            body: fileOnlyRetryOpts.body
+          },
+          abortSignal,
+          runtimeConfig.timeout
+        )
 
         if (!fileOnlyRetryResponse.ok) {
           throw new Error(
@@ -1168,25 +1930,35 @@ ${resolvedMessage}`
       ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change."
-        this.conversationHistory.push({
-          role: "assistant",
-          content: assistantText || noEditsMessage
-        })
+        const manualFallbackText = this._selectBestManualEditFallbackText([
+          assistantText,
+          firstRetryText,
+          cleanedFinalText,
+          finalText
+        ])
+        const responseText = manualFallbackText || noEditsMessage
+        const warningText = manualFallbackText
+          ? `${noEditsMessage} Copy/paste fallback code was provided in the response.`
+          : noEditsMessage
+        this._appendConversationEntry(
+          "assistant",
+          responseText
+        )
         return {
-          text: noEditsMessage,
+          text: responseText,
           actions: [],
-          warnings: [noEditsMessage]
+          warnings: [warningText],
+          manualFallback: Boolean(manualFallbackText)
         }
       }
 
-      this.conversationHistory.push({
-        role: "assistant",
-        content:
-          assistantText ||
+      this._appendConversationEntry(
+        "assistant",
+        assistantText ||
           (repetitionDetected
             ? `${fullResponse}\n\n[stopped repetitive output]`
             : fullResponse || this._getEmptyResponseFallback(mode))
-      })
+      )
 
       return parsedResponse
     } catch (error) {
@@ -1313,6 +2085,115 @@ ${resolvedMessage}`
       : relativePath.replace(/\\/g, "/")
   }
 
+  _isArduinoSketchFile(filePath) {
+    return /\.ino$/i.test(filePath || "")
+  }
+
+  _getOpenDocumentsByPath() {
+    return new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.fileName,
+        document
+      ])
+    )
+  }
+
+  _sortArduinoSketchPaths(sketchPaths) {
+    const normalized = sketchPaths
+      .map((filePath) => filePath.replace(/\\/g, "/"))
+      .sort((a, b) => a.localeCompare(b))
+
+    if (normalized.length <= 1) {
+      return normalized
+    }
+
+    const sketchDir = path.posix.dirname(normalized[0])
+    const sketchName = path.posix.basename(sketchDir)
+    const primaryFile = `${sketchDir}/${sketchName}.ino`.toLowerCase()
+
+    return normalized.sort((a, b) => {
+      const aPrimary = a.toLowerCase() === primaryFile ? 1 : 0
+      const bPrimary = b.toLowerCase() === primaryFile ? 1 : 0
+      if (bPrimary !== aPrimary) return bPrimary - aPrimary
+      return a.localeCompare(b)
+    })
+  }
+
+  _getActiveArduinoSketchPaths(workspaceFolder) {
+    const activeEditor =
+      vscode.window.activeTextEditor || this._lastActiveEditor
+    const activePath = activeEditor?.document?.fileName || ""
+
+    if (!this._isArduinoSketchFile(activePath)) {
+      return []
+    }
+
+    const relativeActivePath = this._toWorkspaceRelativePath(
+      activePath,
+      workspaceFolder
+    )
+    if (!relativeActivePath) {
+      return []
+    }
+
+    const sketchDir = path.posix.dirname(relativeActivePath.replace(/\\/g, "/"))
+    const sketchPaths = []
+
+    for (const relativePath of this.codebaseContext.keys()) {
+      const normalizedPath = relativePath.replace(/\\/g, "/")
+      if (
+        this._isArduinoSketchFile(normalizedPath) &&
+        path.posix.dirname(normalizedPath) === sketchDir
+      ) {
+        sketchPaths.push(normalizedPath)
+      }
+    }
+
+    if (!sketchPaths.includes(relativeActivePath.replace(/\\/g, "/"))) {
+      sketchPaths.push(relativeActivePath.replace(/\\/g, "/"))
+    }
+
+    return this._sortArduinoSketchPaths(sketchPaths)
+  }
+
+  _buildArduinoSketchContext(workspaceFolder, maxChars = 4_500) {
+    const sketchPaths = this._getActiveArduinoSketchPaths(workspaceFolder)
+    if (sketchPaths.length <= 1) {
+      return ""
+    }
+
+    const openDocuments = this._getOpenDocumentsByPath()
+    let context = `Active Arduino sketch tabs (${sketchPaths.length} files):\n`
+
+    for (const sketchPath of sketchPaths) {
+      const fullPath = workspaceFolder
+        ? path.join(workspaceFolder, sketchPath)
+        : sketchPath
+      const openDocument = openDocuments.get(fullPath)
+      const fileData = this.codebaseContext.get(sketchPath)
+      const content = openDocument
+        ? openDocument.getText()
+        : fileData?.content || ""
+
+      if (!content) {
+        continue
+      }
+
+      const snippet = this._extractSmartSnippet(
+        content,
+        MAX_FILE_SNIPPET,
+        sketchPath
+      )
+      const block = `Sketch file: ${sketchPath}${openDocument?.isDirty ? " (unsaved changes)" : ""}\n\`\`\`cpp\n${snippet}\n\`\`\`\n\n`
+      if ((context + block).length > maxChars) {
+        break
+      }
+      context += block
+    }
+
+    return context.trim() ? `${context}\n` : ""
+  }
+
   _buildDocumentContext(label, document, workspaceFolder, maxChars = 1_200) {
     if (!document) {
       return ""
@@ -1320,9 +2201,81 @@ ${resolvedMessage}`
 
     const filePath = document.isUntitled ? null : document.fileName
     const displayPath = this._formatContextPath(filePath, workspaceFolder)
-    const content = document.getText().slice(0, maxChars)
+    const content = this._extractSmartSnippet(
+      document.getText(),
+      maxChars,
+      displayPath
+    )
 
     return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``
+  }
+
+  _extractSmartSnippet(content, maxChars = MAX_FILE_SNIPPET, filePath = "") {
+    const text = typeof content === "string" ? content : ""
+    const normalizedPath = (filePath || "").replace(/\\/g, "/").toLowerCase()
+
+    // Arduino IDE should prefer full sketch files so core functions like
+    // setup()/loop() are never hidden below an arbitrary snippet boundary.
+    if (normalizedPath.endsWith(".ino")) {
+      return text
+    }
+
+    if (text.length <= maxChars) {
+      return text
+    }
+
+    const ext = path.extname(normalizedPath)
+    const isArduinoLike =
+      ext === ".ino" || ext === ".cpp" || ext === ".h" || ext === ".hpp"
+
+    const segments = []
+    const addSegment = (label, start, end) => {
+      const safeStart = Math.max(0, start)
+      const safeEnd = Math.min(text.length, end)
+      if (safeEnd <= safeStart) return
+      const body = text.slice(safeStart, safeEnd).trim()
+      if (!body) return
+      const segment = label ? `// ${label}\n${body}` : body
+      if (!segments.includes(segment)) {
+        segments.push(segment)
+      }
+    }
+
+    addSegment("File start", 0, Math.min(text.length, Math.floor(maxChars * 0.45)))
+
+    if (isArduinoLike) {
+      const patterns = [
+        { label: "setup()", regex: /\bvoid\s+setup\s*\([^)]*\)\s*\{/i },
+        { label: "loop()", regex: /\bvoid\s+loop\s*\([^)]*\)\s*\{/i },
+        {
+          label: "Arduino command handler",
+          regex:
+            /\b(?:void|bool|int|long|float|double|String)\s+(?:applyCommand|handleCommand|getDistanceCM|updateWiggle|updateNod|updateThink)\s*\([^)]*\)\s*\{/i
+        }
+      ]
+
+      const windowSize = Math.max(320, Math.floor(maxChars * 0.3))
+      for (const pattern of patterns) {
+        const match = text.match(pattern.regex)
+        if (!match || typeof match.index !== "number") continue
+        addSegment(
+          pattern.label,
+          Math.max(0, match.index - 80),
+          Math.min(text.length, match.index + windowSize)
+        )
+      }
+    }
+
+    let combined = segments.join("\n\n")
+    if (!combined) {
+      combined = text.slice(0, maxChars)
+    }
+
+    if (combined.length > maxChars) {
+      combined = combined.slice(0, maxChars)
+    }
+
+    return combined
   }
 
   _formatFileList(label, filePaths) {
@@ -1422,12 +2375,7 @@ ${resolvedMessage}`
 
   _getOpenTabSnippetContext(openTabPaths, workspaceFolder) {
     const snippetBlocks = []
-    const openDocuments = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.fileName,
-        document
-      ])
-    )
+    const openDocuments = this._getOpenDocumentsByPath()
 
     for (const tabPath of openTabPaths) {
       let snippet = ""
@@ -1449,9 +2397,10 @@ ${resolvedMessage}`
           continue
         }
 
-        snippet = `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
-          0,
-          MAX_FILE_SNIPPET
+        snippet = `Open tab content: ${tabPath}\n\`\`\`\n${this._extractSmartSnippet(
+          fileData.content,
+          MAX_FILE_SNIPPET,
+          tabPath
         )}\n\`\`\``
       }
 
@@ -1475,12 +2424,7 @@ ${resolvedMessage}`
     }
 
     const snippetBlocks = []
-    const openDocuments = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.fileName,
-        document
-      ])
-    )
+    const openDocuments = this._getOpenDocumentsByPath()
 
     for (const targetPath of targetPaths) {
       let snippet = ""
@@ -1502,9 +2446,10 @@ ${resolvedMessage}`
           continue
         }
 
-        snippet = `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
-          0,
-          MAX_FILE_SNIPPET
+        snippet = `Editable target content: ${targetPath}\n\`\`\`\n${this._extractSmartSnippet(
+          fileData.content,
+          MAX_FILE_SNIPPET,
+          targetPath
         )}\n\`\`\``
       }
 
@@ -1635,18 +2580,63 @@ ${resolvedMessage}`
     return "general"
   }
 
-  _buildSystemInstruction(intent, workspaceFolder) {
+  _buildSystemInstruction(intent, workspaceFolder, showThinking = false) {
+    const thinkingInstruction = showThinking
+      ? "\n\nIMPORTANT: Before the final answer, include a short visible reasoning summary titled \"Thinking\" with 3-6 concise bullets that explain your approach, tradeoffs, or checks. Keep it brief and useful. Then provide the final answer under a heading titled \"Answer\". Do not expose hidden internal chain-of-thought or long private reasoning."
+      : ""
+    
     const base =
-      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Source control integration, including branch, commit, push, pull, and status workflows"
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic" + thinkingInstruction
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
 - If a command is likely to fail, propose a corrected safer command immediately.
-- When the workspace contains \`graphify-out/GRAPH_REPORT.md\`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.
-- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.
-- If the user wants to visualize architecture, dependencies, or the project graph, use the \`GRAPHIFY: open\` action instead of only describing it.`
+- For Arduino sketches, treat all ".ino" tabs in the same sketch folder as one program before claiming a function is missing.
+- When asked to create diagrams, flowcharts, or visualizations, ALWAYS use mermaid syntax in code blocks.
+- For mermaid requests, prefer ONE diagram per answer unless the user explicitly asks for multiple diagrams.
+- For mermaid requests, keep node labels simple plain text. Avoid markdown, HTML, emojis, and nested punctuation inside labels.
+- For mermaid requests, output the mermaid block first with no blank line after \`\`\`mermaid.
+- CRITICAL MERMAID SYNTAX RULES - READ CAREFULLY:
+  * RULE #1: NEVER EVER mix diagram types - each diagram must use ONLY ONE syntax type
+  * RULE #2: For FLOWCHARTS - Use ONLY these elements:
+    - Start with: graph TD or graph LR
+    - Nodes: A[Text], B(Text), C{Text}
+    - Arrows: --> or -->|label|
+    - NEVER use: participant, ->>, ->, activate, deactivate
+    CORRECT FLOWCHART:
+    \`\`\`mermaid
+    graph TD
+        A[Start] --> B{Check Input}
+        B -->|Valid| C[Process]
+        B -->|Invalid| D[Error]
+        C --> E[End]
+        D --> E
+    \`\`\`
+  * RULE #3: For SEQUENCE DIAGRAMS - Use ONLY these elements:
+    - Start with: sequenceDiagram
+    - Declare: participant Name
+    - Arrows: ->> or -->> or ->>
+    - NEVER use: graph, [], -->, nodes with brackets
+    CORRECT SEQUENCE DIAGRAM:
+    \`\`\`mermaid
+    sequenceDiagram
+        participant User
+        participant System
+        User->>System: Request
+        System->>User: Response
+    \`\`\`
+  * RULE #4: FORBIDDEN COMBINATIONS:
+    - NEVER use "participant" with "graph"
+    - NEVER use "[]" brackets with "sequenceDiagram"
+    - NEVER use "-->" arrows with "sequenceDiagram"
+    - NEVER use "->>", "->", or "-->>" with "graph"
+  * RULE #5: NO HTML entities - use plain text only (>, <, &, not &gt;, &lt;, &amp;)
+  * RULE #6: Start IMMEDIATELY with diagram keyword after \`\`\`mermaid (no blank lines)
+- Supported types: graph (flowchart), sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie
+- Diagrams render automatically in chat interface.
+`
     switch (intent) {
       case "greeting":
         return `${base}
@@ -1655,11 +2645,7 @@ Reply naturally and briefly.`
       case "show_graph":
         return `${base}
 ${operatingPrinciples}
-The user wants to see the codebase graph visualization.
-You MUST output this exact line first:
-GRAPHIFY: open
-
-Then you may add a brief message like "Opening the codebase graph visualization panel..."`
+Graph visualization is not part of the Arduino IDE chat workflow. Explain that briefly and continue with a normal text answer.`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
@@ -1800,6 +2786,38 @@ ${(rawResponse || "").slice(0, 4000)}
 \`\`\``
   }
 
+  _selectBestManualEditFallbackText(candidates) {
+    const texts = Array.isArray(candidates)
+      ? candidates
+          .filter((value) => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : []
+
+    if (texts.length === 0) {
+      return ""
+    }
+
+    const scoreText = (text) => {
+      let score = 0
+      if (/FILE:\s*[^\n]+/m.test(text)) score += 6
+      if (/```[\w-]*\n[\s\S]*?```/.test(text)) score += 4
+      if (
+        /\b(#include|void\s+setup\s*\(|void\s+loop\s*\(|class\s+\w+|function\s+\w+)/.test(
+          text
+        )
+      ) {
+        score += 2
+      }
+      score += Math.min(text.length, 6000) / 6000
+      return score
+    }
+
+    return texts
+      .map((text) => ({ text, score: scoreText(text) }))
+      .sort((a, b) => b.score - a.score)[0]?.text || ""
+  }
+
   _hasFileActions(actions) {
     if (!Array.isArray(actions) || actions.length === 0) return false
     return actions.some((action) => {
@@ -1839,14 +2857,33 @@ ${(rawResponse || "").slice(0, 4000)}
   }
 
   _getEmptyResponseFallback(mode) {
+    if (mode === "deep") {
+      return "I didn't produce a deep response. Please try again, or switch to Heavy mode for a slightly lighter pass."
+    }
     return mode === "heavy"
       ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy."
   }
 
-  _shouldUseRepoContextInFastMode(message) {
-    return /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all|overview|readme|why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
-      message || ""
+  _shouldUseRepoContextInFastMode(message, provider = "") {
+    const text = message || ""
+    const wantsRepoWideContext =
+      /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all|overview|readme)\b/i.test(
+        text
+      )
+    const mentionsSpecificPath =
+      /[/\\]|\.[a-z0-9]{1,5}\b/i.test(text) ||
+      this._extractPathHints(text).length > 0
+
+    if (provider === "nvidia") {
+      return wantsRepoWideContext || mentionsSpecificPath
+    }
+
+    return (
+      wantsRepoWideContext ||
+      /\b(why|broken|issue|bug|error|not working|failing|cannot|can't)\b/i.test(
+        text
+      )
     )
   }
 
@@ -1880,7 +2917,7 @@ ${(rawResponse || "").slice(0, 4000)}
     )
   }
 
-  _buildRelevantFileContext(relevantFiles) {
+  _buildRelevantFileContext(relevantFiles, maxChars = MAX_CONTEXT_CHARS) {
     if (!Array.isArray(relevantFiles) || relevantFiles.length === 0) {
       return ""
     }
@@ -1888,7 +2925,7 @@ ${(rawResponse || "").slice(0, 4000)}
     let context = "Relevant workspace files:\n"
     for (const file of relevantFiles) {
       const block = `File: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n\n`
-      if ((context + block).length > MAX_CONTEXT_CHARS) {
+      if ((context + block).length > maxChars) {
         break
       }
       context += block
@@ -1899,7 +2936,9 @@ ${(rawResponse || "").slice(0, 4000)}
 
   _isRepeatingResponse(text, mode = "fast") {
     const window =
-      mode === "heavy" ? REPETITION_WINDOW_HEAVY : REPETITION_WINDOW
+      mode === "heavy" || mode === "deep"
+        ? REPETITION_WINDOW_HEAVY
+        : REPETITION_WINDOW
     if (!text || text.length < window * 2) {
       return false
     }
@@ -2124,10 +3163,33 @@ ${(rawResponse || "").slice(0, 4000)}
     return result
   }
 
-  _findRelevantFiles(query, workspaceFolder) {
+  _findRelevantFiles(query, workspaceFolder, options = {}) {
+    const cacheKey = this._buildRelevantFilesCacheKey(
+      query,
+      workspaceFolder,
+      options
+    )
+    if (this._relevantFileCache.has(cacheKey)) {
+      return this._relevantFileCache.get(cacheKey).map((entry) => ({ ...entry }))
+    }
+
+    const snippetChars =
+      Number.isFinite(options.snippetChars) && options.snippetChars > 0
+        ? options.snippetChars
+        : MAX_FILE_SNIPPET
+    const maxResults =
+      Number.isFinite(options.maxResults) && options.maxResults > 0
+        ? options.maxResults
+        : MAX_RELEVANT_FILES
+
     const keywords = this._extractKeywords(query)
     const pathHints = this._extractPathHints(query)
     const relevant = []
+    const activeSketchPaths = new Set(
+      this._getActiveArduinoSketchPaths(workspaceFolder).map((candidate) =>
+        candidate.toLowerCase()
+      )
+    )
 
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
@@ -2157,6 +3219,10 @@ ${(rawResponse || "").slice(0, 4000)}
         score += 40
       }
 
+      if (activeSketchPaths.has(normalizedPath)) {
+        score += normalizedPath === activeRelativePath ? 0 : 35
+      }
+
       if (preferredHintMatches.has(normalizedPath)) {
         score += 120
       }
@@ -2180,12 +3246,16 @@ ${(rawResponse || "").slice(0, 4000)}
         relevant.push({
           path: relativePath,
           score,
-          content: fileData.content.slice(0, MAX_FILE_SNIPPET)
+          content: this._extractSmartSnippet(
+            fileData.content,
+            snippetChars,
+            relativePath
+          )
         })
       }
     }
 
-    return relevant
+    const result = relevant
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score
         if (activeRelativePath) {
@@ -2201,7 +3271,20 @@ ${(rawResponse || "").slice(0, 4000)}
         }
         return a.path.localeCompare(b.path)
       })
-      .slice(0, MAX_RELEVANT_FILES)
+      .slice(0, maxResults)
+
+    this._relevantFileCache.set(
+      cacheKey,
+      result.map((entry) => ({ ...entry }))
+    )
+    if (this._relevantFileCache.size > RELEVANT_FILE_CACHE_LIMIT) {
+      const oldestKey = this._relevantFileCache.keys().next().value
+      if (oldestKey) {
+        this._relevantFileCache.delete(oldestKey)
+      }
+    }
+
+    return result
   }
 
   _buildPrompt(
@@ -2215,22 +3298,13 @@ ${(rawResponse || "").slice(0, 4000)}
     mode,
     knowledgeGraphContext = ""
   ) {
-    const historyEntries = isTabQuestion
-      ? this.conversationHistory
-          .filter((entry) => entry.role === "user")
-          .slice(-2, -1)
-      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES, -1)
-    const history = historyEntries
-      .map(
-        (entry) =>
-          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
-      )
-      .join("\n\n")
+    const history = this._buildPromptHistoryContext(isTabQuestion)
 
     const intent = this._detectIntent(userMessage)
     const systemInstruction = this._buildSystemInstruction(
       intent,
-      this.workspaceRoot
+      this.workspaceRoot,
+      this.showThinking
     )
     const isCreateIntent = intent === "create"
     const MAX_PROMPT_CHARS = 12_000
@@ -2253,7 +3327,12 @@ ${(rawResponse || "").slice(0, 4000)}
               relativePath,
               fileData
             ] of this.codebaseContext.entries()) {
-              const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${fileData.content.slice(0, 500)}\n\`\`\`\n\n`
+              const snippet = this._extractSmartSnippet(
+                fileData.content,
+                500,
+                relativePath
+              )
+              const block = `File: ${relativePath.replace(/\\/g, "/")}\n\`\`\`\n${snippet}\n\`\`\`\n\n`
               if ((snippetContext + block).length > MAX_PROMPT_CHARS) break
               snippetContext += block
             }
@@ -2467,7 +3546,7 @@ ${userMessage}`
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
-      /\bformat\b/
+      /^\s*format(?:\.com)?(?:\s|$)/
     ]
 
     if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
@@ -2819,7 +3898,12 @@ ${userMessage}`
   }
 
   clearHistory() {
-    this.conversationHistory = []
+    const session = this._touchCurrentSession()
+    session.history = []
+    session.summary = ""
+    session.compactedCount = 0
+    this._syncCurrentSessionReferences()
+    this._persistChatState()
   }
 }
 

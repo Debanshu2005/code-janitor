@@ -1164,14 +1164,48 @@ class GitPanel {
       // Get commit history
       let commits = []
       try {
+        // Get remote commits first to compare
+        let remoteCommits = new Set()
+        try {
+          const remoteLog = await this.executeGit(
+            'log origin/HEAD --pretty=format:"%H" -50',
+            gitRoot
+          )
+          if (remoteLog.trim()) {
+            remoteLog.split("\n").forEach(hash => remoteCommits.add(hash.trim()))
+          }
+        } catch (e) {
+          // No remote or origin/HEAD not set, try current branch's upstream
+          try {
+            const currentBranch = await this.executeGit(
+              "rev-parse --abbrev-ref HEAD",
+              gitRoot
+            )
+            const remoteLog = await this.executeGit(
+              `log origin/${currentBranch} --pretty=format:"%H" -50`,
+              gitRoot
+            )
+            if (remoteLog.trim()) {
+              remoteLog.split("\n").forEach(hash => remoteCommits.add(hash.trim()))
+            }
+          } catch (e2) {
+            // No remote tracking branch
+          }
+        }
+
+        // Use --branches instead of --all to avoid 404 errors from missing remote branches
         const logOutput = await this.executeGit(
-          'log --all --pretty=format:"%H|%an|%ar|%s|%D" -20',
+          'log --branches --remotes --pretty=format:"%H|%an|%ar|%s|%D" -20',
           gitRoot
         )
 
         if (logOutput.trim()) {
           commits = logOutput.split("\n").map((line) => {
             const [hash, author, time, message, refs] = line.split("|")
+            const fullHash = hash.trim()
+            const shortHash = fullHash.substring(0, 7)
+            const isPushed = remoteCommits.has(fullHash)
+            
             const branches = refs
               ? refs
                   .split(", ")
@@ -1187,16 +1221,52 @@ class GitPanel {
               : []
 
             return {
-              hash: hash.substring(0, 7),
+              hash: shortHash,
+              fullHash: fullHash,
               author,
               time,
               message,
-              branches: branches.filter((b) => b)
+              branches: branches.filter((b) => b),
+              isPushed
             }
           })
         }
       } catch (e) {
         console.log("[Git Panel] Could not fetch commit history:", e.message)
+        // Fallback: try without remote branches if that fails
+        try {
+          const logOutput = await this.executeGit(
+            'log --branches --pretty=format:"%H|%an|%ar|%s|%D" -20',
+            gitRoot
+          )
+          
+          if (logOutput.trim()) {
+            commits = logOutput.split("\n").map((line) => {
+              const [hash, author, time, message, refs] = line.split("|")
+              const fullHash = hash.trim()
+              const shortHash = fullHash.substring(0, 7)
+              
+              const branches = refs
+                ? refs
+                    .split(", ")
+                    .filter((r) => !r.includes("tag:") && !r.includes("HEAD"))
+                    .map((r) => r.replace("HEAD -> ", "").trim())
+                : []
+
+              return {
+                hash: shortHash,
+                fullHash: fullHash,
+                author,
+                time,
+                message,
+                branches: branches.filter((b) => b),
+                isPushed: false // Assume not pushed if we can't check remote
+              }
+            })
+          }
+        } catch (fallbackError) {
+          console.log("[Git Panel] Fallback commit fetch also failed:", fallbackError.message)
+        }
       }
 
       console.log("[Git Panel] Commits:", commits.length)

@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.11.7",
+  "version": "1.14.2",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -183,6 +183,7 @@
           "minimum": 2048,
           "maximum": 32768
         }
+
       }
     },
     "commands": [
