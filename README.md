@@ -1,37 +1,39 @@
 # Code Janitor
 ![VS Code](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
+![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-2.x-00979D?logo=arduino)
 ![Node](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Introduction
-Code Janitor is a VS Code extension designed to enhance the coding experience by providing tools for formatting, repairing, and validating code. It supports multiple programming languages including Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte, and more.
+Code Janitor is a powerful extension available for both **VS Code** and **Arduino IDE 2.x** designed to enhance your coding experience with AI-powered tools for formatting, repairing, validating, and understanding code. It supports multiple programming languages including Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte, and more.
 
-Website for the extension: https://code-janitor-web.vercel.app/
+Website: https://code-janitor-web.vercel.app/
+
+---
+
+## 🚀 VS Code Extension
 
 ### Key Features
 
-1. **Code Formatting**: Code Janitor can format your code according to the specified style guide or rules.
-2. **Manual Fixing**: You can run manual fixing from the Command Palette with `Code Janitor: Format Code`.
-3. **Auto-Correction**: Apply real-time auto-correction while typing for supported languages.
-4. **Live Preview**: Preview HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte and more in a live webview.
-5. **Frontend Dependency Validation**: Validate frontend dependencies for HTML, CSS, and JavaScript files.
-6. **AI Chat Panel**: Open an AI chat panel to interact with the Code Janitor AI assistant.
-7. **Self-Healing Performance**: Automatically detects slow AI responses and optimizes settings for better performance.
-8. **Self-Diagnosing Errors**: When FILE operations fail, automatically detects the cause, explains what's blocking it, and attempts to fix it.
-9. **Workspace Scanning and Knowledge Graph Integration**: Scan your workspace and integrate with a knowledge graph to provide better code suggestions and insights.
-10. **Graphify**: Visualize your codebase as a graph to better understand the relationships between different components.
+1. **Code Formatting**: Format your code according to specified style guides or rules
+2. **Manual Fixing**: Run manual fixing from Command Palette with `Code Janitor: Format Code`
+3. **Auto-Correction**: Apply real-time auto-correction while typing for supported languages
+4. **Live Preview**: Preview HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte and more in a live webview
+5. **Frontend Dependency Validation**: Validate frontend dependencies for HTML, CSS, and JavaScript files
+6. **AI Chat Panel**: Interact with the Code Janitor AI assistant
+7. **Self-Healing Performance**: Automatically detects slow AI responses and optimizes settings
+8. **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
+9. **Workspace Scanning**: Scan your workspace and integrate with knowledge graph for better code suggestions
+10. **Graphify**: Visualize your codebase as a graph to understand component relationships
 
-### Install
-To install Code Janitor, follow these steps:
+### Installation
 
-1. Open Visual Studio Code.
-2. Press `Ctrl + Shift + P` (Windows/Linux) or `Cmd + Shift + P` (Mac).
-3. Type `Install Extension` and select it from the list.
-4. Search for `Code Janitor` in the search bar and install it.
+1. Open Visual Studio Code
+2. Press `Ctrl + Shift + P` (Windows/Linux) or `Cmd + Shift + P` (Mac)
+3. Type `Install Extension` and select it from the list
+4. Search for `Code Janitor` in the search bar and install it
 
-### Usage
-
-**Keyboard Shortcuts:**
+### Keyboard Shortcuts
 
 - `Alt+D` - Format Code (applies code formatting and fixes)
 - `Ctrl+Alt+C` - Open AI Chat Panel
@@ -40,7 +42,7 @@ To install Code Janitor, follow these steps:
 - `Alt+V` - Validate Frontend Dependencies
 - `Ctrl+Alt+G` - Visualize Codebase Graph (Graphify)
 
-**Commands:**
+### Commands
 
 1. **Format Code**: Use `Alt+D` or Command Palette → `Code Janitor: Format Code`
 2. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
@@ -60,8 +62,7 @@ To install Code Janitor, follow these steps:
    
    <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/2e7276ec-4fdf-4745-8fe3-83da20377be6" />
 
-**AI Chat Features:**
-
+### AI Chat Features
 
 - Syntax checking for JS, TS, Python, Java, C/C++, JSON, and HTML
 - Code generation and refactoring
@@ -78,53 +79,107 @@ To install Code Janitor, follow these steps:
    - Monitor model performance
    - View auto-heal history
    - Get optimization recommendations
-   
 
+---
 
+## 🤖 Arduino IDE Extension
 
-# Code Janitor Arduino AI Agent
+### Code Janitor Arduino AI Agent
 
-`Code Janitor Arduino AI Agent` is a standalone VSIX package that brings the Code Janitor chat assistant into Arduino IDE 2.x and other compatible Theia / VS Code extension hosts.
+`Code Janitor Arduino AI Agent` is a standalone extension that brings the Code Janitor AI assistant into **Arduino IDE 2.x** and other compatible Theia / VS Code extension hosts.
 
-Website for the package: https://code-janitor-web.vercel.app/
+This package is focused on AI chat, guided edits, and Arduino-specific features. It does not include the full command set from the main VS Code extension.
 
-This package is focused on AI chat and guided edits. It does not include the full command set from the main `Code Janitor` VS Code extension.
+### Arduino IDE Features
 
-## Features
+- **AI Chat Panel**: Dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
+- **Multiple AI Providers**: Supports Ollama (local), Groq (fast, free), OpenRouter, Anthropic, and NVIDIA
+- **Workspace Scanning**: Scans workspace for relevant context before answering
+- **Structured Actions**: Generate `FILE`, `MKDIR`, and `CMD` actions with safety checks
+- **Model Persistence**: Preserves the last selected model per provider
+- **Quick Actions**: Explain, review, fix, refactor, tests, and syntax scan
+- **Source Control**: Built-in Git integration to collaborate with co-workers
+  - View commit history with push status indicators
+  - Stage, commit, push, and pull changes
+  - Branch management and conflict resolution
+  - Visual diff viewer
+- **Web & YouTube Search**: Search the web and YouTube directly from chat
+- **Mermaid Diagrams**: Generate and render flowcharts, sequence diagrams, and more
+- **Session Management**: Multiple chat sessions with auto-titling and history compaction
 
-- Opens a dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
-- Supports `ollama`, `groq`, `openrouter`, and `anthropic`
-- Scans the workspace for relevant context before answering
-- Can generate structured `FILE`, `MKDIR`, and `CMD` actions with safety checks
-- Preserves the last selected model per provider
-- Includes quick actions such as explain, review, fix, refactor, tests, and syntax scan
-- Source control. Use git to collaborate with co-workers.
+### Installation (Arduino IDE)
+
+1. Download the `.vsix` file from the releases
+2. Open Arduino IDE 2.x
+3. Go to File → Preferences → Additional Boards Manager URLs
+4. Install the extension via the Extensions panel
+
+Or install manually:
+```bash
+code --install-extension code-janitor-arduino-x.x.x.vsix
+```
+
+### Arduino IDE Commands
+
+- `Code Janitor Arduino: Open Arduino AI Chat` - Open the AI chat panel
+- `Code Janitor Arduino: Open Source Control` - Open Git panel
+
+### Default Keybindings (Arduino IDE)
+
+- `Ctrl+Alt+A` (Windows/Linux) - Open Arduino AI Chat
+- `Ctrl+Alt+G` (Windows/Linux) - Open Source Control
+
+### Arduino IDE Screenshot
 
 <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/7360f607-ec15-4be3-ac74-ea9d70d4485d" />
 
+### Package Structure
 
-## Package Layout
+```
+arduino-ide-agent/
+├── src/
+│   ├── extension.js              # Extension activation entry
+│   ├── ai-agent/
+│   │   ├── chat-panel.js         # Webview bridge, command handling
+│   │   ├── agent.js              # Prompt building, provider requests
+│   │   └── chat-panel.html       # Chat UI
+│   └── source-control/
+│       ├── git-panel.js          # Git operations and UI logic
+│       └── git-panel.html        # Source control UI
+├── package.json                  # Extension manifest
+└── README.md
+```
 
-- `src/extension.js`: Arduino extension activation entry
-- `src/ai-agent/chat-panel.js`: webview bridge, command handling, and settings sync
-- `src/ai-agent/agent.js`: prompt building, provider requests, parsing, and action safety
-- `src/ai-agent/chat-panel.html`: chat UI
+---
 
-## Commands
-
-- `Code Janitor Arduino: Open Arduino AI Chat`
-
-Default keybinding:
-
-- `Ctrl+Alt+A` on Windows/Linux
-
-
-
-
-### Contributing
+## 🤝 Contributing
 
 If you're interested in contributing to Code Janitor, feel free to check out the [GitHub repository](https://github.com/Debanshu2005/code-janitor) and submit a pull request.
 
-## License
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/Debanshu2005/code-janitor.git
+cd code-janitor
+
+# Install dependencies
+npm install
+
+# For Arduino IDE extension
+cd arduino-ide-agent
+npm install
+```
+
+## 📄 License
 
 Code Janitor is licensed under the MIT License. For more information, see the [LICENSE](LICENSE) file.
+
+---
+
+## 🔗 Links
+
+- **Website**: https://code-janitor-web.vercel.app/
+- **GitHub**: https://github.com/Debanshu2005/code-janitor
+- **VS Code Marketplace**: [Code Janitor](https://marketplace.visualstudio.com/items?itemName=your-publisher.code-janitor)
+- **Issues**: https://github.com/Debanshu2005/code-janitor/issues
