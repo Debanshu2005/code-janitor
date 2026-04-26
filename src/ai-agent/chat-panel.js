@@ -926,13 +926,20 @@ class ChatPanel {
     this._postMessage({ type: "done" });
   }
 
-  _getHtmlContent() {
+  _getHtmlContent(webview) {
     try {
       const htmlPath = this._getChatPanelHtmlPath();
       console.log("[ChatPanel] Loading HTML from:", htmlPath);
       const html = fsSync.readFileSync(htmlPath, "utf8");
+      const logoPath = this._getLogoAssetPath();
+      const logoUri = logoPath && webview
+        ? webview.asWebviewUri(vscode.Uri.file(logoPath)).toString()
+        : "";
+      const hydratedHtml = html
+        .replace(/__CSP_SOURCE__/g, webview?.cspSource || "")
+        .replace(/__LOGO_URI__/g, logoUri);
       console.log("[ChatPanel] HTML loaded, length:", html.length);
-      return html;
+      return hydratedHtml;
     } catch (error) {
       console.error("[ChatPanel] Failed to load HTML:", error);
       const attemptedPaths = this._getChatPanelHtmlCandidates().join(" | ");
@@ -974,9 +981,16 @@ class ChatPanel {
   _attachWebviewHost(host, { kind }) {
     if (!host || !host.webview) return;
     console.log(`[ChatPanel] Attaching ${kind} webview host`);
-    host.webview.options = { enableScripts: true, retainContextWhenHidden: true };
+    host.webview.options = {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [
+        vscode.Uri.file(path.join(this.context.extensionPath, "src", "ai-agent")),
+        vscode.Uri.file(__dirname)
+      ]
+    };
     this._setupMessageHandler(host.webview);
-    host.webview.html = this._getHtmlContent();
+    host.webview.html = this._getHtmlContent(host.webview);
   }
 
   _postMessage(message) {
@@ -1002,6 +1016,14 @@ class ChatPanel {
       path.join(this.context.extensionPath, "src", "ai-agent", "chat-panel.html"),
       path.join(__dirname, "chat-panel.html")
     ];
+  }
+
+  _getLogoAssetPath() {
+    const candidates = [
+      path.join(this.context.extensionPath, "src", "ai-agent", "logo.png"),
+      path.join(__dirname, "logo.png")
+    ];
+    return candidates.find((candidate) => fsSync.existsSync(candidate)) || null;
   }
 
   _getApiKeyConfigKey(provider) {
@@ -2994,6 +3016,8 @@ ${trimmedText}`;
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
         this._postMessage({ type: "cleared" });
+      } else if (message.type === "openChatCommand") {
+        await vscode.commands.executeCommand("codeJanitor.openChat");
       } else if (message.type === "openFile") {
         await this._revealWorkspaceFile(message.path);
       } else if (message.type === "scanOverview") {
