@@ -26,6 +26,7 @@ class ChatPanel {
     this.context = context;
     this.panel = null;
     this.welcomePanel = null;
+    this.sidebarView = null;
     this.circuitPreviewPanel = null;
     this.agent = new AIAgent(context); // Pass context to agent
     this.abortController = null;
@@ -1076,10 +1077,10 @@ class ChatPanel {
     return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
   }
 
-  _getWelcomeHtmlContent() {
+  _getWelcomeHtmlContent(webview = null) {
     const logoPath = vscode.Uri.file(path.join(__dirname, "logo.png"));
-    const logoUri = this.welcomePanel
-      ? this.welcomePanel.webview.asWebviewUri(logoPath).toString()
+    const logoUri = webview
+      ? webview.asWebviewUri(logoPath).toString()
       : "";
     let html = fs.readFileSync(path.join(__dirname, "welcome.html"), "utf8");
     html = html.replace(
@@ -1089,37 +1090,54 @@ class ChatPanel {
     return html;
   }
 
-  async showWelcome() {
-    if (this.welcomePanel) {
-      this.welcomePanel.reveal();
-      return;
-    }
+  resolveWebviewView(webviewView) {
+    this.sidebarView = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [
+        vscode.Uri.file(path.join(__dirname))
+      ]
+    };
+    webviewView.webview.html = this._getWelcomeHtmlContent(webviewView.webview);
 
-    this.welcomePanel = vscode.window.createWebviewPanel(
-      "codeJanitorArduinoWelcome",
-      "Welcome to Code Janitor Arduino",
-      vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [
-          vscode.Uri.file(path.join(__dirname))
-        ]
-      }
-    );
-
-    this.welcomePanel.webview.html = this._getWelcomeHtmlContent();
-
-    this.welcomePanel.webview.onDidReceiveMessage((message) => {
+    webviewView.webview.onDidReceiveMessage((message) => {
       if (message.type === "welcomeDismiss") {
-        this.welcomePanel.dispose();
+        vscode.commands.executeCommand("workbench.action.closeSidebar");
       } else if (message.type === "welcomeOpenChat") {
-        this.welcomePanel.dispose();
         this.show();
       }
     });
 
-    this.welcomePanel.onDidDispose(() => { this.welcomePanel = null; });
+    webviewView.onDidDispose(() => {
+      if (this.sidebarView === webviewView) {
+        this.sidebarView = null;
+      }
+    });
+  }
+
+  async _focusWelcomeSidebar() {
+    if (this.welcomePanel) {
+      this.welcomePanel.dispose();
+      this.welcomePanel = null;
+    }
+
+    await vscode.commands.executeCommand("workbench.view.extension.codeJanitorArduinoSidebar");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    if (this.sidebarView?.webview) {
+      this.sidebarView.webview.html = this._getWelcomeHtmlContent(this.sidebarView.webview);
+      if (this.sidebarView.show) {
+        this.sidebarView.show(false);
+      }
+      return;
+    }
+
+    await vscode.commands.executeCommand("codeJanitorArduino.welcomeSidebar.focus");
+  }
+
+  async showWelcome() {
+    await this._focusWelcomeSidebar();
   }
 
   _getApiKeyConfigKey(provider) {

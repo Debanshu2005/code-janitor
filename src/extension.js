@@ -725,14 +725,20 @@ async function activate(context) {
     async () => {
       try {
         console.log("[Extension] codeJanitor.openChat command triggered");
-        // Always create fresh instance or reuse if panel is still open
         if (!chatPanelInstance) {
           console.log("[Extension] Creating new ChatPanel instance");
           chatPanelInstance = new ChatPanel(context);
         }
-        console.log("[Extension] Calling chatPanelInstance.show()");
-        await chatPanelInstance.show();
-        console.log("[Extension] ChatPanel shown successfully");
+        if (chatPanelInstance.panel) {
+          console.log("[Extension] Closing legacy popup panel");
+          chatPanelInstance.panel.dispose();
+          chatPanelInstance.panel = null;
+        }
+        console.log("[Extension] Revealing sidebar chat view");
+        await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
+        await new Promise(resolve => setTimeout(resolve, 150));
+        await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
+        console.log("[Extension] Sidebar chat view focused successfully");
       } catch (error) {
         console.error("[Extension] CRITICAL ERROR in openChat command:", error);
         console.error("[Extension] Error stack:", error.stack);

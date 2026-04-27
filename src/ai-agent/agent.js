@@ -103,6 +103,7 @@ class AIAgent {
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
+    this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -146,6 +147,7 @@ class AIAgent {
       maxTokens: {
         fast: Math.max(512, Math.min(4096, config.get("maxTokens.fast", 2048))),
         heavy: Math.max(1024, Math.min(8192, config.get("maxTokens.heavy", 4096))),
+        deep: Math.max(2048, Math.min(16384, config.get("maxTokens.deep", 8192))),
         create: Math.max(2048, Math.min(16384, config.get("maxTokens.create", 8192)))
       }
     };
@@ -406,7 +408,9 @@ class AIAgent {
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
-    const isUnlimited = mode === "heavy" && intent === "create";
+    const isDeep = mode === "deep";
+    const isHeavyLike = mode === "heavy" || isDeep;
+    const isUnlimited = isHeavyLike && intent === "create";
     
     // Calculate max tokens based on provider
     let baseMaxTokens;
@@ -414,21 +418,23 @@ class AIAgent {
     
     if (config.provider === "nvidia") {
       // NVIDIA NIM: Use maximum possible tokens (no artificial limits)
-      baseMaxTokens = isUnlimited ? 32768 : mode === "heavy" ? 16384 : 8192;
+      baseMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
       optimizedMaxTokens = baseMaxTokens;
       console.log(`[Agent] NVIDIA NIM: Using ${baseMaxTokens} max tokens (no artificial limits)`);
     } else {
       // Other providers: Use configurable limits
       baseMaxTokens = isUnlimited 
         ? (config.maxTokens?.create || 16384)
-        : mode === "heavy" 
+        : isDeep
+          ? (config.maxTokens?.deep || 8192)
+          : isHeavyLike
           ? (config.maxTokens?.heavy || 8192)
           : (config.maxTokens?.fast || 4096);
       
       // Optimize for slow models
       const isMinimax = config.model === "minimaxai/minimax-m2.7";
       optimizedMaxTokens = isMinimax 
-        ? (mode === "fast" ? 1024 : mode === "heavy" ? 4096 : 2048)
+        ? (mode === "fast" ? 1024 : isDeep ? 6144 : isHeavyLike ? 4096 : 2048)
         : baseMaxTokens;
     }
 
@@ -582,7 +588,7 @@ class AIAgent {
     }
     if (config.provider === "nvidia") {
       // NVIDIA NIM: Use high token limits for complete code generation
-      const nvidiaMaxTokens = isUnlimited ? 32768 : mode === "heavy" ? 16384 : 8192;
+      const nvidiaMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
       console.log(`[Agent] NVIDIA NIM: Using ${nvidiaMaxTokens} max tokens`);
       
       const isMinimax = config.model === "minimaxai/minimax-m2.7";
@@ -649,7 +655,7 @@ class AIAgent {
         stream: true,
         options: {
           temperature: 0.2,
-          num_predict: mode === "heavy" ? 2048 : 1024,
+          num_predict: isDeep ? 4096 : isHeavyLike ? 2048 : 1024,
           top_k: 20,
           top_p: 0.9,
           num_ctx: 2048,
@@ -934,7 +940,12 @@ class AIAgent {
     abortSignal,
     options = {}
   ) {
-    const mode = options.mode === "heavy" ? "heavy" : "fast";
+    const mode =
+      options.mode === "deep"
+        ? "deep"
+        : options.mode === "heavy"
+          ? "heavy"
+          : "fast";
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null;
 
@@ -1078,7 +1089,8 @@ class AIAgent {
       const systemInstruction = this._buildSystemInstruction(
         intent,
         effectiveWorkspace,
-        mode
+        mode,
+        this.showThinking
       );
       const isCreateIntent = intent === "create";
       const isEditIntent =
@@ -1923,9 +1935,13 @@ ${resolvedMessage}`;
     return tokens.every((token) => greetingWords.has(token));
   }
 
-  _buildSystemInstruction(intent, workspaceFolder, mode = "fast") {
+  _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
+    const thinkingInstruction = showThinking
+      ? "\n\nIMPORTANT: Before the final answer, include a short visible reasoning summary titled \"Thinking\" with 3-6 concise bullets that explain your approach, tradeoffs, or checks. Keep it brief and useful. Then provide the final answer under a heading titled \"Answer\". Do not expose hidden internal chain-of-thought or long private reasoning."
+      : "";
     const base =
       "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)";
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" + thinkingInstruction;
     const compactRules = [
       "Operational rules (fast):",
       "- Be concise and correct.",
@@ -2311,7 +2327,7 @@ ${(rawResponse || "").slice(0, 4000)}
   }
 
   _getEmptyResponseFallback(mode) {
-    return mode === "heavy"
+    return mode === "heavy" || mode === "deep"
       ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
   }
@@ -2398,7 +2414,9 @@ ${(rawResponse || "").slice(0, 4000)}
 
   _isRepeatingResponse(text, mode = "fast") {
     const window =
-      mode === "heavy" ? REPETITION_WINDOW_HEAVY : REPETITION_WINDOW;
+      mode === "heavy" || mode === "deep"
+        ? REPETITION_WINDOW_HEAVY
+        : REPETITION_WINDOW;
     if (!text || text.length < window * 2) {
       return false;
     }
@@ -2797,7 +2815,8 @@ ${(rawResponse || "").slice(0, 4000)}
       const systemInstruction = this._buildSystemInstruction(
         intent,
         this.workspaceRoot,
-        mode
+        mode,
+        this.showThinking
       );
     const isCreateIntent = intent === "create";
     const MAX_PROMPT_CHARS = 12_000;

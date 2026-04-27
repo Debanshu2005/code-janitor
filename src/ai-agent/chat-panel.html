@@ -327,6 +327,30 @@
         color: #fff;
         border-color: var(--accent);
       }
+      .icon-btn {
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 15px;
+        transition: all 0.15s;
+      }
+      .icon-btn:hover {
+        background: var(--panel-3);
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      .icon-btn.active {
+        background: var(--accent-soft);
+        color: #fff;
+        border-color: var(--accent);
+      }
 
       /* ── Progress bar ── */
       #progress-bar-wrap {
@@ -459,27 +483,42 @@
       #search-input::placeholder {
         color: var(--muted);
       }
-      #search-btn {
+      #search-btn,
+      #youtube-btn {
         padding: 7px 16px;
-        background: var(--accent);
-        color: #fff;
-        border: none;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 1px solid var(--border);
         border-radius: 999px;
         cursor: pointer;
         font-size: 12px;
-        font-weight: 600;
+        font-weight: 700;
         white-space: nowrap;
         display: flex;
         align-items: center;
         gap: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        transition: all 0.15s;
       }
-      #search-btn:hover {
-        filter: brightness(1.08);
+      #search-btn:hover,
+      #youtube-btn:hover {
+        background: var(--panel-3);
+        color: var(--text);
+        border-color: var(--accent);
       }
-      #search-btn:disabled {
+      #search-btn.active,
+      #youtube-btn.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      #search-btn:disabled,
+      #youtube-btn:disabled {
         background: var(--panel-2);
         color: var(--muted);
         cursor: not-allowed;
+        opacity: 0.6;
       }
 
       /* Voice input */
@@ -1730,7 +1769,13 @@
       </div>
       <div id="header-controls">
         <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">🎓 Tutorial</button>
-        <button class="pill-btn" id="btn-tts" title="Toggle Text-to-Speech">🔊 TTS</button>
+        <button class="pill-btn" id="btn-deep" title="Deep mode">
+          Deep
+        </button>
+        <button class="pill-btn" id="btn-think" title="Show reasoning summary">
+          Think
+        </button>
+        <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">🔊</button>
         <select id="provider-select" title="AI Provider">
           <option value="ollama">🖥 Ollama (local)</option>
           <option value="groq">⚡ Groq (cloud)</option>
@@ -1885,8 +1930,11 @@
       var micPermissionBadge = document.getElementById("mic-permission-badge");
       var btnFast = document.getElementById("btn-fast");
       var btnHeavy = document.getElementById("btn-heavy");
+      var btnDeep = document.getElementById("btn-deep");
+      var btnThink = document.getElementById("btn-think");
       var btnClear = document.getElementById("btn-clear");
       var btnTts = document.getElementById("btn-tts");
+      var inputHint = document.getElementById("input-hint");
       var providerSelect = document.getElementById("provider-select");
       var providerAddBtn = document.getElementById("provider-add-btn");
       var apiKeyRow = document.getElementById("api-key-row");
@@ -2773,7 +2821,16 @@
         chatMode = m;
         btnFast.classList.toggle("active", m === "fast");
         btnHeavy.classList.toggle("active", m === "heavy");
+        btnDeep.classList.toggle("active", m === "deep");
         vscode.postMessage({ type: "mode", value: m });
+      }
+
+      function setThinkingState(enabled) {
+        btnThink.classList.toggle("active", enabled);
+        btnThink.textContent = enabled ? "Think On" : "Think";
+        btnThink.title = enabled
+          ? "Reasoning summary is enabled"
+          : "Show reasoning summary";
       }
 
       // ── Send ─────────────────────────────────────────────────
@@ -2795,6 +2852,16 @@
           }
           if (/^\/heavy$/i.test(text)) {
             setMode("heavy");
+            setInputState(false);
+            return;
+          }
+          if (/^\/deep$/i.test(text)) {
+            setMode("deep");
+            setInputState(false);
+            return;
+          }
+          if (/^\/think$/i.test(text)) {
+            vscode.postMessage({ type: "toggleThinking" });
             setInputState(false);
             return;
           }
@@ -2833,6 +2900,13 @@
       btnHeavy.onclick = function () {
         setMode("heavy");
         addRow("Switched to Heavy mode.", "status");
+      };
+      btnDeep.onclick = function () {
+        setMode("deep");
+        addRow("Switched to Deep mode.", "status");
+      };
+      btnThink.onclick = function () {
+        vscode.postMessage({ type: "toggleThinking" });
       };
       btnClear.onclick = function () {
         chat.innerHTML = "";
@@ -3090,6 +3164,8 @@
             if (m === current) opt.selected = true;
             sel.appendChild(opt);
           });
+        } else if (msg.type === "thinkingState") {
+          setThinkingState(!!msg.enabled);
         } else if (msg.type === "triggerFix") {
           // Triggered by Alt+D - simulate clicking the Fix issues button
           var fixButton = document.querySelector('.action-chip[data-action="fix"]');
@@ -3177,6 +3253,28 @@
       var searchInput = document.getElementById("search-input");
       var searchBtn = document.getElementById("search-btn");
       var searchEngine = document.getElementById("search-engine");
+      var youtubeBtn = document.getElementById("youtube-btn");
+      var searchMode = "web";
+
+      if (searchEngine) {
+        searchEngine.style.display = "none";
+      }
+      if (!youtubeBtn) {
+        youtubeBtn = document.createElement("button");
+        youtubeBtn.id = "youtube-btn";
+        youtubeBtn.type = "button";
+        youtubeBtn.textContent = "YouTube";
+        searchBtn.insertAdjacentElement("afterend", youtubeBtn);
+      }
+      searchBtn.textContent = "Web";
+
+      function setSearchMode(mode) {
+        searchMode = mode === "youtube" ? "youtube" : "web";
+        searchBtn.classList.toggle("active", searchMode === "web");
+        youtubeBtn.classList.toggle("active", searchMode === "youtube");
+        searchInput.placeholder =
+          searchMode === "youtube" ? "Search YouTube..." : "Search the web...";
+      }
 
 
       // Update search placeholder based on engine
@@ -3188,29 +3286,63 @@
         }
       };
 
-      function performWebSearch() {
+      function performSearch() {
         var query = searchInput.value.trim();
         if (!query) return;
 
-        searchBtn.disabled = true;
-        var isYouTube = searchEngine.value === "youtube";
-        searchBtn.textContent = isYouTube ? "Searching YouTube..." : "Searching...";
-        addActivity("Searching " + (isYouTube ? "YouTube" : "web") + " for: " + query, "scan");
-        showProgress("Searching..." , 30);
-
-        // Send search request to extension
-        vscode.postMessage({ 
-          type: isYouTube ? "youtubeSearch" : "webSearch", 
-          query: query 
-        });
+        if (searchMode === "youtube") {
+          youtubeBtn.disabled = true;
+          youtubeBtn.textContent = "Searching...";
+          addActivity("Searching YouTube for: " + query, "scan");
+          showProgress("Searching YouTube...", 30);
+          vscode.postMessage({ type: "youtubeSearch", query: query });
+        } else {
+          searchBtn.disabled = true;
+          searchBtn.textContent = "Searching...";
+          addActivity("Searching web for: " + query, "scan");
+          showProgress("Searching the web...", 30);
+          vscode.postMessage({ type: "webSearch", query: query });
+        }
         searchInput.value = "";
       }
 
-      searchBtn.onclick = performWebSearch;
+      searchBtn.onclick = function() {
+        if (searchMode === "web") {
+          performSearch();
+          return;
+        }
+        setSearchMode("web");
+      };
+      youtubeBtn.onclick = function() {
+        if (searchMode === "youtube") {
+          performSearch();
+          return;
+        }
+        setSearchMode("youtube");
+      };
       searchInput.addEventListener("keydown", function(e) {
         if (e.key === "Enter") {
           e.preventDefault();
-          performWebSearch();
+          performSearch();
+        }
+      });
+      setSearchMode("web");
+
+      function syncTtsButton() {
+        btnTts.textContent = ttsEnabled ? "Voice On" : "Voice";
+        btnTts.title = ttsEnabled
+          ? "Disable text-to-speech"
+          : "Enable text-to-speech";
+      }
+
+      window.addEventListener("message", function(event) {
+        var msg = event.data;
+        if (msg.type === "searchComplete" || msg.type === "searchError") {
+          searchBtn.disabled = false;
+          searchBtn.textContent = "Web";
+        } else if (msg.type === "youtubeComplete" || msg.type === "youtubeError") {
+          youtubeBtn.disabled = false;
+          youtubeBtn.textContent = "YouTube";
         }
       });
 
@@ -3237,6 +3369,16 @@
           searchBtn.textContent = "🔍 Search";
           hideProgress();
           addActivity("YouTube search failed: " + msg.error, "error");
+        }
+      });
+
+      window.addEventListener("message", function(event) {
+        var msg = event.data;
+        if (msg.type === "searchComplete" || msg.type === "searchError") {
+          searchBtn.textContent = "Web";
+        } else if (msg.type === "youtubeComplete" || msg.type === "youtubeError") {
+          youtubeBtn.disabled = false;
+          youtubeBtn.textContent = "YouTube";
         }
       });
 
@@ -3355,7 +3497,10 @@
         speechSynthesis.speak(currentUtterance);
       }
 
-      btnTts.onclick = toggleTTS;
+      btnTts.onclick = function() {
+        toggleTTS();
+        syncTtsButton();
+      };
 
       function initSpeechRecognition() {
         if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -3540,7 +3685,33 @@
       // Initialize speech recognition and TTS on load
       initSpeechRecognition();
       initTextToSpeech();
+      syncTtsButton();
       checkMicPermission();
+
+      if (inputHint) {
+        inputHint.innerHTML =
+          "Enter to send &nbsp;&middot;&nbsp; Shift+Enter for new line &nbsp;&middot;&nbsp; /scan /fast /heavy /deep /think";
+      }
+
+      var headerControls = document.getElementById("header-controls");
+      if (headerControls) {
+        headerControls.appendChild(btnFast);
+        headerControls.appendChild(btnHeavy);
+        headerControls.appendChild(btnDeep);
+        headerControls.appendChild(btnThink);
+        headerControls.appendChild(btnTts);
+        headerControls.appendChild(btnClear);
+      }
+
+      var actionsHeading = document.querySelector("#action-bar #actions-dropdown-btn span");
+      if (actionsHeading) {
+        actionsHeading.textContent = "Actions";
+      }
+      Array.prototype.forEach.call(document.querySelectorAll("h4"), function(node) {
+        if (/quick actions/i.test(node.textContent)) {
+          node.textContent = "Actions";
+        }
+      });
 
       // Init
       vscode.postMessage({ type: "ready" });

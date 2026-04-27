@@ -24,10 +24,15 @@ class ChatPanel {
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
     this.chatMode = "fast";
+    this.showThinking = !!this.context.globalState.get(
+      "codeJanitor.ai.showThinking",
+      false
+    );
     this._confirmResolve = null;
     this._boundWebviews = new WeakSet();
 
     this.agent.setActiveEditor(this.lastActiveEditor);
+    this.agent.showThinking = this.showThinking;
     this.performanceMonitor.loadMetrics();
     
     // Expose performance monitor globally for agent to log issues
@@ -36,6 +41,19 @@ class ChatPanel {
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
     }, null, context.subscriptions);
+  }
+
+  async _setThinkingMode(enabled) {
+    this.showThinking = !!enabled;
+    this.agent.showThinking = this.showThinking;
+    await this.context.globalState.update(
+      "codeJanitor.ai.showThinking",
+      this.showThinking
+    );
+    this._postMessage({
+      type: "thinkingState",
+      enabled: this.showThinking
+    });
   }
 
   async show() {
@@ -1712,7 +1730,7 @@ ${document.getText()}
   }
 
   _shouldPrepareWorkspaceContext(intent, message) {
-    if (this.chatMode === "heavy") return true;
+    if (this.chatMode === "heavy" || this.chatMode === "deep") return true;
 
     const text = message || "";
     if (intent === "scan") return true;
@@ -2288,6 +2306,21 @@ ${trimmedText}`;
           this._postMessage({ type: "done" });
           return;
         }
+        if (/^\/deep$/i.test(trimmedText)) {
+          this.chatMode = "deep";
+          this._postMessage({ type: "status", text: "Mode switched to Deep." });
+          this._postMessage({ type: "done" });
+          return;
+        }
+        if (/^\/think$/i.test(trimmedText)) {
+          await this._setThinkingMode(!this.showThinking);
+          this._postMessage({
+            type: "status",
+            text: `Thinking mode ${this.showThinking ? "enabled" : "disabled"}.`
+          });
+          this._postMessage({ type: "done" });
+          return;
+        }
         if (/^\/scan$/i.test(trimmedText)) {
           this._postMessage({ type: "status", text: "Scanning workspace..." });
           this._postMessage({ type: "thinking" });
@@ -2350,7 +2383,10 @@ ${trimmedText}`;
 
         this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
         if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText)) {
-          const forcePrep = this.chatMode === "heavy" || intent === "scan";
+          const forcePrep =
+            this.chatMode === "heavy" ||
+            this.chatMode === "deep" ||
+            intent === "scan";
           this._postMessage({ type: "status", text: "Studying workspace before responding..." });
           const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
           this._postMessage({
@@ -3064,10 +3100,25 @@ ${trimmedText}`;
             keyPresence,
             models
           });
+          this._postMessage({
+            type: "thinkingState",
+            enabled: this.showThinking
+          });
         }
         this._fetchAndSendModels(selectedProvider === "nvidia" ? "nvidia" : "ollama");
       } else if (message.type === "mode") {
-        this.chatMode = message.value === "heavy" ? "heavy" : "fast";
+        this.chatMode =
+          message.value === "deep"
+            ? "deep"
+            : message.value === "heavy"
+              ? "heavy"
+              : "fast";
+      } else if (message.type === "toggleThinking") {
+        await this._setThinkingMode(!this.showThinking);
+        this._postMessage({
+          type: "status",
+          text: `Thinking mode ${this.showThinking ? "enabled" : "disabled"}.`
+        });
       } else if (message.type === "setModel") {
         const provider = this._getSelectedProviderId() || vscode.workspace.getConfiguration("codeJanitor.ai").get("provider", "ollama");
         const nextModel = await this._setProviderModel(provider, message.model);

@@ -20,6 +20,14 @@ function activate(context) {
   const gitPanel = new GitPanel(context)
   const graphifyPanel = new GraphifyPanel(context)
 
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      "codeJanitorArduino.welcomeSidebar",
+      chatPanel,
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  )
+
   console.log("[Code Janitor Arduino] Registering commands...")
 
   const openWelcomeCommand = vscode.commands.registerCommand(
