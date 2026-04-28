@@ -95,6 +95,15 @@
         flex-direction: column;
         gap: 2px;
       }
+      #session-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      #session-select {
+        max-width: 180px;
+      }
       #header-title {
         font-size: 14px;
         font-weight: 600;
@@ -1761,6 +1770,12 @@
         <div id="header-brand">
           <div id="header-title">Code Janitor AI</div>
           <div id="header-sub">Ollama</div>
+          <div id="session-controls">
+            <select id="session-select" title="Chat sessions">
+              <option value="">Loading chats...</option>
+            </select>
+            <button class="pill-btn" id="btn-new-chat" title="New chat">New</button>
+          </div>
         </div>
         <div id="connectivity-status" class="checking" title="Checking internet connectivity...">
           <span class="connectivity-dot pulse"></span>
@@ -1933,6 +1948,8 @@
       var btnDeep = document.getElementById("btn-deep");
       var btnThink = document.getElementById("btn-think");
       var btnClear = document.getElementById("btn-clear");
+      var btnNewChat = document.getElementById("btn-new-chat");
+      var sessionSelect = document.getElementById("session-select");
       var btnTts = document.getElementById("btn-tts");
       var inputHint = document.getElementById("input-hint");
       var providerSelect = document.getElementById("provider-select");
@@ -2070,8 +2087,7 @@
         if (models && models.length) {
           populateModels(models);
         } else if (meta && meta.models && meta.models.length) {
-          if (provider === "nvidia" && hasKey) showNoModels("Loading models...");
-          else if (hasKey || !needsKey) populateModels(meta.models);
+          if (hasKey || !needsKey) populateModels(meta.models);
           else showNoModels("Save an API key to see models");
         } else if (provider === "ollama") {
           showNoModels("Loading models...");
@@ -2107,8 +2123,7 @@
         showKeySaved();
         currentKeyPresence[p] = true;
         var meta = getProviderMeta(p);
-        if (p === "nvidia") showNoModels("Loading models...");
-        else if (meta && meta.models && meta.models.length) populateModels(meta.models);
+        if (meta && meta.models && meta.models.length) populateModels(meta.models);
         addRow("API key saved for " + p + ".", "status");
       };
 
@@ -2157,6 +2172,8 @@
       };
       var currentMessage = null;
       var chatMode = "fast";
+      var currentSessionId = "";
+      var suppressSessionEvents = false;
       var activityEmptyMessage = "No activity yet. Start a task to see the agent workflow.";
 
       function resetActivity() {
@@ -2811,6 +2828,59 @@
         return row;
       }
 
+      function populateSessions(sessions, selectedId) {
+        suppressSessionEvents = true;
+        sessionSelect.innerHTML = "";
+
+        if (!Array.isArray(sessions) || sessions.length === 0) {
+          var emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "New Chat 1";
+          sessionSelect.appendChild(emptyOpt);
+          currentSessionId = "";
+          suppressSessionEvents = false;
+          return;
+        }
+
+        sessions.forEach(function(session, index) {
+          var opt = document.createElement("option");
+          opt.value = session.id;
+          var label = session.title || ("Chat " + (index + 1));
+          if (session.compactedCount > 0) {
+            label += " · compacted";
+          }
+          opt.textContent = label;
+          if (session.id === selectedId) {
+            opt.selected = true;
+          }
+          sessionSelect.appendChild(opt);
+        });
+
+        currentSessionId = selectedId || sessionSelect.value || "";
+        suppressSessionEvents = false;
+      }
+
+      function restoreConversation(history) {
+        chat.innerHTML = "";
+        currentMessage = null;
+
+        if (!Array.isArray(history) || history.length === 0) {
+          addRow("Ready. Select a model above, pick an action chip, or just ask.", "status");
+          return;
+        }
+
+        history.forEach(function(entry) {
+          if (!entry || typeof entry.content !== "string") return;
+          if (entry.role === "user") {
+            addRow(entry.content, "user");
+          } else if (entry.role === "assistant") {
+            addRow(entry.content, "ai");
+          }
+        });
+
+        chat.scrollTop = chat.scrollHeight;
+      }
+
       function setInputState(busy) {
         sendBtn.style.display = busy ? "none" : "inline-block";
         stopBtn.style.display = busy ? "inline-block" : "none";
@@ -2913,6 +2983,16 @@
         vscode.postMessage({ type: "clear" });
         resetActivity();
         addRow("Conversation cleared.", "status");
+      };
+      btnNewChat.onclick = function () {
+        vscode.postMessage({ type: "createSession" });
+      };
+      sessionSelect.onchange = function () {
+        if (suppressSessionEvents) return;
+        var nextSessionId = sessionSelect.value;
+        if (!nextSessionId || nextSessionId === currentSessionId) return;
+        currentSessionId = nextSessionId;
+        vscode.postMessage({ type: "switchSession", sessionId: nextSessionId });
       };
 
       modelSelect.onchange = function () {
@@ -3126,6 +3206,9 @@
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
           addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
+        } else if (msg.type === "sessionState") {
+          populateSessions(msg.sessions, msg.currentSessionId);
+          restoreConversation(msg.history);
         } else if (msg.type === "setCurrentProvider") {
           if (msg.providers && msg.providers.length) {
             customProviderMeta = {};

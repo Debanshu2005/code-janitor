@@ -9,12 +9,17 @@ const http = require("http");
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
-const MAX_RELEVANT_FILES = 4;
-const MAX_OPEN_TAB_SNIPPETS = 2;
-const MAX_HISTORY_ENTRIES = 4;
-const REPETITION_WINDOW = 180;
-const REPETITION_WINDOW_HEAVY = 400;
-const SCAN_STALE_MS = 30_000;
+const MAX_RELEVANT_FILES = 3;
+const MAX_OPEN_TAB_SNIPPETS = 1;
+const MAX_HISTORY_ENTRIES = 3;
+const MAX_SESSION_RECENT_ENTRIES = 8;
+const MAX_SESSION_PERSISTED_ENTRIES = 24;
+const MAX_SESSION_SUMMARY_CHARS = 2_400;
+const MAX_CHAT_SESSIONS = 12;
+const RELEVANT_FILE_CACHE_LIMIT = 30;
+const REPETITION_WINDOW = 150;
+const REPETITION_WINDOW_HEAVY = 300;
+const SCAN_STALE_MS = 45_000;
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const IGNORED_DIRS = new Set([
@@ -93,23 +98,30 @@ const NVIDIA_FALLBACK_MODELS = [
 ];
 
 class AIAgent {
-  constructor() {
+  constructor(context = null) {
     this.codebaseContext = new Map();
+    this.context = context;
+    const persistedChatState = this._loadPersistedChatState();
+    this.chatSessions = persistedChatState.sessions;
+    this.currentSessionId = persistedChatState.currentSessionId;
     this.conversationHistory = [];
     this.scanVersion = 0;
     this.lastScanAt = 0;
     this.workspaceRoot = null;
     this.currentEditableTargets = null;
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
+    this._relevantFileCache = new Map();
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
+    this._syncCurrentSessionReferences();
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
         this._lastActiveEditor = editor;
       }
+      this._relevantFileCache.clear();
     });
   }
 
@@ -117,6 +129,313 @@ class AIAgent {
     if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor;
     }
+  }
+
+  _getConversationStateKey() {
+    return "codeJanitor.ai.chatHistory";
+  }
+
+  _getChatSessionsStateKey() {
+    return "codeJanitor.ai.chatSessions";
+  }
+
+  _sanitizeHistoryEntries(history) {
+    if (!Array.isArray(history)) return [];
+    return history
+      .filter(
+        (entry) =>
+          entry &&
+          (entry.role === "user" || entry.role === "assistant") &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      .map((entry) => ({
+        role: entry.role,
+        content: entry.content.trim()
+      }))
+      .slice(-MAX_SESSION_PERSISTED_ENTRIES);
+  }
+
+  _createSessionId() {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  _buildDefaultSessionTitle() {
+    return `New Chat ${this.chatSessions?.length ? this.chatSessions.length + 1 : 1}`;
+  }
+
+  _createSessionRecord(overrides = {}) {
+    const now = Date.now();
+    return {
+      id: overrides.id || this._createSessionId(),
+      title:
+        typeof overrides.title === "string" && overrides.title.trim()
+          ? overrides.title.trim()
+          : this._buildDefaultSessionTitle(),
+      createdAt:
+        Number.isFinite(overrides.createdAt) && overrides.createdAt > 0
+          ? overrides.createdAt
+          : now,
+      updatedAt:
+        Number.isFinite(overrides.updatedAt) && overrides.updatedAt > 0
+          ? overrides.updatedAt
+          : now,
+      summary:
+        typeof overrides.summary === "string" ? overrides.summary.trim() : "",
+      compactedCount:
+        Number.isFinite(overrides.compactedCount) && overrides.compactedCount > 0
+          ? overrides.compactedCount
+          : 0,
+      history: this._sanitizeHistoryEntries(overrides.history || [])
+    };
+  }
+
+  _loadPersistedChatState() {
+    const rawState = this.context?.globalState?.get(
+      this._getChatSessionsStateKey(),
+      null
+    );
+    if (
+      rawState &&
+      Array.isArray(rawState.sessions) &&
+      rawState.sessions.length > 0
+    ) {
+      const sessions = rawState.sessions.map((session) =>
+        this._createSessionRecord(session)
+      );
+      if (sessions.length > 0) {
+        const currentSessionId = sessions.some(
+          (session) => session.id === rawState.currentSessionId
+        )
+          ? rawState.currentSessionId
+          : sessions[0].id;
+        return { sessions, currentSessionId };
+      }
+    }
+
+    const legacyHistory = this._sanitizeHistoryEntries(
+      this.context?.globalState?.get(this._getConversationStateKey(), [])
+    );
+    const defaultSession = this._createSessionRecord({
+      title: "New Chat 1",
+      history: legacyHistory
+    });
+    return {
+      sessions: [defaultSession],
+      currentSessionId: defaultSession.id
+    };
+  }
+
+  _getCurrentSession() {
+    let session = this.chatSessions.find(
+      (candidate) => candidate.id === this.currentSessionId
+    );
+    if (!session) {
+      session =
+        this.chatSessions[0] || this._createSessionRecord({ title: "New Chat 1" });
+      if (this.chatSessions.length === 0) {
+        this.chatSessions = [session];
+      }
+      this.currentSessionId = session.id;
+    }
+    return session;
+  }
+
+  _syncCurrentSessionReferences() {
+    const session = this._getCurrentSession();
+    this.conversationHistory = session.history;
+    return session;
+  }
+
+  _persistChatState() {
+    if (!this.context?.globalState) return;
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_CHAT_SESSIONS)
+      .map((session) =>
+        this._createSessionRecord({
+          ...session,
+          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
+        })
+      );
+    this.chatSessions = sessions;
+    if (!sessions.some((session) => session.id === this.currentSessionId)) {
+      this.currentSessionId = sessions[0]?.id || this._createSessionRecord().id;
+    }
+    this.context.globalState.update(this._getChatSessionsStateKey(), {
+      currentSessionId: this.currentSessionId,
+      sessions
+    });
+    this.context.globalState.update(this._getConversationStateKey(), undefined);
+  }
+
+  _touchCurrentSession() {
+    const session = this._getCurrentSession();
+    session.updatedAt = Date.now();
+    return session;
+  }
+
+  _condenseHistoryEntry(content, maxLength = 220) {
+    const normalized = String(content || "")
+      .replace(/```[\s\S]*?```/g, "[code block]")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return "";
+    return normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 3)}...`
+      : normalized;
+  }
+
+  _buildHistorySummaryChunk(entries) {
+    return entries
+      .map((entry) => {
+        const condensed = this._condenseHistoryEntry(entry.content);
+        if (!condensed) return "";
+        return `- ${entry.role === "user" ? "User" : "Assistant"}: ${condensed}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  _mergeSessionSummary(existingSummary, nextChunk) {
+    const sections = [String(existingSummary || "").trim(), String(nextChunk || "").trim()]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (sections.length <= MAX_SESSION_SUMMARY_CHARS) {
+      return sections;
+    }
+    return sections.slice(sections.length - MAX_SESSION_SUMMARY_CHARS);
+  }
+
+  _compactCurrentSessionHistory() {
+    const session = this._getCurrentSession();
+    if (session.history.length <= MAX_SESSION_RECENT_ENTRIES + 4) {
+      return false;
+    }
+
+    const compactedEntries = session.history.slice(
+      0,
+      session.history.length - MAX_SESSION_RECENT_ENTRIES
+    );
+    if (compactedEntries.length === 0) {
+      return false;
+    }
+
+    const summaryChunk = this._buildHistorySummaryChunk(compactedEntries);
+    session.summary = this._mergeSessionSummary(session.summary, summaryChunk);
+    session.compactedCount =
+      Number(session.compactedCount || 0) + compactedEntries.length;
+    session.history = session.history.slice(-MAX_SESSION_RECENT_ENTRIES);
+    this.conversationHistory = session.history;
+    return true;
+  }
+
+  _maybeAutoTitleCurrentSession(content) {
+    const session = this._getCurrentSession();
+    const currentTitle = String(session.title || "").trim();
+    if (!/^New Chat(?: \d+)?$/i.test(currentTitle)) {
+      return;
+    }
+
+    const title = this._condenseHistoryEntry(content, 42)
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .trim();
+    if (title) {
+      session.title = title;
+    }
+  }
+
+  _appendConversationEntry(role, content) {
+    if (
+      (role !== "user" && role !== "assistant") ||
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      return;
+    }
+
+    const session = this._touchCurrentSession();
+    session.history.push({ role, content: content.trim() });
+    if (role === "user") {
+      this._maybeAutoTitleCurrentSession(content);
+    }
+    this._compactCurrentSessionHistory();
+    this._persistChatState();
+  }
+
+  getConversationHistory() {
+    return this._getCurrentSession().history.slice();
+  }
+
+  getSessionState() {
+    const currentSession = this._syncCurrentSessionReferences();
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        compactedCount: session.compactedCount || 0
+      }));
+    return {
+      currentSessionId: currentSession.id,
+      currentSessionTitle: currentSession.title,
+      compactedCount: currentSession.compactedCount || 0,
+      sessions,
+      history: currentSession.history.slice()
+    };
+  }
+
+  createSession(title = "") {
+    const session = this._createSessionRecord({
+      title: title || this._buildDefaultSessionTitle()
+    });
+    this.chatSessions = [session].concat(
+      this.chatSessions.filter((candidate) => candidate.id !== session.id)
+    );
+    this.currentSessionId = session.id;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
+    return this.getSessionState();
+  }
+
+  switchSession(sessionId) {
+    if (!sessionId) return this.getSessionState();
+    const sessionExists = this.chatSessions.some(
+      (session) => session.id === sessionId
+    );
+    if (!sessionExists) return this.getSessionState();
+    this.currentSessionId = sessionId;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
+    return this.getSessionState();
+  }
+
+  _buildPromptHistoryContext(isTabQuestion = false) {
+    const session = this._getCurrentSession();
+    const parts = [];
+    if (session.summary) {
+      parts.push(`Conversation summary:\n${session.summary}`);
+    }
+
+    const recentEntries = isTabQuestion
+      ? session.history.filter((entry) => entry.role === "user").slice(-2, -1)
+      : session.history.slice(-MAX_HISTORY_ENTRIES, -1);
+    const historyText = recentEntries
+      .map(
+        (entry) =>
+          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
+      )
+      .join("\n\n");
+    if (historyText) {
+      parts.push(historyText);
+    }
+
+    return parts.join("\n\n");
   }
 
   getConfig() {
@@ -247,6 +566,124 @@ class AIAgent {
     return !blockedFragments.some((fragment) => value.includes(fragment));
   }
 
+  _looksLikeChatModel(modelId) {
+    const value = String(modelId || "").trim().toLowerCase();
+    if (!value) return false;
+
+    const blockedFragments = [
+      "embed",
+      "embedding",
+      "rerank",
+      "guard",
+      "safety",
+      "moderation",
+      "whisper",
+      "tts",
+      "asr",
+      "speech-to-text",
+      "text-to-speech"
+    ];
+
+    return !blockedFragments.some((fragment) => value.includes(fragment));
+  }
+
+  _extractModelIds(data, filterFn = null) {
+    const entries = Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.models)
+        ? data.models
+        : Array.isArray(data)
+          ? data
+          : [];
+
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) =>
+            typeof entry === "string"
+              ? entry.trim()
+              : String(entry?.id || entry?.name || "").trim()
+          )
+          .filter(Boolean)
+          .filter((modelId) => (filterFn ? filterFn(modelId) : true))
+      )
+    );
+  }
+
+  async _fetchModelIdsFromEndpoint(url, { headers = {}, timeoutMs = 8_000, filterFn = null } = {}) {
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: this._createRequestSignal(null, timeoutMs)
+      });
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      return this._extractModelIds(data, filterFn);
+    } catch {
+      return [];
+    }
+  }
+
+  _getOpenAiCompatibleModelsUrl(baseUrl) {
+    const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!normalized) return "";
+    if (/\/chat\/completions$/i.test(normalized)) {
+      return normalized.replace(/\/chat\/completions$/i, "/models");
+    }
+    if (/\/v1$/i.test(normalized)) return `${normalized}/models`;
+    if (/\/models$/i.test(normalized)) return normalized;
+    return `${normalized}/v1/models`;
+  }
+
+  async _fetchGroqModelNames(apiKey, timeoutMs = 8_000) {
+    if (!apiKey) return [];
+    return this._fetchModelIdsFromEndpoint("https://api.groq.com/openai/v1/models", {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
+  async _fetchOpenRouterModelNames(apiKey, timeoutMs = 8_000) {
+    const headers = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+    return this._fetchModelIdsFromEndpoint("https://openrouter.ai/api/v1/models?output_modalities=text", {
+      headers,
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
+  async _fetchAnthropicModelNames(apiKey, timeoutMs = 8_000) {
+    if (!apiKey) return [];
+    return this._fetchModelIdsFromEndpoint("https://api.anthropic.com/v1/models", {
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      timeoutMs
+    });
+  }
+
+  async _fetchOpenAiCompatibleModelNames(baseUrl, apiKey, timeoutMs = 8_000) {
+    const modelsUrl = this._getOpenAiCompatibleModelsUrl(baseUrl);
+    if (!modelsUrl) return [];
+
+    const headers = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+    return this._fetchModelIdsFromEndpoint(modelsUrl, {
+      headers,
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
   async _fetchNvidiaModelNames(apiKey, timeoutMs = 8_000, forceRefresh = false) {
     const cacheAge = Date.now() - this._nvidiaModelsFetchedAt;
     if (
@@ -328,11 +765,38 @@ class AIAgent {
 
   async getAvailableModelsForProvider(
     provider,
-    { ollamaUrl = "", nvidiaApiKey = "", timeoutMs = 8_000, forceRefresh = false } = {}
+    {
+      ollamaUrl = "",
+      groqApiKey = "",
+      openrouterApiKey = "",
+      anthropicApiKey = "",
+      nvidiaApiKey = "",
+      timeoutMs = 8_000,
+      forceRefresh = false,
+      customProvider = null
+    } = {}
   ) {
     if (provider === "ollama") {
       return this._fetchOllamaModelNames(
         ollamaUrl || this.getConfig().ollamaUrl,
+        timeoutMs
+      );
+    }
+
+    if (provider === "groq") {
+      return this._fetchGroqModelNames(groqApiKey || this.getConfig().groqApiKey, timeoutMs);
+    }
+
+    if (provider === "openrouter") {
+      return this._fetchOpenRouterModelNames(
+        openrouterApiKey || this.getConfig().openrouterApiKey,
+        timeoutMs
+      );
+    }
+
+    if (provider === "anthropic") {
+      return this._fetchAnthropicModelNames(
+        anthropicApiKey || this.getConfig().anthropicApiKey,
         timeoutMs
       );
     }
@@ -345,6 +809,14 @@ class AIAgent {
       );
     }
 
+    if (customProvider) {
+      return this._fetchOpenAiCompatibleModelNames(
+        customProvider.chatCompletionsUrl || customProvider.baseUrl,
+        customProvider.apiKey || "",
+        timeoutMs
+      );
+    }
+
     return [];
   }
 
@@ -353,90 +825,139 @@ class AIAgent {
       return config;
     }
 
-    if (config.provider === "nvidia") {
-      const discoveredModels = await this._fetchNvidiaModelNames(
-        config.nvidiaApiKey,
-        8_000
-      );
-      const currentModel = this._sanitizeNvidiaModel(
-        config.model || config.nvidiaModel
-      );
-      const resolvedModel = this._pickNvidiaModel(
-        discoveredModels,
-        currentModel
-      );
-
-      if (discoveredModels.length > 0 && resolvedModel !== currentModel) {
-        reportStatus?.(
-          `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
-        );
-      }
-
-      return {
-        ...config,
-        model: resolvedModel,
-        nvidiaModel: resolvedModel,
-        timeout: Math.max(config.timeout || 0, 300_000)
-      };
-    }
-
     const baseConfig = {
       ...config,
       timeout: Math.max(config.timeout || 0, 300_000)
     };
 
-    if (baseConfig.provider !== "ollama") {
+    // Skip model discovery for non-Ollama/NVIDIA providers
+    if (config.provider !== "nvidia" && config.provider !== "ollama") {
       return baseConfig;
     }
 
-    const models = await this._fetchOllamaModelNames(baseConfig.ollamaUrl);
-    if (models.length === 0) {
+    // For NVIDIA: Try quick model discovery with short timeout, fallback to configured model
+    if (config.provider === "nvidia") {
+      try {
+        const discoveredModels = await Promise.race([
+          this._fetchNvidiaModelNames(config.nvidiaApiKey, 3_000),
+          new Promise((resolve) => setTimeout(() => resolve([]), 3_000))
+        ]);
+        
+        const currentModel = this._sanitizeNvidiaModel(
+          config.model || config.nvidiaModel
+        );
+        
+        if (discoveredModels.length > 0) {
+          const resolvedModel = this._pickNvidiaModel(discoveredModels, currentModel);
+          if (resolvedModel !== currentModel) {
+            reportStatus?.(
+              `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
+            );
+          }
+          return {
+            ...baseConfig,
+            model: resolvedModel,
+            nvidiaModel: resolvedModel
+          };
+        }
+      } catch (err) {
+        console.warn('[Agent] NVIDIA model discovery failed, using configured model:', err.message);
+      }
+      
+      // Fallback: use configured model without discovery
+      return {
+        ...baseConfig,
+        model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
+        nvidiaModel: this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+      };
+    }
+
+    // For Ollama: Try quick model discovery with short timeout, fallback to configured model
+    if (config.provider === "ollama") {
+      try {
+        const models = await Promise.race([
+          this._fetchOllamaModelNames(baseConfig.ollamaUrl, 3_000),
+          new Promise((resolve) => setTimeout(() => resolve([]), 3_000))
+        ]);
+        
+        if (models.length > 0) {
+          const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
+          if (resolvedModel !== baseConfig.model) {
+            reportStatus?.(
+              `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
+            );
+          }
+          return {
+            ...baseConfig,
+            model: resolvedModel
+          };
+        }
+      } catch (err) {
+        console.warn('[Agent] Ollama model discovery failed, using configured model:', err.message);
+      }
+      
+      // Fallback: use configured model without discovery
       return baseConfig;
     }
 
-    const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
-    if (resolvedModel !== baseConfig.model) {
-      reportStatus?.(
-        `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
-      );
-    }
+    return baseConfig;
+  }
 
-    return {
-      ...baseConfig,
-      model: resolvedModel
+  _getLatencyProfile(config, mode = "fast", intent = "general") {
+    const resolvedModel =
+      config?.provider === "nvidia"
+        ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+        : String(config?.model || "").trim();
+    const profile = {
+      maxTokens: mode === "deep" ? 4608 : mode === "heavy" ? 3072 : 1024,
+      relevantFileCount: MAX_RELEVANT_FILES,
+      fileSnippetChars: MAX_FILE_SNIPPET,
+      contextChars: MAX_CONTEXT_CHARS,
+      repoContextPolicy: "normal"
     };
+
+    if ((mode === "heavy" || mode === "deep") && intent === "create") {
+      profile.maxTokens = 8192;
+    }
+
+    if (config?.provider === "nvidia" && mode === "fast") {
+      profile.maxTokens = 640;
+      profile.relevantFileCount = 2;
+      profile.fileSnippetChars = 700;
+      profile.contextChars = 3500;
+      profile.repoContextPolicy = "explicit";
+    }
+
+    if (
+      config?.provider === "nvidia" &&
+      resolvedModel === "meta/llama-3.1-70b-instruct"
+    ) {
+      if (mode === "fast") {
+        profile.maxTokens = 768;
+        profile.relevantFileCount = 2;
+        profile.fileSnippetChars = 850;
+        profile.contextChars = 4200;
+        profile.repoContextPolicy = "explicit";
+      } else if (mode === "heavy") {
+        profile.maxTokens = intent === "create" ? 4096 : 2304;
+        profile.relevantFileCount = 3;
+        profile.fileSnippetChars = 950;
+        profile.contextChars = 5200;
+      } else if (mode === "deep") {
+        profile.maxTokens = intent === "create" ? 8192 : 4608;
+        profile.relevantFileCount = 3;
+        profile.fileSnippetChars = 1100;
+        profile.contextChars = 6500;
+      }
+    }
+
+    return profile;
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
-    const isDeep = mode === "deep";
-    const isHeavyLike = mode === "heavy" || isDeep;
-    const isUnlimited = isHeavyLike && intent === "create";
-    
-    // Calculate max tokens based on provider
-    let baseMaxTokens;
-    let optimizedMaxTokens;
-    
-    if (config.provider === "nvidia") {
-      // NVIDIA NIM: Use maximum possible tokens (no artificial limits)
-      baseMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
-      optimizedMaxTokens = baseMaxTokens;
-      console.log(`[Agent] NVIDIA NIM: Using ${baseMaxTokens} max tokens (no artificial limits)`);
-    } else {
-      // Other providers: Use configurable limits
-      baseMaxTokens = isUnlimited 
-        ? (config.maxTokens?.create || 16384)
-        : isDeep
-          ? (config.maxTokens?.deep || 8192)
-          : isHeavyLike
-          ? (config.maxTokens?.heavy || 8192)
-          : (config.maxTokens?.fast || 4096);
-      
-      // Optimize for slow models
-      const isMinimax = config.model === "minimaxai/minimax-m2.7";
-      optimizedMaxTokens = isMinimax 
-        ? (mode === "fast" ? 1024 : isDeep ? 6144 : isHeavyLike ? 4096 : 2048)
-        : baseMaxTokens;
-    }
+    const isUnlimited = mode === "deep" && intent === "create";
+    const latencyProfile = this._getLatencyProfile(config, mode, intent);
+    const optimizedMaxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens;
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -503,7 +1024,7 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
-          max_tokens: baseMaxTokens,
+          max_tokens: optimizedMaxTokens,
           stream: true,
           system: sysContent,
           messages: [{ role: "user", content: userContent }]
@@ -587,20 +1108,22 @@ class AIAgent {
       };
     }
     if (config.provider === "nvidia") {
-      // NVIDIA NIM: Use high token limits for complete code generation
-      const nvidiaMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
-      console.log(`[Agent] NVIDIA NIM: Using ${nvidiaMaxTokens} max tokens`);
-      
-      const isMinimax = config.model === "minimaxai/minimax-m2.7";
-      const isNemotron = config.model === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
+      const resolvedModel = this._sanitizeNvidiaModel(config.model || config.nvidiaModel);
+      const isMinimax = resolvedModel === "minimaxai/minimax-m2.7";
+      const isLlama70b = resolvedModel === "meta/llama-3.1-70b-instruct";
+      const isNemotron = resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
       
       const minimaxOptimizations = isMinimax ? {
         top_p: 0.8,
         frequency_penalty: 0.3,
         presence_penalty: 0.1
       } : {};
+      const llama70bOptimizations = isLlama70b ? {
+        top_p: 0.72,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0
+      } : {};
       
-      // Nemotron-specific optimizations for smoother streaming
       const nemotronOptimizations = isNemotron ? {
         top_p: 0.95,
         frequency_penalty: 0.0,
@@ -614,15 +1137,16 @@ class AIAgent {
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: config.model,
+          model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : 0.2,
-          max_tokens: nvidiaMaxTokens,
+          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
+          max_tokens: optimizedMaxTokens,
           ...minimaxOptimizations,
+          ...llama70bOptimizations,
           ...nemotronOptimizations
         }),
         parseChunk: (line) => {
@@ -655,11 +1179,11 @@ class AIAgent {
         stream: true,
         options: {
           temperature: 0.2,
-          num_predict: isDeep ? 4096 : isHeavyLike ? 2048 : 1024,
-          top_k: 20,
-          top_p: 0.9,
+          num_predict: mode === "deep" ? -1 : mode === "heavy" ? 2048 : 1024,
+          top_k: 15,
+          top_p: 0.85,
           num_ctx: 2048,
-          repeat_penalty: 1.1
+          repeat_penalty: 1.15
         }
       }),
       parseChunk: (line) => {
@@ -733,6 +1257,7 @@ class AIAgent {
     this.codebaseContext.clear();
     this.scanVersion += 1;
     this.workspaceRoot = workspaceFolder;
+    this._relevantFileCache.clear();
 
     const files = await this._getAllFiles(workspaceFolder);
     for (const file of files) {
@@ -965,11 +1490,12 @@ class AIAgent {
       return { error: "AI is disabled in Code Janitor settings." };
     }
 
-    this.conversationHistory.push({ role: "user", content: userMessage });
+    this._appendConversationEntry("user", userMessage);
     const isTabQuestion = this._isTabQuestion(userMessage);
 
     // Detect intent early for knowledge graph decision
     const earlyIntent = this._detectIntent(userMessage);
+    const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Check for knowledge graph only for code-related intents
     const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent);
@@ -1018,7 +1544,7 @@ class AIAgent {
     ) {
       const reply = `Today is ${new Date().toDateString()}.`;
       if (streamCallback) streamCallback(reply);
-      this.conversationHistory.push({ role: "assistant", content: reply });
+      this._appendConversationEntry("assistant", reply);
       return { text: reply, actions: [] };
     }
     if (
@@ -1028,7 +1554,7 @@ class AIAgent {
     ) {
       const reply = `Current date and time: ${new Date().toString()}.`;
       if (streamCallback) streamCallback(reply);
-      this.conversationHistory.push({ role: "assistant", content: reply });
+      this._appendConversationEntry("assistant", reply);
       return { text: reply, actions: [] };
     }
 
@@ -1057,26 +1583,26 @@ class AIAgent {
       let fastContext = "";
       if (
         effectiveWorkspace &&
-        this._shouldUseRepoContextInFastMode(userMessage)
+        this._shouldUseRepoContextInFastMode(userMessage, config.provider)
       ) {
         reportStatus?.("Scanning relevant files for fast mode...");
         await this.ensureCodebaseScanned(effectiveWorkspace);
         const relevantFiles = this._findRelevantFiles(
           userMessage,
-          effectiveWorkspace
+          effectiveWorkspace,
+          {
+            maxResults: latencyProfile.relevantFileCount,
+            snippetChars: latencyProfile.fileSnippetChars
+          }
         );
-        fastContext = this._buildRelevantFileContext(relevantFiles, 600, 4_000);
+        fastContext = this._buildRelevantFileContext(
+          relevantFiles,
+          latencyProfile.fileSnippetChars,
+          latencyProfile.contextChars
+        );
       }
-      const history = this.conversationHistory
-        .slice(-2, -1)
-        .map(
-          (e) =>
-            `${e.role === "user" ? "User" : "Assistant"}: ${String(
-              e.content || ""
-            ).slice(0, 200)}`
-        )
-        .join("\n\n");
-      const intent = this._detectIntent(userMessage);
+      const history = this._buildPromptHistoryContext(false);
+      const intent = earlyIntent;
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -1135,13 +1661,16 @@ ${resolvedMessage}`;
         );
       const relevantFiles = isFullScan
         ? Array.from(this.codebaseContext.entries())
-            .slice(0, MAX_RELEVANT_FILES)
+            .slice(0, latencyProfile.relevantFileCount)
             .map(([p, d]) => ({
               path: p.replace(/\\/g, "/"),
               score: 1,
-              content: d.content.slice(0, MAX_FILE_SNIPPET)
+              content: d.content.slice(0, latencyProfile.fileSnippetChars)
             }))
-        : this._findRelevantFiles(userMessage, effectiveWorkspace);
+        : this._findRelevantFiles(userMessage, effectiveWorkspace, {
+            maxResults: latencyProfile.relevantFileCount,
+            snippetChars: latencyProfile.fileSnippetChars
+          });
       const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
       const editorStateContext = this._buildEditorStateContext(editorState);
       const openTabSnippetContext = isScopedActiveFileEdit
@@ -1172,10 +1701,7 @@ ${resolvedMessage}`;
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
-      const reqIntent =
-        mode === "fast"
-          ? this._detectIntent(userMessage)
-          : this._detectIntent(userMessage);
+      const reqIntent = earlyIntent;
       const shouldCheckRepetition = !this._shouldForceStructuredEdit(
         reqIntent,
         userMessage
@@ -1417,10 +1943,7 @@ ${resolvedMessage}`;
       if (requiresFileActions && !this._hasFileActions(parsedResponse.actions)) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change.";
-        this.conversationHistory.push({
-          role: "assistant",
-          content: assistantText || noEditsMessage
-        });
+        this._appendConversationEntry("assistant", assistantText || noEditsMessage);
         return {
           text: noEditsMessage,
           actions: [],
@@ -1428,14 +1951,13 @@ ${resolvedMessage}`;
         };
       }
 
-      this.conversationHistory.push({
-        role: "assistant",
-        content:
-          assistantText ||
+      this._appendConversationEntry(
+        "assistant",
+        assistantText ||
           (repetitionDetected
             ? `${fullResponse}\n\n[stopped repetitive output]`
             : fullResponse || this._getEmptyResponseFallback(mode))
-      });
+      );
 
       return parsedResponse;
     } catch (error) {
@@ -2332,12 +2854,22 @@ ${(rawResponse || "").slice(0, 4000)}
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
   }
 
-  _shouldUseRepoContextInFastMode(message) {
+  _shouldUseRepoContextInFastMode(message, provider = "") {
     const text = message || "";
-    return (
+    const wantsRepoWideContext =
       /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all files|overview|summarize|audit|architecture|graph|graphify|readme)\b/i.test(
         text
-      ) ||
+      );
+    const mentionsSpecificPath =
+      /[/\\]|\.[a-z0-9]{1,5}\b/i.test(text) ||
+      this._extractPathHints(text).length > 0;
+
+    if (provider === "nvidia") {
+      return wantsRepoWideContext || mentionsSpecificPath;
+    }
+
+    return (
+      wantsRepoWideContext ||
       (/\b(error|issue|bug|broken|not working|failing|cannot|can't|why)\b/i.test(
         text
       ) &&
@@ -2696,7 +3228,44 @@ ${(rawResponse || "").slice(0, 4000)}
     };
   }
 
-  _findRelevantFiles(query, workspaceFolder) {
+  _buildRelevantFilesCacheKey(query, workspaceFolder, options = {}) {
+    const activeEditor =
+      vscode.window.activeTextEditor || this._lastActiveEditor;
+    const activePath =
+      activeEditor && workspaceFolder
+        ? path
+            .relative(workspaceFolder, activeEditor.document.fileName)
+            .replace(/\\/g, "/")
+        : "";
+    return [
+      workspaceFolder || "",
+      this.scanVersion,
+      activePath,
+      Number.isFinite(options.maxResults) ? options.maxResults : MAX_RELEVANT_FILES,
+      Number.isFinite(options.snippetChars) ? options.snippetChars : MAX_FILE_SNIPPET,
+      this._extractKeywords(query).join(","),
+      this._extractPathHints(query).join(",")
+    ].join("::");
+  }
+
+  _findRelevantFiles(query, workspaceFolder, options = {}) {
+    const cacheKey = this._buildRelevantFilesCacheKey(
+      query,
+      workspaceFolder,
+      options
+    );
+    if (this._relevantFileCache.has(cacheKey)) {
+      return this._relevantFileCache.get(cacheKey).map((entry) => ({ ...entry }));
+    }
+
+    const snippetChars =
+      Number.isFinite(options.snippetChars) && options.snippetChars > 0
+        ? options.snippetChars
+        : MAX_FILE_SNIPPET;
+    const maxResults =
+      Number.isFinite(options.maxResults) && options.maxResults > 0
+        ? options.maxResults
+        : MAX_RELEVANT_FILES;
     const keywords = this._extractKeywords(query);
     const pathHints = this._extractPathHints(query);
     const relevant = [];
@@ -2764,12 +3333,12 @@ ${(rawResponse || "").slice(0, 4000)}
         relevant.push({
           path: relativePath,
           score,
-          content: fileData.content.slice(0, MAX_FILE_SNIPPET)
+          content: fileData.content.slice(0, snippetChars)
         });
       }
     }
 
-    return relevant
+    const result = relevant
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (activeRelativePath) {
@@ -2785,7 +3354,18 @@ ${(rawResponse || "").slice(0, 4000)}
         }
         return a.path.localeCompare(b.path);
       })
-      .slice(0, MAX_RELEVANT_FILES);
+      .slice(0, maxResults);
+
+    this._relevantFileCache.set(
+      cacheKey,
+      result.map((entry) => ({ ...entry }))
+    );
+    if (this._relevantFileCache.size > RELEVANT_FILE_CACHE_LIMIT) {
+      const oldestKey = this._relevantFileCache.keys().next().value;
+      if (oldestKey) this._relevantFileCache.delete(oldestKey);
+    }
+
+    return result;
   }
 
   _buildPrompt(
@@ -2799,17 +3379,7 @@ ${(rawResponse || "").slice(0, 4000)}
     mode,
     knowledgeGraphContext = ""
   ) {
-    const historyEntries = isTabQuestion
-      ? this.conversationHistory
-          .filter((entry) => entry.role === "user")
-          .slice(-2, -1)
-      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES, -1);
-    const history = historyEntries
-      .map(
-        (entry) =>
-          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
-      )
-      .join("\n\n");
+    const history = this._buildPromptHistoryContext(isTabQuestion);
 
     const intent = this._detectIntent(userMessage);
       const systemInstruction = this._buildSystemInstruction(
@@ -3525,7 +4095,12 @@ ${userMessage}`;
   }
 
   clearHistory() {
-    this.conversationHistory = [];
+    const session = this._touchCurrentSession();
+    session.history = [];
+    session.summary = "";
+    session.compactedCount = 0;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
   }
 }
 

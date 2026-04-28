@@ -12,6 +12,7 @@ const MODELS_BY_PROVIDER = {
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 };
+const OLLAMA_FALLBACK_MODELS = ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"];
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
@@ -19,7 +20,7 @@ class ChatPanel {
     this.context = context;
     this.panel = null;
     this.sidebarView = null;
-    this.agent = new AIAgent();
+    this.agent = new AIAgent(context);
     this.performanceMonitor = new PerformanceMonitor(context);
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
@@ -1166,6 +1167,24 @@ class ChatPanel {
     ];
   }
 
+  _postSessionState(extra = {}) {
+    this._postMessage({
+      type: "sessionState",
+      ...this.agent.getSessionState(),
+      ...extra
+    });
+  }
+
+  _getFallbackModelsForProvider(provider) {
+    if (provider === "ollama") return OLLAMA_FALLBACK_MODELS.slice();
+
+    const customProvider = this._getCustomProviderById(provider);
+    if (customProvider?.models?.length) return customProvider.models.slice();
+
+    const providerModels = MODELS_BY_PROVIDER[provider];
+    return Array.isArray(providerModels) ? providerModels.slice() : [];
+  }
+
   _sanitizeApiKey(value) {
     const raw = typeof value === "string" ? value.trim() : "";
     if (!raw) return "";
@@ -1946,49 +1965,90 @@ ${trimmedText}`;
 
   async _fetchAndSendModels(forceProvider = null) {
     let provider = forceProvider || "ollama";
-    // Only needed for Ollama — other providers populate models client-side
+    
     try {
       const config = await this._getEffectiveAiConfig();
       provider = forceProvider || config.provider;
-      if (provider !== "ollama" && provider !== "nvidia") return;
-      const models = await this.agent.getAvailableModelsForProvider(provider, {
-        ollamaUrl: config.ollamaUrl,
-        nvidiaApiKey: config.nvidiaApiKey,
-        timeoutMs: 15_000,
-        forceRefresh: provider === "nvidia"
-      });
-      if (models.length > 0 && this.panel) {
-        this._postMessage({ type: "setModelOptions", models, provider });
+
+      const customProvider = this._getCustomProviderById(provider);
+      const effectiveCustomProvider = config.customProvider || customProvider;
+      const keyByProvider = {
+        groq: config.groqApiKey,
+        openrouter: config.openrouterApiKey,
+        anthropic: config.anthropicApiKey,
+        nvidia: config.nvidiaApiKey
+      };
+      const needsKey = provider !== "ollama" && (this._isBuiltInProvider(provider) || customProvider);
+      const hasKey = !needsKey || !!(customProvider ? effectiveCustomProvider?.apiKey : keyByProvider[provider]);
+      const defaultModels = this._getFallbackModelsForProvider(provider);
+
+      if (defaultModels.length > 0 && this.panel) {
+        this._postMessage({
+          type: "setModelOptions",
+          models: defaultModels,
+          provider
+        });
+      }
+
+      if (!hasKey) {
+        console.log(`[ChatPanel] Skipping model discovery for ${provider}: API key is not configured`);
         return;
       }
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text:
-            provider === "nvidia"
-              ? "NVIDIA model discovery failed. Showing fallback models."
-              : "Ollama responded, but no models were returned. Showing defaults."
-        });
-      }
-    } catch (err) {
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model list failed: ${err.message || err}. Showing defaults.`
-        });
-      }
-    }
-    // Ollama unreachable or no models — show defaults
-    if (this.panel) {
-      this._postMessage({
-        type: "setModelOptions",
-        models:
-          provider === "nvidia"
-            ? MODELS_BY_PROVIDER.nvidia
-            : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-        provider: provider === "nvidia" ? "nvidia" : "ollama"
+      
+      console.log(`[ChatPanel] Discovering live models from ${provider}...`);
+      this.agent.getAvailableModelsForProvider(provider, {
+        ollamaUrl: config.ollamaUrl,
+        groqApiKey: config.groqApiKey,
+        openrouterApiKey: config.openrouterApiKey,
+        anthropicApiKey: config.anthropicApiKey,
+        nvidiaApiKey: config.nvidiaApiKey,
+        timeoutMs: 8_000,
+        forceRefresh: true,
+        customProvider: effectiveCustomProvider
+      }).then(models => {
+        if (models.length > 0 && this.panel) {
+          console.log(`[ChatPanel] Discovered ${models.length} live models for ${provider}`);
+          this._postMessage({ type: "setModelOptions", models, provider });
+        } else if (defaultModels.length > 0 && this.panel) {
+          this._postMessage({
+            type: "setModelOptions",
+            models: defaultModels,
+            provider
+          });
+          this._postMessage({
+            type: "status",
+            text: `Could not discover live ${provider} models. Showing fallback models.`
+          });
+        }
+      }).catch(err => {
+        console.warn(`[ChatPanel] Live model discovery failed for ${provider}:`, err.message);
+        if (defaultModels.length > 0 && this.panel) {
+          this._postMessage({
+            type: "setModelOptions",
+            models: defaultModels,
+            provider
+          });
+        }
       });
+      
+    } catch (err) {
+      console.error(`[ChatPanel] Critical error in _fetchAndSendModels:`, err);
+      // Still send defaults even if config fails
+      const defaultModels = this._getFallbackModelsForProvider(provider);
+      
+      if (this.panel) {
+        this._postMessage({
+          type: "setModelOptions",
+          models: defaultModels,
+          provider
+        });
+      }
     }
+  }
+
+  _getModelsForInitialProviderState(provider) {
+    const models = this._getFallbackModelsForProvider(provider);
+    return models.length > 0 ? models : null;
   }
 
   _getDefaultModelForProvider(provider) {
@@ -2488,6 +2548,7 @@ ${trimmedText}`;
         }
 
         this._postMessage({ type: "done" });
+        this._postSessionState();
 
         if (response.warnings && response.warnings.length > 0) {
           for (const warning of response.warnings) {
@@ -3052,6 +3113,7 @@ ${trimmedText}`;
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
         this._postMessage({ type: "cleared" });
+        this._postSessionState();
       } else if (message.type === "openChatCommand") {
         await vscode.commands.executeCommand("codeJanitor.openChat");
       } else if (message.type === "openFile") {
@@ -3077,35 +3139,56 @@ ${trimmedText}`;
         // Quick Fix from chat panel - lint and fix with AI
         await this._runActiveSyntaxFix(workspaceFolder);
       } else if (message.type === "refreshProviderModels" || message.type === "ready") {
-        let selectedProvider = this._getSelectedProviderId() || this.agent.getConfig().provider;
-        // Webview signals it's fully loaded or user switched to Ollama — send current state
+        // CRITICAL FIX: Make ready handler completely non-blocking
+        const savedConfig = this.agent.getConfig();
+        const selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+        
         if (message.type === "ready") {
-          const keyPresence = await this._getProviderPresence();
-          const savedConfig = this.agent.getConfig();
-          selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+          // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(selectedProvider);
-          const hasKey = selectedProvider === "ollama" || !!keyPresence[selectedProvider];
-          const models = selectedProvider === "ollama" || selectedProvider === "nvidia"
-            ? null
-            : customProvider?.models?.length
-              ? customProvider.models
-              : hasKey
-                ? (MODELS_BY_PROVIDER[selectedProvider] || null)
-                : null;
+          const defaultModels = this._getModelsForInitialProviderState(selectedProvider);
+          
           this._postMessage({
             type: "setCurrentProvider",
             provider: selectedProvider,
             model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
             providers: this._buildProviderCatalog(),
-            keyPresence,
-            models
+            keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Default, will update
+            models: defaultModels
           });
           this._postMessage({
             type: "thinkingState",
             enabled: this.showThinking
           });
+          this._postSessionState();
+          
+          // Fetch real key presence in background
+          this._getProviderPresence().then(keyPresence => {
+            if (this.panel) {
+              this._postMessage({
+                type: "setCurrentProvider",
+                provider: selectedProvider,
+                model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+                providers: this._buildProviderCatalog(),
+                keyPresence,
+                models: defaultModels
+              });
+            }
+          }).catch(err => {
+            console.warn('[ChatPanel] Background key presence check failed:', err);
+          });
         }
-        this._fetchAndSendModels(selectedProvider === "nvidia" ? "nvidia" : "ollama");
+        
+        // Fetch models in background (non-blocking)
+        this._fetchAndSendModels(selectedProvider);
+      } else if (message.type === "createSession") {
+        this.agent.createSession();
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
+      } else if (message.type === "switchSession") {
+        this.agent.switchSession(message.sessionId);
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
       } else if (message.type === "mode") {
         this.chatMode =
           message.value === "deep"
@@ -3147,34 +3230,42 @@ ${trimmedText}`;
             await this._persistApiKey(message.provider, message.apiKey);
           }
           
-          // Wait for config to persist before fetching models
-          await new Promise(r => setTimeout(r, 300));
-          const keyPresence = await this._getProviderPresence();
+          // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(message.provider);
+          const defaultModels = this._getModelsForInitialProviderState(message.provider);
+          
           if (this.panel) {
-            const hasKey = message.provider === "ollama" || !!keyPresence[message.provider];
             this._postMessage({
               type: "setCurrentProvider",
               provider: message.provider,
               model: nextModel,
               providers: this._buildProviderCatalog(),
-              keyPresence,
-              models: message.provider === "ollama" || message.provider === "nvidia"
-                ? null
-                : customProvider?.models?.length
-                  ? customProvider.models
-                  : hasKey
-                    ? (MODELS_BY_PROVIDER[message.provider] || null)
-                    : null
+              keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Will update in background
+              models: defaultModels
             });
-          }
-          if (this.panel) {
             this._postMessage({
               type: "status",
               text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
             });
           }
-          await this._fetchAndSendModels(message.provider === "nvidia" ? "nvidia" : "ollama");
+          
+          // Fetch models and key presence in background
+          this._fetchAndSendModels(message.provider);
+          
+          this._getProviderPresence().then(keyPresence => {
+            if (this.panel) {
+              this._postMessage({
+                type: "setCurrentProvider",
+                provider: message.provider,
+                model: nextModel,
+                providers: this._buildProviderCatalog(),
+                keyPresence,
+                models: defaultModels
+              });
+            }
+          }).catch(err => {
+            console.warn('[ChatPanel] Background key presence check failed:', err);
+          });
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);
           if (this.panel) {

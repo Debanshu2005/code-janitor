@@ -2330,17 +2330,7 @@ ${trimmedText}`;
           const status = this.showThinking ? "enabled" : "disabled";
           this.panel.webview.postMessage({
             type: "status",
-            text: `Thinking mode ${status}. Replies will ${this.showThinking ? "include a short visible reasoning summary before the answer." : "return to normal answer-only mode."}`
-          });
-          this.panel.webview.postMessage({ type: "done" });
-          return;
-        }
-        if (/^\/think$/i.test(trimmedText)) {
-          this.agent.showThinking = !this.agent.showThinking;
-          const status = this.agent.showThinking ? "enabled" : "disabled";
-          this.panel.webview.postMessage({ 
-            type: "status", 
-            text: `🤔 Thinking mode ${status}. The AI will ${this.agent.showThinking ? 'show its reasoning process step-by-step' : 'respond normally without showing reasoning'}.` 
+            text: `🤔 Thinking mode ${status}. The AI will ${this.showThinking ? 'show its reasoning process step-by-step' : 'respond normally without showing reasoning'}.`
           });
           this.panel.webview.postMessage({ type: "done" });
           return;
