@@ -8,7 +8,7 @@ const GraphifyPanel = require("./graphify/graphify-panel");
 const AIAgent = require("./ai-agent/agent");
 const path = require("path");
 
-// Map file extensions / languageIds → fixer
+// Map file extensions / languageIds to fixers
 function getFixerForDocument(document, code, fileName) {
   console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`);
 
@@ -201,8 +201,8 @@ async function runFixerAndApply(document, editor = null) {
   const fileName = document.fileName;
   const language = getNormalizedLanguageId(document);
 
-  console.log(`✓ Processing file: ${fileName}`);
-  console.log(`✓ File languageId: ${document.languageId}`);
+  console.log(`[OK] Processing file: ${fileName}`);
+  console.log(`[OK] File languageId: ${document.languageId}`);
 
   const fixer = getFixerForDocument(document, code, fileName);
   if (!fixer) {
@@ -211,7 +211,7 @@ async function runFixerAndApply(document, editor = null) {
   }
 
   try {
-    console.log("✓ Fixer loaded successfully, analyzing code...");
+    console.log("[OK] Fixer loaded successfully, analyzing code...");
     let result = null;
 
     if (fixer.analyze) {
@@ -246,14 +246,14 @@ async function runFixerAndApply(document, editor = null) {
         "html"
       ];
       if (supportedLanguages.includes(language)) {
-        console.log(`🤖 Using AI-only fixing for ${language}...`);
+        console.log(`[AI] Using AI-only fixing for ${language}...`);
         const aiResult = await ollamaClient.validateAndFix(
           code,
           fixedCode,
           language
         );
         if (aiResult && aiResult.shouldUseAI) {
-          console.log(`🤖 AI fixed code: ${aiResult.reason}`);
+          console.log(`[AI] AI fixed code: ${aiResult.reason}`);
           fixedCode = aiResult.fixedCode;
           const aiSafety = assessReplacementSafety(code, fixedCode);
           if (
@@ -266,7 +266,7 @@ async function runFixerAndApply(document, editor = null) {
             fixedCode = code;
           }
         } else {
-          console.log("✓ No AI changes needed");
+          console.log("[OK] No AI changes needed");
         }
       }
     }
@@ -284,11 +284,11 @@ async function runFixerAndApply(document, editor = null) {
     }
     if (fixedCode === code) {
 
-      console.log("✨ No changes detected");
+      console.log("[INFO] No changes detected");
       return false;
     }
 
-    console.log("✓ Code analysis complete, applying fixes...");
+    console.log("[OK] Code analysis complete, applying fixes...");
     await replaceDocumentText(document, fixedCode);
 
     if (editor) {
@@ -302,18 +302,22 @@ async function runFixerAndApply(document, editor = null) {
       result.changeLog.length > 0 &&
       fileName.endsWith(".html")
     ) {
-      const changes = result.changeLog.join("\n• ");
+      const changes = result.changeLog.join("\n- ");
 
       if (result.warning) {
         vscode.window.showWarningMessage(
-          `${result.warning}\n\nFixes applied:\n• ${changes}`,
+          `${result.warning}
+
+Fixes applied:
+- ${changes}` ,
           { modal: false }
         );
       } else {
         // Show changes with preview option
         vscode.window
           .showInformationMessage(
-            `HTML fixes applied:\n• ${changes}`,
+            `HTML fixes applied:
+- ${changes}`,
             "Show Preview"
           )
           .then((selection) => {
@@ -337,11 +341,11 @@ async function runFixerAndApply(document, editor = null) {
       vscode.window.showWarningMessage(result.warning);
     }
 
-    console.log("✓ Code formatted successfully!");
+    console.log("[OK] Code formatted successfully!");
     return true;
   } catch (error) {
-    console.error("✗ Code Janitor error:", error);
-    vscode.window.showErrorMessage(`Code Janitor Error: ${error.message}`);
+    console.error("[ERROR] Code Janitor error:", error);
+    console.error("[ERROR] Code Janitor error:", error);
     return false;
   }
 }
@@ -405,7 +409,7 @@ async function restorePersistedApiKeys(context) {
 
 async function activate(context) {
   globalContext = context;
-  console.log("✓ Code Janitor extension is activating...");
+  console.log("[OK] Code Janitor extension is activating...");
   await restorePersistedApiKeys(context);
 
   // Show setup guide on first install
@@ -413,7 +417,7 @@ async function activate(context) {
   if (!hasSeenSetup) {
     vscode.window
       .showInformationMessage(
-        "🧹 Welcome to Code Janitor! Check the setup guide to get started with AI models.",
+        "Welcome to Code Janitor! Check the setup guide to get started with AI models.",
         "Open Setup Guide",
         "Dismiss"
       )
@@ -482,7 +486,7 @@ async function activate(context) {
         // Create "Fix with AI" action for each diagnostic
         for (const diagnostic of diagnostics) {
           const fix = new vscode.CodeAction(
-            `🤖 Fix with AI: ${diagnostic.message}`,
+            `Fix with AI: ${diagnostic.message}`,
             vscode.CodeActionKind.QuickFix
           );
           fix.command = {
@@ -498,7 +502,7 @@ async function activate(context) {
         // Create "Fix All with AI" action if multiple issues
         if (diagnostics.length > 1) {
           const fixAll = new vscode.CodeAction(
-            `🤖 Fix All ${diagnostics.length} Issues with AI`,
+            `Fix All ${diagnostics.length} Issues with AI`,
             vscode.CodeActionKind.QuickFix
           );
           fixAll.command = {
@@ -576,7 +580,7 @@ async function activate(context) {
           } else {
             // Clear diagnostics if no issues
             diagnosticCollection.set(document.uri, []);
-            vscode.window.showInformationMessage("✅ No linting issues found!");
+            vscode.window.showInformationMessage("No linting issues found.");
           }
         } else {
           vscode.window.showErrorMessage(`Linting failed: ${result.message}`);
@@ -675,7 +679,7 @@ async function activate(context) {
           const issueCount = result.issues.length;
           const message =
             `Found ${issueCount} frontend issue(s):\n` +
-            result.issues.map((issue) => `• ${issue.message}`).join("\n");
+            result.issues.map((issue) => `- ${issue.message}`).join("\n");
 
           const action = await vscode.window.showWarningMessage(
             `Found ${issueCount} missing file(s). Create missing files?`,
@@ -687,14 +691,14 @@ async function activate(context) {
           if (action === "Create Files") {
             result._applyFixes();
             vscode.window.showInformationMessage(
-              "✅ Missing files created successfully!"
+              "Missing files created successfully."
             );
           } else if (action === "Show Details") {
             vscode.window.showInformationMessage(message);
           }
         } else {
           vscode.window.showInformationMessage(
-            "✅ No frontend validation issues found!"
+            "No frontend validation issues found."
           );
         }
       } catch (error) {
@@ -717,7 +721,7 @@ async function activate(context) {
     () => livePreviewer(context, { inspect: true })
   );
   context.subscriptions.push(inspectPreviewDisposable);
-  console.log("✓ Enhanced Live Preview command registered.");
+  console.log("[OK] Enhanced Live Preview command registered.");
 
   // 5. AI Chat Command
   const chatDisposable = vscode.commands.registerCommand(
@@ -742,12 +746,13 @@ async function activate(context) {
       } catch (error) {
         console.error("[Extension] CRITICAL ERROR in openChat command:", error);
         console.error("[Extension] Error stack:", error.stack);
-        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}\n\nCheck Developer Console (Help → Toggle Developer Tools) for details.`);
+        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}
+Check Developer Console (Help -> Toggle Developer Tools) for details.`);
       }
     }
   );
   context.subscriptions.push(chatDisposable);
-  console.log("✓ AI Chat command registered.");
+  console.log("[OK] AI Chat command registered.");
 
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);
@@ -759,7 +764,7 @@ async function activate(context) {
     }
   );
   context.subscriptions.push(graphifyDisposable);
-  console.log("✓ Graphify command registered.");
+  console.log("[OK] Graphify command registered.");
 
   // 7. Performance Report Command
   const performanceDisposable = vscode.commands.registerCommand(
@@ -774,7 +779,7 @@ async function activate(context) {
     }
   );
   context.subscriptions.push(performanceDisposable);
-  console.log("✓ Performance report command registered.");
+  console.log("[OK] Performance report command registered.");
 
   // URI handler: vscode://Debanshu2005.code-janitor/check-models
   const uriHandler = vscode.window.registerUriHandler({
@@ -843,7 +848,7 @@ async function activate(context) {
       // Auto-fix on save is now ENABLED by default
       if (!config.get("autoFixOnSave.enabled", true)) return;
 
-      console.log("🧹 Auto-fix triggered before save...");
+      console.log("[INFO] Auto-fix triggered before save...");
 
       // Validate frontend files
       const ext = event.document.fileName.toLowerCase();
@@ -864,7 +869,7 @@ async function activate(context) {
   );
   context.subscriptions.push(saveDisposable);
 
-  console.log("✓ Code Janitor extension activated successfully!");
+  console.log("[OK] Code Janitor extension activated successfully!");
 }
 
 // Helper function to run syntax check via CMD
@@ -963,10 +968,10 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
         const hasSyntaxErrors = !!error || hasErrorKeywords;
 
         if (hasSyntaxErrors) {
-          console.log(`✗ Syntax errors detected in ${fileName}`);
+          console.log(`[ERROR] Syntax errors detected in ${fileName}`);
           console.log("Error details:", output || error.message);
         } else {
-          console.log(`✓ No syntax errors in ${fileName}`);
+          console.log(`[OK] No syntax errors in ${fileName}`);
         }
 
         resolve({
@@ -1014,7 +1019,7 @@ async function applyRuleBasedFixes(document, editor) {
       }
 
       if (fixed !== code) {
-        console.log("✓ Applying changes to document...");
+        console.log("[OK] Applying changes to document...");
         const edit = new vscode.WorkspaceEdit();
         const fullRange = new vscode.Range(
           document.positionAt(0),
@@ -1023,10 +1028,10 @@ async function applyRuleBasedFixes(document, editor) {
         edit.replace(document.uri, fullRange, fixed);
         await vscode.workspace.applyEdit(edit);
         await document.save();
-        console.log("✓ Rule-based fixes applied and saved");
+        console.log("[OK] Rule-based fixes applied and saved");
         return { success: true, fixedCode: fixed };
       } else {
-        console.log("✗ No changes made by rule-based fixes");
+        console.log("[INFO] No changes made by rule-based fixes");
       }
     }
 
@@ -1036,7 +1041,7 @@ async function applyRuleBasedFixes(document, editor) {
       return { success: false, fixedCode: code };
     }
 
-    console.log(`🔧 Applying ${document.languageId} rule-based fixes...`);
+    console.log(`[FIX] Applying ${document.languageId} rule-based fixes...`);
     const result = await fixer.analyze();
     let fixed = code;
 
@@ -1055,14 +1060,14 @@ async function applyRuleBasedFixes(document, editor) {
       edit.replace(document.uri, fullRange, fixed);
       await vscode.workspace.applyEdit(edit);
       await document.save();
-      console.log("✓ Rule-based fixes applied");
+      console.log("[OK] Rule-based fixes applied");
       return { success: true, fixedCode: fixed };
     }
 
     console.log("  No rule-based fixes needed");
     return { success: false, fixedCode: code };
   } catch (error) {
-    console.error("✗ Rule-based fix error:", error.message);
+    console.error("[ERROR] Rule-based fix error:", error.message);
     console.error("Stack:", error.stack);
     return { success: false, fixedCode: code };
   }
@@ -1143,7 +1148,7 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
     );
 
     if (result.error) {
-      console.error(`✗ AI agent error: ${result.error}`);
+      console.error(`[ERROR] AI agent error: ${result.error}`);
       return { applied: false, fixedCode: code, reason: result.error };
     }
 
@@ -1182,20 +1187,20 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
           };
         }
 
-        console.log("✓ AI agent provided fix");
+        console.log("[OK] AI agent provided fix");
         await replaceDocumentText(document, fileAction.content, true);
         return { applied: true, fixedCode: fileAction.content };
       }
     }
 
-    console.log("✗ AI agent didn't provide file actions");
+    console.log("[INFO] AI agent did not provide file actions");
     return {
       applied: false,
       fixedCode: code,
       reason: "No file actions generated"
     };
   } catch (error) {
-    console.error("✗ AI agent error:", error.message);
+    console.error("[ERROR] AI agent error:", error.message);
     return { applied: false, fixedCode: code, reason: error.message };
   }
 }
@@ -1477,7 +1482,7 @@ function fixHtmlLine(line, properIndent) {
 }
 
 function deactivate() {
-  console.log("✓ Code Janitor extension deactivated");
+  console.log("[OK] Code Janitor extension deactivated");
 }
 
 module.exports = { activate, deactivate };

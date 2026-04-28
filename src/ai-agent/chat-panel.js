@@ -98,7 +98,7 @@ class ChatPanel {
     if (!hasSeenSetup) {
       this.context.globalState.update("codeJanitor.seenSetup", true);
       vscode.window.showInformationMessage(
-        "👋 New to Code Janitor? Check the setup guide to configure AI models and API keys.",
+        "New to Code Janitor? Check the setup guide to configure AI models and API keys.",
         "Open Setup Guide"
       ).then(selection => {
         if (selection === "Open Setup Guide") {
@@ -267,7 +267,7 @@ class ChatPanel {
 
       const installedResult = await this.agent.executeCommand("arduino-cli lib list --format json", workspaceFolder);
       if (!installedResult.success) {
-        report += "⚠️ Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n";
+        report += "Warning: Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n";
       } else {
 
         const installedLibraries = this._parseInstalledLibraries(installedResult.output);
@@ -313,7 +313,7 @@ class ChatPanel {
         }
 
         if (missing.length === 0) {
-          report += "\n✅ All C/C++ libraries are installed.\n\n";
+          report += "\nAll C/C++ libraries are installed.\n\n";
         } else {
 
           report += "\nMissing C/C++ library candidates:\n";
@@ -345,13 +345,13 @@ class ChatPanel {
             report += "\nInstall missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  pip install ${pkg}\n`;
           } else {
-            report += "✅ All Python packages are installed.\n";
+            report += "All Python packages are installed.\n";
           }
         } catch (_) {
-          report += "⚠️ Could not parse pip output.\n";
+          report += "Warning: Could not parse pip output.\n";
         }
       } else {
-        report += "⚠️ Could not check installed packages. Run 'pip list' manually.\n";
+        report += "Warning: Could not check installed packages. Run 'pip list' manually.\n";
       }
       report += "\n";
     }
@@ -373,13 +373,13 @@ class ChatPanel {
             report += "\nAdd missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  npm install ${pkg}\n`;
           } else {
-            report += "✅ All imports are in package.json.\n";
+            report += "All imports are in package.json.\n";
           }
         } catch (_) {
-          report += "⚠️ Could not parse package.json.\n";
+          report += "Warning: Could not parse package.json.\n";
         }
       } else {
-        report += "⚠️ No package.json found.\n";
+        report += "Warning: No package.json found.\n";
       }
       report += "\n";
     }
@@ -400,9 +400,9 @@ class ChatPanel {
       report += `Imported packages: ${imports.size}\n`;
       const goModPath = path.join(workspaceFolder, "go.mod");
       if (fsSync.existsSync(goModPath)) {
-        report += "✅ go.mod found. Run 'go mod tidy' to sync dependencies.\n";
+        report += "go.mod found. Run 'go mod tidy' to sync dependencies.\n";
       } else {
-        report += "⚠️ No go.mod found. Run 'go mod init' to create one.\n";
+        report += "go.mod found. Run 'go mod tidy' to sync dependencies.\n";
       }
       report += "\n";
     }
@@ -414,9 +414,9 @@ class ChatPanel {
       report += `Imported crates: ${imports.size}\n`;
       const cargoPath = path.join(workspaceFolder, "Cargo.toml");
       if (fsSync.existsSync(cargoPath)) {
-        report += "✅ Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
+        report += "Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
       } else {
-        report += "⚠️ No Cargo.toml found.\n";
+        report += "Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
       }
       report += "\n";
     }
@@ -428,9 +428,9 @@ class ChatPanel {
       report += `Required gems: ${imports.size}\n`;
       const gemfilePath = path.join(workspaceFolder, "Gemfile");
       if (fsSync.existsSync(gemfilePath)) {
-        report += "✅ Gemfile found. Run 'bundle install' to install gems.\n";
+        report += "Gemfile found. Run 'bundle install' to install gems.\n";
       } else {
-        report += "⚠️ No Gemfile found.\n";
+        report += "Gemfile found. Run 'bundle install' to install gems.\n";
       }
       report += "\n";
     }
@@ -442,9 +442,9 @@ class ChatPanel {
       report += `Imported namespaces: ${imports.size}\n`;
       const composerPath = path.join(workspaceFolder, "composer.json");
       if (fsSync.existsSync(composerPath)) {
-        report += "✅ composer.json found. Run 'composer install' to install packages.\n";
+        report += "composer.json found. Run 'composer install' to install packages.\n";
       } else {
-        report += "⚠️ No composer.json found.\n";
+        report += "composer.json found. Run 'composer install' to install packages.\n";
       }
       report += "\n";
     }
@@ -824,7 +824,7 @@ class ChatPanel {
     if (syntaxCheck.success) {
       this._postMessage({
         type: "stream",
-        text: `✅ No syntax errors found in ${relativePath}.`
+        text: `No syntax errors found in ${relativePath}.`
       });
       this._postMessage({ type: "done" });
       return;
@@ -844,7 +844,7 @@ class ChatPanel {
     
     this._postMessage({
       type: "stream",
-      text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
+      text: `Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
     });
 
     const ext = path.extname(fileName).toLowerCase();
@@ -933,12 +933,12 @@ class ChatPanel {
     if (verifyCheck && verifyCheck.success) {
       this._postMessage({
         type: "stream",
-        text: "\n\n✅ Syntax errors fixed successfully!"
+        text: "\n\nSyntax errors fixed successfully!"
       });
     } else {
       this._postMessage({
         type: "stream",
-        text: "\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes."
+        text: "\n\nWarning: Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
 
@@ -1837,7 +1837,7 @@ ${trimmedText}`;
     if (fileTypes.py.length > 0) {
       this._postMessage({
         type: "status",
-        text: `🔍 Verifying Python syntax (${fileTypes.py.length} file(s))...`
+        text: `Verifying Python syntax (${fileTypes.py.length} file(s))...`
       });
       for (const file of fileTypes.py) {
         const fullPath = path.join(workspaceFolder, file);
@@ -1847,13 +1847,13 @@ ${trimmedText}`;
           results.errors.push({ file, error: result.error || result.output, type: "syntax" });
           this._postMessage({
             type: "status",
-            text: `❌ Python syntax error in ${file}:\n${result.error || result.output}`
+            text: `Python syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
           results.checks.push({ file, check: "python-syntax", passed: true });
           this._postMessage({
             type: "status",
-            text: `✅ Python syntax OK: ${file}`
+            text: `Python syntax OK: ${file}`
           });
         }
       }
@@ -1862,7 +1862,7 @@ ${trimmedText}`;
     if (fileTypes.java.length > 0) {
       this._postMessage({
         type: "status",
-        text: `🔍 Verifying Java syntax (${fileTypes.java.length} file(s))...`
+        text: `Verifying Java syntax (${fileTypes.java.length} file(s))...`
       });
       for (const file of fileTypes.java) {
         const fullPath = path.join(workspaceFolder, file);
@@ -1872,13 +1872,13 @@ ${trimmedText}`;
           results.errors.push({ file, error: result.error || result.output, type: "syntax" });
           this._postMessage({
             type: "status",
-            text: `❌ Java syntax error in ${file}:\n${result.error || result.output}`
+            text: `Java syntax error in ${file}:\n${result.error || result.output}`
           });
         } else if (result && result.success) {
           results.checks.push({ file, check: "java-syntax", passed: true });
           this._postMessage({
             type: "status",
-            text: `✅ Java syntax OK: ${file}`
+            text: `Java syntax OK: ${file}`
           });
         }
       }
@@ -1887,7 +1887,7 @@ ${trimmedText}`;
     if (fileTypes.c.length > 0) {
       this._postMessage({
         type: "status",
-        text: `⚠️ C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler manually to verify syntax.`
+        text: `Warning: C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler manually to verify syntax.`
       });
     }
 
@@ -1895,7 +1895,7 @@ ${trimmedText}`;
     if (fileTypes.js.length === 0) {
       this._postMessage({
         type: "status",
-        text: "✅ Verification complete (no JS/TS files changed)"
+        text: "Verification complete (no JS/TS files changed)"
       });
       return results;
     }
@@ -1904,14 +1904,14 @@ ${trimmedText}`;
     if (commands.length === 0) {
       this._postMessage({
         type: "status",
-        text: "✅ Verification complete (no npm scripts configured)"
+        text: "Verification complete (no npm scripts configured)"
       });
       return results;
     }
 
     this._postMessage({
       type: "status",
-      text: `🔍 Running ${commands.length} verification check(s): ${commands.join(", ")}`
+      text: `Running ${commands.length} verification check(s): ${commands.join(", ")}`
     });
 
     // Run all checks, don't stop on first failure
@@ -1920,7 +1920,7 @@ ${trimmedText}`;
       if (!validation.allowed) {
         this._postMessage({
           type: "status",
-          text: `⚠️ Skipped check (${command}): ${validation.reason}`
+          text: `Warning: Skipped check (${command}): ${validation.reason}`
         });
         continue;
       }
@@ -1934,14 +1934,14 @@ ${trimmedText}`;
         results.checks.push({ command, passed: true });
         this._postMessage({
           type: "status",
-          text: `✅ ${command} passed`
+          text: `${command} passed`
         });
       } else {
         results.success = false;
         results.errors.push({ command, error: result.error || result.output, type: "npm" });
         this._postMessage({
           type: "status",
-          text: `❌ ${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
+          text: `${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
         });
         // Continue to next check instead of breaking
       }
@@ -1951,12 +1951,12 @@ ${trimmedText}`;
     if (results.success) {
       this._postMessage({
         type: "status",
-        text: `✅ All verification checks passed (${results.checks.length} checks)`
+        text: `All verification checks passed (${results.checks.length} checks)`
       });
     } else {
       this._postMessage({
         type: "status",
-        text: `⚠️ Verification completed with ${results.errors.length} error(s). Review changes before committing.`
+        text: `Warning: Verification completed with ${results.errors.length} error(s). Review changes before committing.`
       });
     }
 
@@ -2401,16 +2401,16 @@ ${trimmedText}`;
                 const models = (data.models || []).map(m => m.name);
                 this._postMessage({ 
                   type: "stream", 
-                  text: `✅ Ollama is running at ${config.ollamaUrl}\n\nAvailable models: ${models.join(", ") || "none"}\n\nCurrent model: ${config.model}` 
+                  text: `Ollama is running at ${config.ollamaUrl}\n\nAvailable models: ${models.join(", ") || "none"}\n\nCurrent model: ${config.model}` 
                 });
               } else {
-                this._postMessage({ type: "error", text: `❌ Ollama returned status ${res.status}` });
+                this._postMessage({ type: "error", text: `Ollama returned status ${res.status}` });
               }
             } else {
-              this._postMessage({ type: "stream", text: `✅ Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
+              this._postMessage({ type: "stream", text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
             }
           } catch (err) {
-            this._postMessage({ type: "error", text: `❌ Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
+            this._postMessage({ type: "error", text: `Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
           }
           this._postMessage({ type: "done" });
           return;
@@ -2486,7 +2486,7 @@ ${trimmedText}`;
         if (config.model === "minimaxai/minimax-m2.7") {
           this._postMessage({ 
             type: "status", 
-            text: "⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
+            text: "Warning: MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
           });
         }
         
@@ -2494,7 +2494,7 @@ ${trimmedText}`;
           if (this.abortController && !this.abortController.signal.aborted) {
             this._postMessage({ 
               type: "status", 
-              text: `⏳ Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
+              text: `Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
             });
           }
         }, 30000); // Warn after 30 seconds
@@ -2853,7 +2853,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.lintCode");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ Lint command executed. Check the Problems panel and notifications for results."
+                  text: "Lint command executed. Check the Problems panel and notifications for results."
                 });
               } catch (err) {
                 this._postMessage({
@@ -2867,7 +2867,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.validateFrontend");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ Frontend validation command executed."
+                  text: "Frontend validation command executed."
                 });
               } catch (err) {
                 this._postMessage({
@@ -2908,7 +2908,7 @@ ${trimmedText}`;
                     } else {
                       this._postMessage({
                         type: "applied",
-                        text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                        text: `Updated ${fixResult.path} using preview diagnostics.`
                       });
 
                       const verificationDiagnostics = fixResult.verification?.diagnostics || null;
@@ -2917,7 +2917,7 @@ ${trimmedText}`;
                         this._postMessage({
                           type: cleanPreview ? "applied" : "status",
                           text: cleanPreview
-                            ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                            ? `Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                             : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                         });
                       }
@@ -2935,7 +2935,7 @@ ${trimmedText}`;
                   await vscode.commands.executeCommand("codeJanitor.livePreview");
                   this._postMessage({
                     type: "applied",
-                    text: "✅ Live preview command executed."
+                    text: "Live preview command executed."
                   });
                 } catch (err) {
                   this._postMessage({
@@ -2975,7 +2975,7 @@ ${trimmedText}`;
                   } else {
                     this._postMessage({
                       type: "applied",
-                      text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                        text: `Updated ${fixResult.path} using preview diagnostics.`
                     });
 
                     const verificationDiagnostics = fixResult.verification?.diagnostics || null;
@@ -2984,7 +2984,7 @@ ${trimmedText}`;
                       this._postMessage({
                         type: cleanPreview ? "applied" : "status",
                         text: cleanPreview
-                          ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                            ? `Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                           : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                       });
                     }
@@ -3002,7 +3002,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.showPerformance");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ AI performance report command executed."
+                  text: "AI performance report command executed."
                 });
               } catch (err) {
                 this._postMessage({
@@ -3038,7 +3038,7 @@ ${trimmedText}`;
               // Skip processing YouTube actions from AI responses to improve performance
               this._postMessage({
                 type: "status",
-                text: "💡 Use the YouTube search button in the chat to search for videos"
+                text: "Use the YouTube search button in the chat to search for videos"
               });
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
@@ -3125,7 +3125,7 @@ ${trimmedText}`;
         this._postMessage({ type: "stream", text: overview });
         this._postMessage({ type: "done" });
       } else if (message.type === "syntaxScan") {
-        // Triggered by action chip — run directly without model
+        // Triggered by action chip - run directly without model
         const activeEditor = this._getCurrentFileEditor();
         const files = message.activeOnly
           ? (activeEditor ? [path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/")] : [])
@@ -3345,23 +3345,21 @@ ${trimmedText}`;
           const data = await response.json();
           
           // Format search results
-          let resultText = `🔍 Search results for "${query}":\n\n`;
+          let resultText = `Search results for "${query}":\n\n`;
           
           if (data.AbstractText) {
-            resultText += `📝 Summary:\n${data.AbstractText}\n\n`;
+            resultText += `Summary:\n${data.AbstractText}\n\n`;
           }
           
           if (data.AbstractURL) {
-            resultText += `🔗 Source: ${data.AbstractURL}\n\n`;
+            resultText += `Source: ${data.AbstractURL}\n\n`;
           }
 
           if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-            resultText += "📚 Related Topics:\n";
+            resultText += "Related Topics:\n";
             const topics = data.RelatedTopics.slice(0, 5);
             for (const topic of topics) {
-              if (topic.Text && topic.FirstURL) {
-                resultText += `• ${topic.Text}\n  ${topic.FirstURL}\n\n`;
-              }
+              resultText += `- ${topic.Text}\n  ${topic.FirstURL}\n\n`;
             }
           }
 
@@ -3405,7 +3403,7 @@ ${trimmedText}`;
             return;
           }
 
-          this._postMessage({ type: "status", text: `▶️ Searching YouTube for: ${query}` });
+          this._postMessage({ type: "status", text: `Searching YouTube for: ${query}` });
           this._postMessage({ type: "thinking" });
 
           const results = await this._searchYouTube(query);
@@ -3415,15 +3413,15 @@ ${trimmedText}`;
           }
 
           // Format results with embeds
-          let resultText = `▶️ YouTube results for "${query}":\n\n`;
+          let resultText = `YouTube results for "${query}":\n\n`;
           
           if (results.fallback) {
-            resultText += `ℹ️ ${results.message}\n\n`;
+            resultText += `${results.message}\n\n`;
           }
           
           if (results.videos && results.videos.length > 0) {
             for (const video of results.videos) {
-              resultText += `📺 ${video.title}\n\n${video.url}\n\n`;
+              resultText += `${video.title}\n\n${video.url}\n\n`;
             }
           } else {
             resultText += "No videos found. Try a different search term.";
