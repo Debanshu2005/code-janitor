@@ -1819,6 +1819,59 @@ ${trimmedText}`;
     );
   }
 
+  async _runPreEditDiagnostics(workspaceFolder, filePath) {
+    if (!workspaceFolder || !filePath) {
+      return { success: true, diagnostics: [] };
+    }
+
+    const results = { success: true, diagnostics: [], fileInfo: {} };
+    const fullPath = path.join(workspaceFolder, filePath);
+    const ext = path.extname(filePath).toLowerCase();
+
+    // Get file status
+    try {
+      const stat = await fs.stat(fullPath);
+      results.fileInfo = {
+        exists: true,
+        size: stat.size,
+        modified: stat.mtime,
+        readable: true
+      };
+    } catch (err) {
+      results.fileInfo = { exists: false, error: err.message };
+      return results;
+    }
+
+    // Check git status for this file
+    const gitStatus = await this.agent.executeCommand(`git status --short "${filePath}"`, workspaceFolder);
+    if (gitStatus.success && gitStatus.output.trim()) {
+      results.diagnostics.push({
+        type: "git",
+        status: gitStatus.output.trim(),
+        message: `Git status: ${gitStatus.output.trim()}`
+      });
+    }
+
+    // Run syntax check
+    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java'].includes(ext)) {
+      const syntaxCheck = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
+      if (syntaxCheck && !syntaxCheck.skipped) {
+        results.diagnostics.push({
+          type: "syntax",
+          passed: syntaxCheck.success,
+          message: syntaxCheck.success 
+            ? `Syntax check passed for ${filePath}`
+            : `Syntax errors in ${filePath}: ${syntaxCheck.error || syntaxCheck.output}`
+        });
+        if (!syntaxCheck.success) {
+          results.success = false;
+        }
+      }
+    }
+
+    return results;
+  }
+
   async _runPostEditVerification(workspaceFolder, changedFiles) {
     if (!workspaceFolder || !Array.isArray(changedFiles) || changedFiles.length === 0) {
       return { success: true, checks: [] };
@@ -2572,9 +2625,12 @@ ${trimmedText}`;
         if (response.actions && response.actions.length > 0) {
           const hasFileAction = response.actions.some(
             (action) =>
-              action.type === "file" &&
+              (action.type === "file" &&
               typeof action.content === "string" &&
-              action.content.trim().length > 0
+              action.content.trim().length > 0) ||
+              (action.type === "patch" &&
+              typeof action.search === "string" &&
+              typeof action.replace === "string")
           );
           const hasPreviewInspectionAction = response.actions.some(
             (action) => action.type === "preview_inspect"
@@ -2652,11 +2708,22 @@ ${trimmedText}`;
           const insideActions = [];
           const fileActionPaths = new Set(
             response.actions
-              .filter((a) => a.type === "file" && a.path)
+              .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
               .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
           );
           for (const action of response.actions) {
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              // PATCH actions need to check if file is outside workspace
+              const fullPath = workspaceFolder ? path.join(workspaceFolder, action.path) : action.path;
+              const relativePath = workspaceFolder ? path.relative(workspaceFolder, fullPath) : action.path;
+              const isOutside = relativePath.startsWith("..") || path.isAbsolute(relativePath);
+              
+              if (isOutside) {
+                outsideFiles.push({ action, path: fullPath });
+              } else {
+                insideActions.push({ action, result: null });
+              }
+            } else if (action.type === "file") {
               const probe = await this.agent.applyChanges(
                 action.path,
                 action.content,
@@ -2724,11 +2791,94 @@ ${trimmedText}`;
           const changedFiles = [];
           let stopFurtherActions = false;
 
+          // Run pre-edit diagnostics for file actions
+          const fileActions = allActions.filter(a => a.action.type === "file" || a.action.type === "patch");
+          if (fileActions.length > 0 && workspaceFolder) {
+            this._postMessage({
+              type: "status",
+              text: `Checking status of ${fileActions.length} file(s) before editing...`
+            });
+            
+            for (const { action } of fileActions) {
+              const diagnostics = await this._runPreEditDiagnostics(workspaceFolder, action.path);
+              
+              if (diagnostics.fileInfo.exists) {
+                this._postMessage({
+                  type: "status",
+                  text: `File: ${action.path} (${diagnostics.fileInfo.size} bytes, modified: ${new Date(diagnostics.fileInfo.modified).toLocaleString()})`
+                });
+              }
+              
+              for (const diag of diagnostics.diagnostics) {
+                this._postMessage({
+                  type: "status",
+                  text: diag.message
+                });
+              }
+            }
+          }
+
           for (const { action, result: preResult, outside } of allActions) {
             if (stopFurtherActions) {
               break;
             }
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              // Handle PATCH actions for targeted edits
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Applying patch to: ${action.path}` });
+              
+              // Read current file content
+              const fullPath = workspaceFolder ? path.join(workspaceFolder, action.path) : action.path;
+              let currentContent = "";
+              try {
+                currentContent = await fs.readFile(fullPath, "utf8");
+              } catch (err) {
+                this._postMessage({
+                  type: "error",
+                  text: `Cannot patch ${action.path}: file not found or unreadable`
+                });
+                continue;
+              }
+              
+              // Apply the patch (search and replace)
+              const searchContent = action.search || "";
+              const replaceContent = action.replace || "";
+              
+              if (!currentContent.includes(searchContent)) {
+                this._postMessage({
+                  type: "error",
+                  text: `Cannot patch ${action.path}: search content not found in file. The file may have changed.`
+                });
+                continue;
+              }
+              
+              const newContent = currentContent.replace(searchContent, replaceContent);
+              
+              // Apply the patched content
+              const result = await this.agent.applyChanges(
+                action.path,
+                newContent,
+                outside,
+                writeOptions
+              );
+              
+              this._postMessage({
+                type: result.success ? "applied" : "error",
+                filePath: result.success ? result.path : undefined,
+                text: result.success
+                  ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
+                  : result.error
+              });
+              
+              if (result.success && !outside) {
+                changedFiles.push(result.relativePath || action.path);
+                await this._revealWorkspaceFile(result.path);
+              }
+            } else if (action.type === "file") {
               if (outside && !allowOutside) {
                 this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;

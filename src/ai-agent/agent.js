@@ -2873,16 +2873,33 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
 
-CRITICAL: When outputting FILE actions, you MUST include the ENTIRE file from start to finish. DO NOT truncate, abbreviate, or use placeholders like "... rest of file ...". Include EVERY SINGLE LINE of the complete file.
+For SMALL, TARGETED changes (single function, few lines), use PATCH format:
+PATCH: <exact file path>
+SEARCH:
+\`\`\`
+(exact code to find - must match EXACTLY including whitespace)
+\`\`\`
+REPLACE:
+\`\`\`
+(new code to replace with)
+\`\`\`
 
-You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
+For LARGE changes (multiple functions, structural changes, new files), use FILE format:
 FILE: <exact file path>
 \`\`\`
-(COMPLETE file content - EVERY line from start to finish, no truncation)
+(COMPLETE file content - EVERY line from start to finish)
 \`\`\`
+
+Prefer PATCH for focused edits. Use FILE only when:
+- Creating new files
+- Making changes across multiple sections
+- Restructuring file organization
+- User explicitly asks for complete rewrite
+
+You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
       case "scan":
         return `${base}
 ${rules}
@@ -3662,9 +3679,35 @@ ${userMessage}`;
       return false;
     };
 
+    // Match PATCH: actions for targeted edits
+    const patchRegex = /PATCH:\s*([^\n`]+)\nSEARCH:\s*\n```[\w]*\n?([\s\S]*?)```\s*\nREPLACE:\s*\n```[\w]*\n?([\s\S]*?)```/g;
+    let match;
+    while ((match = patchRegex.exec(response)) !== null) {
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      const searchContent = match[2] || "";
+      const replaceContent = match[3] || "";
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        continue;
+      }
+
+      actions.push({
+        type: "patch",
+        path: normalizedPath,
+        search: searchContent,
+        replace: replaceContent
+      });
+    }
+
     // Match FILE: with flexible code block format
     const fileRegex = /FILE:\s*([^\n`]+)\n```[\w]*\n?([\s\S]*?)```/g;
-    let match;
     while ((match = fileRegex.exec(response)) !== null) {
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
@@ -3853,35 +3896,95 @@ ${userMessage}`;
       "md ",
       "findstr ",
       "rg ",
+      "grep ",
       "ls",
       "dir",
+      "cat ",
+      "type ",
+      "head ",
+      "tail ",
+      "echo ",
+      "pwd",
+      "cd ",
+      "tree ",
+      "find ",
+      "which ",
+      "where ",
       "npm install",
       "npm i",
       "npm run",
       "npm test",
       "npm start",
       "npm build",
+      "npm list",
+      "npm outdated",
+      "npm audit",
       "npx ",
+      "yarn install",
+      "yarn add",
+      "yarn remove",
+      "yarn run",
+      "yarn test",
+      "yarn build",
+      "pnpm install",
+      "pnpm add",
+      "pnpm remove",
+      "pnpm run",
+      "pnpm test",
       "node --check",
       "node -e",
       "node ",
       "git status",
       "git diff",
       "git log",
+      "git show",
+      "git branch",
+      "git checkout",
+      "git add",
+      "git commit",
+      "git pull",
+      "git fetch",
+      "git merge",
+      "git rebase",
+      "git stash",
+      "git tag",
+      "git remote",
       "git rev-parse",
       "git push",
       "python -m py_compile",
       "python -m flake8",
       "python -m pylint",
+      "python -m pytest",
+      "python -m unittest",
       "python ",
       "python3 -m py_compile",
       "python3 -m flake8",
       "python3 -m pylint",
+      "python3 -m pytest",
+      "python3 -m unittest",
       "python3 ",
       "pytest",
       "eslint ",
+      "tsc ",
       "javac ",
       "java ",
+      "mvn clean",
+      "mvn compile",
+      "mvn test",
+      "mvn package",
+      "gradle build",
+      "gradle test",
+      "gradle clean",
+      "cargo build",
+      "cargo test",
+      "cargo check",
+      "cargo run",
+      "go build",
+      "go test",
+      "go run",
+      "dotnet build",
+      "dotnet test",
+      "dotnet run",
       "arduino-cli lib list",
       "arduino-cli lib search",
       ".\\node_modules\\.bin\\",
