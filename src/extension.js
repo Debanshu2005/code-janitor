@@ -9,6 +9,7 @@ const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
 const GraphifyPanel = require("./graphify/graphify-panel");
+const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const AIAgent = require("./ai-agent/agent");
 const path = require("path");
 
@@ -168,6 +169,24 @@ function buildFrontendValidationSummaryMessage(
   }
 
   return `Found ${issueCount} frontend issue(s). ${parts.join(". ")}.`;
+}
+
+function createFrontendValidator(document, options = {}) {
+  const graphContext = options.useGraphContext
+    ? loadGraphContextForFile(document.fileName)
+    : null;
+  const validator = new FrontendValidator(
+    document.fileName,
+    document.getText(),
+    graphContext
+      ? {
+          graphData: graphContext.data,
+          graphRoot: graphContext.graphRoot
+        }
+      : {}
+  );
+
+  return { validator, graphContext };
 }
 
 function getDocumentPathCandidates(document, workspaceFolder) {
@@ -777,10 +796,9 @@ async function activate(context) {
       }
 
       try {
-        const validator = new FrontendValidator(
-          document.fileName,
-          document.getText()
-        );
+        const { validator, graphContext } = createFrontendValidator(document, {
+          useGraphContext: true
+        });
         const result = validator.validate();
         updateFrontendDiagnostics(
           document,
@@ -825,7 +843,8 @@ async function activate(context) {
             const creation = validator.createMissingFiles(result.issues);
             const refreshedResult = await validateFrontendFile(
               document,
-              frontendDiagnosticCollection
+              frontendDiagnosticCollection,
+              { useGraphContext: true }
             );
 
             if (creation.createdFiles.length > 0) {
@@ -851,7 +870,9 @@ async function activate(context) {
           }
         } else {
           vscode.window.showInformationMessage(
-            "No frontend validation issues found."
+            graphContext
+              ? "No frontend validation issues found. Graphify context was used."
+              : "No frontend validation issues found."
           );
         }
       } catch (error) {
@@ -1404,12 +1425,13 @@ function updateFrontendDiagnostics(
 }
 
 // Helper function to validate frontend files
-async function validateFrontendFile(document, frontendDiagnosticCollection) {
+async function validateFrontendFile(
+  document,
+  frontendDiagnosticCollection,
+  options = {}
+) {
   try {
-    const validator = new FrontendValidator(
-      document.fileName,
-      document.getText()
-    );
+    const { validator } = createFrontendValidator(document, options);
     const result = validator.validate();
     updateFrontendDiagnostics(
       document,

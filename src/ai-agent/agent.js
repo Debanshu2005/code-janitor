@@ -8,6 +8,11 @@ const {
   extractUrls,
   isUrlOnlyMessage
 } = require("./web-content-utils");
+const {
+  buildGraphLookupContext,
+  isValidGraphData,
+  matchGraphPathsFromHints
+} = require("./graph-context");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -116,6 +121,7 @@ class AIAgent {
     this.currentEditableTargets = null;
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
     this._relevantFileCache = new Map();
+    this._knowledgeGraphCache = new Map();
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
     this.showThinking = false;
@@ -1463,6 +1469,97 @@ class AIAgent {
     ].join("\n");
   }
 
+  _getActiveRelativePath(workspaceFolder) {
+    const activeEditor =
+      vscode.window.activeTextEditor || this._lastActiveEditor;
+    if (!activeEditor || !workspaceFolder) {
+      return "";
+    }
+
+    const relativePath = path.relative(
+      workspaceFolder,
+      activeEditor.document.fileName
+    );
+    if (
+      !relativePath ||
+      relativePath.startsWith("..") ||
+      path.isAbsolute(relativePath)
+    ) {
+      return "";
+    }
+
+    return relativePath.replace(/\\/g, "/").toLowerCase();
+  }
+
+  _getCachedKnowledgeGraphData(workspaceFolder) {
+    if (!workspaceFolder) return null;
+    return this._knowledgeGraphCache.get(workspaceFolder)?.data?.graphData || null;
+  }
+
+  async _getKnowledgeGraphAssets(workspaceFolder) {
+    if (!workspaceFolder) return null;
+
+    const reportPath = path.join(
+      workspaceFolder,
+      "graphify-out",
+      "GRAPH_REPORT.md"
+    );
+    const graphJsonPath = path.join(
+      workspaceFolder,
+      "graphify-out",
+      "graph.json"
+    );
+    const reportExists = fsSync.existsSync(reportPath);
+    const graphExists = fsSync.existsSync(graphJsonPath);
+
+    if (!reportExists && !graphExists) {
+      this._knowledgeGraphCache.delete(workspaceFolder);
+      return null;
+    }
+
+    const reportMtime = reportExists ? fsSync.statSync(reportPath).mtimeMs : 0;
+    const graphMtime = graphExists ? fsSync.statSync(graphJsonPath).mtimeMs : 0;
+    const cached = this._knowledgeGraphCache.get(workspaceFolder);
+
+    if (
+      cached &&
+      cached.reportMtime === reportMtime &&
+      cached.graphMtime === graphMtime
+    ) {
+      return cached.data;
+    }
+
+    const data = {
+      reportPath: reportExists ? reportPath : null,
+      graphJsonPath: graphExists ? graphJsonPath : null,
+      reportText: "",
+      graphData: null
+    };
+
+    if (reportExists) {
+      data.reportText = await fs.readFile(reportPath, "utf8");
+    }
+
+    if (graphExists) {
+      try {
+        const parsedGraph = JSON.parse(await fs.readFile(graphJsonPath, "utf8"));
+        if (isValidGraphData(parsedGraph)) {
+          data.graphData = parsedGraph;
+        }
+      } catch {
+        data.graphData = null;
+      }
+    }
+
+    this._knowledgeGraphCache.set(workspaceFolder, {
+      reportMtime,
+      graphMtime,
+      data
+    });
+
+    return data;
+  }
+
   async chat(
     userMessage,
     workspaceFolder,
@@ -1643,7 +1740,7 @@ class AIAgent {
         isEditIntent && activeFileContext
           ? "\nOutput the complete updated file using FILE: path then a code block."
           : "";
-      const fastKnowledgeGraph = intent === "scan" ? knowledgeGraphContext : "";
+      const fastKnowledgeGraph = knowledgeGraphContext;
       prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
@@ -1671,10 +1768,7 @@ ${resolvedMessage}`;
         await this.ensureCodebaseScanned(effectiveWorkspace);
 
       // For full codebase scan requests, inject the overview + snippets directly
-      const isFullScan =
-        /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project|directory)\b/i.test(
-          userMessage
-        );
+      const isFullScan = this._isRepoWideScanRequest(userMessage);
       const relevantFiles = isFullScan
         ? Array.from(this.codebaseContext.entries())
             .slice(0, latencyProfile.relevantFileCount)
@@ -1997,6 +2091,7 @@ ${resolvedMessage}`;
       intent === "refactor" ||
       intent === "edit" ||
       intent === "show_graph" ||
+      this._extractPathHints(userMessage).length > 0 ||
       /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
         userMessage
       );
@@ -2004,13 +2099,27 @@ ${resolvedMessage}`;
     if (!shouldLoadGraph) return "";
 
     try {
-      const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md");
-      const graphReport = await fs.readFile(graphReportPath, "utf8");
+      const graphAssets = await this._getKnowledgeGraphAssets(workspaceFolder);
+      if (!graphAssets) {
+        return "";
+      }
+
+      const graphReport = graphAssets.reportText || "";
       
-      const overviewMatch = graphReport.match(/## Overview[\s\S]*?(?=##|$)/);
-      const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/);
-      const directoryMatch = graphReport.match(/## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/);
-      const insightsMatch = graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/);
+      const overviewMatch = graphReport
+        ? graphReport.match(/## Overview[\s\S]*?(?=##|$)/)
+        : null;
+      const godNodesMatch = graphReport
+        ? graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
+        : null;
+      const directoryMatch = graphReport
+        ? graphReport.match(
+            /## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/
+          )
+        : null;
+      const insightsMatch = graphReport
+        ? graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/)
+        : null;
 
       const sections = [];
 
@@ -2032,8 +2141,30 @@ ${resolvedMessage}`;
         sections.push(insightsMatch[0].trim());
       }
 
-      if (sections.length > 0) {
-        return `\n**Knowledge Graph Context**\nA Graphify knowledge-graph report is available at \`graphify-out/GRAPH_REPORT.md\`. Use it first for architecture, codebase navigation, multi-file debugging, and refactors.\n${sections.join("\n\n").slice(0, 1800)}\n`;
+      const graphMatches = graphAssets.graphData
+        ? this._preferActivePathMatches(
+            matchGraphPathsFromHints(
+              graphAssets.graphData,
+              this._extractPathHints(userMessage)
+            ),
+            this._getActiveRelativePath(workspaceFolder)
+          )
+        : [];
+      const graphLookupContext = graphAssets.graphData
+        ? buildGraphLookupContext(graphAssets.graphData, graphMatches)
+        : "";
+
+      if (sections.length > 0 || graphLookupContext) {
+        const graphAvailability = graphAssets.graphData
+          ? "A Graphify knowledge graph is available in `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json`."
+          : "A Graphify summary report is available in `graphify-out/GRAPH_REPORT.md`, but `graphify-out/graph.json` is not available right now.";
+        const graphContextBody = [
+          sections.join("\n\n").slice(0, 1800),
+          graphLookupContext
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        return `\n**Knowledge Graph Context**\n${graphAvailability} Use it first for architecture, codebase navigation, file lookup, multi-file debugging, and refactors.\n${graphContextBody}\n`;
       }
 
       return "";
@@ -2508,6 +2639,7 @@ ${resolvedMessage}`;
       "- When the user asks for a flowchart, sequence diagram, class diagram, state diagram, ER diagram, gantt chart, or architecture visualization, respond with a valid fenced ```mermaid block first, then add a short explanation after it.",
       "- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
+      "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
       "- If the user wants to visualize architecture, dependencies, or the project graph, use the `GRAPHIFY: open` action instead of only describing it.",
       "- If the user wants lint results for the active JavaScript file, use `LINT: active`.",
@@ -2868,6 +3000,32 @@ ${(rawResponse || "").slice(0, 4000)}
     return mode === "heavy" || mode === "deep"
       ? "I didn't produce a response. Please try again or switch to Fast mode for lighter questions."
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
+  }
+
+  _isRepoWideScanRequest(message) {
+    const text = (message || "").toLowerCase();
+    if (!text) {
+      return false;
+    }
+
+    const hasScanVerb =
+      /\b(scan|read|overview|summari[sz]e|describe|review|analy[sz]e|audit|inspect|map out|walk through|walkthrough)\b/i.test(
+        text
+      );
+    const hasRepoScope =
+      /\b(all files|entire|whole|codebase|repo|repository|project|workspace|directory|directories|folder|folders|architecture)\b/i.test(
+        text
+      );
+    const hasSpecificPathHint = this._extractPathHints(text).length > 0;
+    const singularFileScope =
+      /\bfile\b/i.test(text) && !/\bfiles\b/i.test(text);
+
+    return (
+      hasScanVerb &&
+      hasRepoScope &&
+      !hasSpecificPathHint &&
+      !singularFileScope
+    );
   }
 
   _shouldUseRepoContextInFastMode(message, provider = "") {
@@ -3286,19 +3444,19 @@ ${(rawResponse || "").slice(0, 4000)}
     const pathHints = this._extractPathHints(query);
     const relevant = [];
     const allowContentSearch = this._shouldSearchContent(query, pathHints);
-
-    const activeEditor =
-      vscode.window.activeTextEditor || this._lastActiveEditor;
-    const activeRelativePath =
-      activeEditor && workspaceFolder
-        ? path
-            .relative(workspaceFolder, activeEditor.document.fileName)
-            .replace(/\\/g, "/")
-            .toLowerCase()
-        : "";
+    const activeRelativePath = this._getActiveRelativePath(workspaceFolder);
     const preferredHintMatches = new Set(
       this._preferActivePathMatches(
         this._matchPathsFromHints(pathHints),
+        activeRelativePath
+      ).map((candidate) => candidate.replace(/\\/g, "/").toLowerCase())
+    );
+    const preferredGraphMatches = new Set(
+      this._preferActivePathMatches(
+        matchGraphPathsFromHints(
+          this._getCachedKnowledgeGraphData(workspaceFolder),
+          pathHints
+        ),
         activeRelativePath
       ).map((candidate) => candidate.replace(/\\/g, "/").toLowerCase())
     );
@@ -3317,6 +3475,10 @@ ${(rawResponse || "").slice(0, 4000)}
 
       if (preferredHintMatches.has(normalizedPath)) {
         score += 120;
+      }
+
+      if (preferredGraphMatches.has(normalizedPath)) {
+        score += 140;
       }
 
       for (const hint of pathHints) {

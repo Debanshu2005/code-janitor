@@ -34,13 +34,21 @@ const CREATABLE_EXTENSIONS = new Map([
 ]);
 
 class FrontendValidator {
-  constructor(filePath, code) {
+  constructor(filePath, code, options = {}) {
     this.filePath = filePath;
     this.code = code;
     this.workspaceRoot = this._getWorkspaceRoot();
     this.packageManifest = readPackageManifest(this.workspaceRoot);
     this.declaredPackages = collectDeclaredDependencies(this.packageManifest);
     this.pathAliases = this._loadPathAliases();
+    this.graphData = options.graphData || null;
+    this.graphRoot = options.graphRoot
+      ? path.resolve(options.graphRoot)
+      : this.workspaceRoot;
+    this.graphPathLookup = this._buildGraphPathLookup(this.graphData);
+    this.graphFilePath = this.graphRoot
+      ? this._normalizeGraphPath(path.relative(this.graphRoot, this.filePath))
+      : "";
     this.issues = [];
     this.issueKeys = new Set();
   }
@@ -76,7 +84,8 @@ class FrontendValidator {
     return {
       hasIssues: this.issues.length > 0,
       issues: [...this.issues],
-      fixedCode: this.code
+      fixedCode: this.code,
+      graphContextUsed: !!this.graphPathLookup
     };
   }
 
@@ -448,6 +457,10 @@ class FrontendValidator {
     if (!trimmed) return true;
 
     return (
+      /^__[\w.-]+__$/.test(trimmed) ||
+      /^\$\{[^}]+\}$/.test(trimmed) ||
+      /^\{\{[\s\S]+\}\}$/.test(trimmed) ||
+      /^<%[-=]?[\s\S]+%>$/.test(trimmed) ||
       trimmed.startsWith("#") ||
       /^data:/i.test(trimmed) ||
       /^blob:/i.test(trimmed) ||
@@ -472,23 +485,47 @@ class FrontendValidator {
     const basePath = isRootRelative
       ? path.join(this.workspaceRoot, normalizedSpecifier.replace(/^[\\/]+/, ""))
       : path.resolve(baseDir, normalizedSpecifier);
+    const candidateBases = [basePath];
+    const workspaceRelativePath = this._getWorkspaceRelativeFallbackPath(
+      normalizedSpecifier,
+      kind
+    );
+    if (workspaceRelativePath && workspaceRelativePath !== basePath) {
+      candidateBases.push(workspaceRelativePath);
+    }
+    const graphResolvedPath = this._getGraphResolvedPath(
+      normalizedSpecifier,
+      kind
+    );
+    if (graphResolvedPath && !candidateBases.includes(graphResolvedPath)) {
+      candidateBases.push(graphResolvedPath);
+    }
+
     const ext = path.extname(basePath).toLowerCase();
 
-    const candidates = [basePath];
+    const candidates = [];
     let creatablePath = basePath;
+
+    candidateBases.forEach((candidateBase) => {
+      candidates.push(candidateBase);
+    });
 
     if (!ext) {
       if (kind === "module" || kind === "script") {
-        for (const candidateExt of SCRIPT_EXTENSIONS) {
-          candidates.push(basePath + candidateExt);
-          candidates.push(path.join(basePath, "index" + candidateExt));
-        }
+        candidateBases.forEach((candidateBase) => {
+          for (const candidateExt of SCRIPT_EXTENSIONS) {
+            candidates.push(candidateBase + candidateExt);
+            candidates.push(path.join(candidateBase, "index" + candidateExt));
+          }
+        });
         creatablePath = basePath + ".js";
       } else if (kind === "stylesheet") {
-        for (const candidateExt of STYLE_EXTENSIONS) {
-          candidates.push(basePath + candidateExt);
-          candidates.push(path.join(basePath, "index" + candidateExt));
-        }
+        candidateBases.forEach((candidateBase) => {
+          for (const candidateExt of STYLE_EXTENSIONS) {
+            candidates.push(candidateBase + candidateExt);
+            candidates.push(path.join(candidateBase, "index" + candidateExt));
+          }
+        });
         creatablePath = basePath + ".css";
       }
     }
@@ -504,6 +541,119 @@ class FrontendValidator {
 
   _stripQueryAndHash(specifier) {
     return (specifier || "").trim().replace(/[?#].*$/, "");
+  }
+
+  _getWorkspaceRelativeFallbackPath(specifier, kind) {
+    if (!this.workspaceRoot || !specifier) {
+      return null;
+    }
+
+    if (!["asset", "stylesheet", "script"].includes(kind)) {
+      return null;
+    }
+
+    if (
+      /^[\\/]/.test(specifier) ||
+      /^[a-zA-Z]:[\\/]/.test(specifier) ||
+      specifier.startsWith("//") ||
+      specifier.startsWith("\\\\") ||
+      /^\.\.?(?:[\\/]|$)/.test(specifier) ||
+      !/[\\/]/.test(specifier)
+    ) {
+      return null;
+    }
+
+    return path.join(this.workspaceRoot, specifier.replace(/^[\\/]+/, ""));
+  }
+
+  _buildGraphPathLookup(graphData) {
+    const nodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+    if (nodes.length === 0) {
+      return null;
+    }
+
+    const lookup = new Set();
+    nodes.forEach((node) => {
+      const normalizedPath = this._normalizeGraphPath(node?.path);
+      if (normalizedPath) {
+        lookup.add(normalizedPath);
+      }
+    });
+
+    return lookup.size > 0 ? lookup : null;
+  }
+
+  _normalizeGraphPath(targetPath) {
+    const normalized = String(targetPath || "")
+      .trim()
+      .replace(/\\/g, "/");
+    if (!normalized) {
+      return "";
+    }
+
+    const cleaned = path.posix.normalize(normalized).replace(/^\/+/, "");
+    return cleaned === "." ? "" : cleaned.replace(/^(?:\.\/)+/, "");
+  }
+
+  _getGraphResolvedPath(specifier, kind) {
+    if (!this.graphPathLookup || !this.graphRoot) {
+      return null;
+    }
+
+    const matchedPath = this._buildGraphSpecifierCandidates(specifier, kind).find(
+      (candidate) => this.graphPathLookup.has(candidate)
+    );
+    return matchedPath ? path.join(this.graphRoot, matchedPath) : null;
+  }
+
+  _buildGraphSpecifierCandidates(specifier, kind) {
+    const normalizedSpecifier = this._normalizeGraphPath(
+      this._stripQueryAndHash(specifier)
+    );
+    if (!normalizedSpecifier) {
+      return [];
+    }
+
+    const candidates = new Set();
+    const isRelative = /^\.\.?(?:\/|$)/.test(normalizedSpecifier);
+
+    if (isRelative && this.graphFilePath) {
+      candidates.add(
+        this._normalizeGraphPath(
+          path.posix.join(path.posix.dirname(this.graphFilePath), normalizedSpecifier)
+        )
+      );
+    } else {
+      candidates.add(normalizedSpecifier);
+    }
+
+    if (
+      !isRelative &&
+      !/^[a-zA-Z]:\//.test(normalizedSpecifier) &&
+      !normalizedSpecifier.startsWith("//")
+    ) {
+      candidates.add(normalizedSpecifier.replace(/^\/+/, ""));
+    }
+
+    if (!path.posix.extname(normalizedSpecifier)) {
+      const candidateExts =
+        kind === "stylesheet"
+          ? STYLE_EXTENSIONS
+          : kind === "module" || kind === "script"
+            ? SCRIPT_EXTENSIONS
+            : [];
+
+      candidateExts.forEach((candidateExt) => {
+        Array.from(candidates).forEach((candidate) => {
+          candidates.add(candidate + candidateExt);
+          candidates.add(
+            this._normalizeGraphPath(path.posix.join(candidate, "index" + candidateExt))
+          );
+        });
+      });
+    }
+
+    return Array.from(candidates).filter(Boolean);
   }
 
   _getLocation(index, length = 1) {

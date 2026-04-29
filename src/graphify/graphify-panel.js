@@ -74,11 +74,11 @@ class GraphifyPanel {
 
       this.panel.webview.postMessage({
         command: "showStatus",
-        message: `Knowledge graph generated! ${result.nodeCount} files, ${result.edgeCount} dependencies. Check graphify-out/GRAPH_REPORT.md`
+        message: `Knowledge graph generated! ${result.nodeCount} files, ${result.edgeCount} dependencies. Check graphify-out/GRAPH_REPORT.md and graphify-out/graph.json`
       });
 
       vscode.window.showInformationMessage(
-        `✅ Knowledge graph generated! ${result.nodeCount} files analyzed. Check graphify-out/GRAPH_REPORT.md`,
+        `✅ Knowledge graph generated! ${result.nodeCount} files analyzed. Check graphify-out/GRAPH_REPORT.md and graphify-out/graph.json`,
         "Open Report"
       ).then(async (selection) => {
         if (selection === "Open Report") {

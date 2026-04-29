@@ -75,6 +75,58 @@ describe("FrontendValidator", () => {
     expect(result.issues[0].line).toBe(3);
   });
 
+  test("html validation ignores template placeholders and allows workspace-root asset paths", () => {
+    const workspace = createWorkspace();
+    workspaces.push(workspace);
+
+    ensureFile(path.join(workspace, "src", "ai-agent", "logo.png"), "png");
+
+    const htmlPath = path.join(workspace, "pages", "index.html");
+    const html = [
+      "<img src=\"__LOGO_URI__\" alt=\"Logo\">",
+      "<img src=\"src/ai-agent/logo.png\" alt=\"Workspace logo\">"
+    ].join("\n");
+
+    ensureFile(htmlPath, html);
+
+    const result = new FrontendValidator(htmlPath, html).validate();
+
+    expect(result.issues).toEqual([]);
+  });
+
+  test("graph context resolves workspace-wide asset paths across nested package roots", () => {
+    const workspace = createWorkspace();
+    workspaces.push(workspace);
+
+    ensureFile(path.join(workspace, "shared", "logo.png"), "png");
+    ensureFile(path.join(workspace, "packages", "app", "package.json"), "{}\n");
+
+    const htmlPath = path.join(
+      workspace,
+      "packages",
+      "app",
+      "pages",
+      "index.html"
+    );
+    const html = "<img src=\"shared/logo.png\" alt=\"Workspace logo\">";
+
+    ensureFile(htmlPath, html);
+
+    const withoutGraph = new FrontendValidator(htmlPath, html).validate();
+    expect(withoutGraph.issues).toHaveLength(1);
+
+    const withGraph = new FrontendValidator(htmlPath, html, {
+      graphRoot: workspace,
+      graphData: {
+        nodes: [{ path: "shared/logo.png", type: "asset" }],
+        edges: []
+      }
+    }).validate();
+
+    expect(withGraph.issues).toEqual([]);
+    expect(withGraph.graphContextUsed).toBe(true);
+  });
+
   test("javascript validation catches local files, missing packages, and ignores aliases or declared deps", () => {
     const workspace = createWorkspace();
     workspaces.push(workspace);
