@@ -1,12 +1,32 @@
 const vscode = require("vscode");
 const Linter = require("./core/linter");
 const FrontendValidator = require("./core/frontend-validator");
+const {
+  getAddPackagesCommand,
+  inferPackageManager
+} = require("./core/frontend-package-manager");
 const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
 const GraphifyPanel = require("./graphify/graphify-panel");
 const AIAgent = require("./ai-agent/agent");
 const path = require("path");
+
+const FRONTEND_DIAGNOSTIC_SOURCE = "Code Janitor Frontend";
+const FRONTEND_VALIDATION_EXTENSIONS = [
+  ".html",
+  ".htm",
+  ".css",
+  ".scss",
+  ".sass",
+  ".less",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx"
+];
 
 // Map file extensions / languageIds to fixers
 function getFixerForDocument(document, code, fileName) {
@@ -73,6 +93,81 @@ async function replaceDocumentText(document, nextCode, save = false) {
   if (save) {
     await document.save();
   }
+}
+
+function supportsFrontendValidation(document) {
+  const fileName = document.fileName.toLowerCase();
+  return FRONTEND_VALIDATION_EXTENSIONS.some((ext) => fileName.endsWith(ext));
+}
+
+function getMissingFrontendPackages(issues) {
+  return [...new Set(
+    (issues || [])
+      .filter((issue) => issue.type === "missing-package" && issue.packageName)
+      .map((issue) => issue.packageName)
+  )].sort();
+}
+
+function installFrontendPackages(issues) {
+  const workspaceRoot = issues.find((issue) => issue.workspaceRoot)?.workspaceRoot;
+  if (!workspaceRoot) {
+    vscode.window.showWarningMessage(
+      "Could not determine the project root for dependency installation."
+    );
+    return;
+  }
+
+  const packages = getMissingFrontendPackages(issues);
+  if (packages.length === 0) {
+    vscode.window.showInformationMessage(
+      "No missing frontend packages were detected for installation."
+    );
+    return;
+  }
+
+  const packageManager = inferPackageManager(workspaceRoot);
+  const command = getAddPackagesCommand(packageManager, packages);
+  if (!command) {
+    vscode.window.showWarningMessage(
+      "Could not build an install command for the detected frontend packages."
+    );
+    return;
+  }
+
+  const terminal = vscode.window.createTerminal({
+    name: "Code Janitor Frontend Install",
+    cwd: workspaceRoot
+  });
+  terminal.show(true);
+  terminal.sendText(command, true);
+
+  vscode.window.showInformationMessage(
+    `Started ${packageManager} install for ${packages.length} package(s): ${packages.join(", ")}`
+  );
+}
+
+function buildFrontendValidationSummaryMessage(
+  issueCount,
+  creatableCount,
+  missingPackageCount
+) {
+  const parts = [];
+  if (creatableCount > 0) {
+    parts.push(
+      `${creatableCount} missing file reference(s) can be created automatically`
+    );
+  }
+  if (missingPackageCount > 0) {
+    parts.push(
+      `${missingPackageCount} package import(s) can be installed automatically`
+    );
+  }
+
+  if (parts.length === 0) {
+    return `Found ${issueCount} frontend issue(s). Check the Problems panel for details.`;
+  }
+
+  return `Found ${issueCount} frontend issue(s). ${parts.join(". ")}.`;
 }
 
 function getDocumentPathCandidates(document, workspaceFolder) {
@@ -472,13 +567,32 @@ async function activate(context) {
   const diagnosticCollection =
     vscode.languages.createDiagnosticCollection("codeJanitor");
   context.subscriptions.push(diagnosticCollection);
+  const frontendDiagnosticCollection =
+    vscode.languages.createDiagnosticCollection("codeJanitorFrontend");
+  context.subscriptions.push(frontendDiagnosticCollection);
 
   // Register Code Action Provider for "Quick Fix with AI"
   const codeActionProvider = vscode.languages.registerCodeActionsProvider(
-    ["javascript", "javascriptreact", "typescript", "typescriptreact", "python", "java", "c", "cpp", "html"],
+    [
+      "javascript",
+      "javascriptreact",
+      "typescript",
+      "typescriptreact",
+      "python",
+      "java",
+      "c",
+      "cpp",
+      "html",
+      "css",
+      "scss",
+      "sass",
+      "less"
+    ],
     {
       provideCodeActions(document, range, context) {
-        const diagnostics = context.diagnostics.filter(d => d.source === "Code Janitor");
+        const diagnostics = context.diagnostics.filter((d) =>
+          String(d.source || "").startsWith("Code Janitor")
+        );
         if (diagnostics.length === 0) return [];
 
         const fixes = [];
@@ -655,15 +769,9 @@ async function activate(context) {
       }
 
       const document = editor.document;
-      const ext = document.fileName.toLowerCase();
-
-      if (
-        !ext.endsWith(".html") &&
-        !ext.endsWith(".css") &&
-        !ext.endsWith(".js")
-      ) {
+      if (!supportsFrontendValidation(document)) {
         vscode.window.showInformationMessage(
-          "Frontend validation is only supported for HTML, CSS, and JS files."
+          "Frontend validation is supported for HTML, CSS, JS, TS, and common frontend module files."
         );
         return;
       }
@@ -674,27 +782,72 @@ async function activate(context) {
           document.getText()
         );
         const result = validator.validate();
+        updateFrontendDiagnostics(
+          document,
+          result,
+          frontendDiagnosticCollection
+        );
 
         if (result.hasIssues) {
           const issueCount = result.issues.length;
-          const message =
+          const missingPackages = getMissingFrontendPackages(result.issues);
+          const creatableCount = result.issues.filter(
+            (issue) => issue.creatable
+          ).length;
+          const details =
             `Found ${issueCount} frontend issue(s):\n` +
-            result.issues.map((issue) => `- ${issue.message}`).join("\n");
+            result.issues
+              .map(
+                (issue, index) =>
+                  `${index + 1}. Line ${issue.line}, Col ${issue.column}: ${issue.message}`
+              )
+              .join("\n");
+          const actions = [];
+
+          if (creatableCount > 0) {
+            actions.push("Create Files");
+          }
+          if (missingPackages.length > 0) {
+            actions.push("Install Dependencies");
+          }
+          actions.push("Show Details", "Open Problems");
 
           const action = await vscode.window.showWarningMessage(
-            `Found ${issueCount} missing file(s). Create missing files?`,
-            "Create Files",
-            "Show Details",
-            "Cancel"
+            buildFrontendValidationSummaryMessage(
+              issueCount,
+              creatableCount,
+              missingPackages.length
+            ),
+            ...actions
           );
 
           if (action === "Create Files") {
-            result._applyFixes();
-            vscode.window.showInformationMessage(
-              "Missing files created successfully."
+            const creation = validator.createMissingFiles(result.issues);
+            const refreshedResult = await validateFrontendFile(
+              document,
+              frontendDiagnosticCollection
             );
+
+            if (creation.createdFiles.length > 0) {
+              const remaining = refreshedResult.issues.length;
+              vscode.window.showInformationMessage(
+                remaining > 0
+                  ? `Created ${creation.createdFiles.length} file(s). ${remaining} frontend issue(s) still remain.`
+                  : `Created ${creation.createdFiles.length} missing file(s).`
+              );
+            } else {
+              vscode.window.showWarningMessage(
+                "No missing files were created automatically. Some paths may be outside the workspace or non-creatable assets."
+              );
+            }
+          } else if (action === "Install Dependencies") {
+            installFrontendPackages(result.issues);
           } else if (action === "Show Details") {
-            vscode.window.showInformationMessage(message);
+            vscode.window.showInformationMessage(details);
+          } else if (action === "Open Problems") {
+            await vscode.commands.executeCommand(
+              "workbench.actions.view.problems"
+            );
           }
         } else {
           vscode.window.showInformationMessage(
@@ -851,13 +1004,11 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
       console.log("[INFO] Auto-fix triggered before save...");
 
       // Validate frontend files
-      const ext = event.document.fileName.toLowerCase();
-      if (
-        ext.endsWith(".html") ||
-        ext.endsWith(".css") ||
-        ext.endsWith(".js")
-      ) {
-        await validateFrontendFile(event.document);
+      if (supportsFrontendValidation(event.document)) {
+        await validateFrontendFile(
+          event.document,
+          frontendDiagnosticCollection
+        );
       }
 
       // Apply fixes and show preview for HTML files
@@ -1225,14 +1376,46 @@ function isSupportedFile(fileName, languageId) {
   );
 }
 
+function updateFrontendDiagnostics(
+  document,
+  result,
+  frontendDiagnosticCollection
+) {
+  if (!frontendDiagnosticCollection) {
+    return;
+  }
+
+  const diagnostics = result.issues.map((issue) => {
+    const startLine = Math.max((issue.line || 1) - 1, 0);
+    const startColumn = Math.max((issue.column || 1) - 1, 0);
+    const endColumn = startColumn + Math.max(issue.length || 1, 1);
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(startLine, startColumn, startLine, endColumn),
+      issue.message,
+      vscode.DiagnosticSeverity.Error
+    );
+
+    diagnostic.source = FRONTEND_DIAGNOSTIC_SOURCE;
+    diagnostic.code = issue.kind || issue.type || "frontend-validation";
+    return diagnostic;
+  });
+
+  frontendDiagnosticCollection.set(document.uri, diagnostics);
+}
+
 // Helper function to validate frontend files
-async function validateFrontendFile(document) {
+async function validateFrontendFile(document, frontendDiagnosticCollection) {
   try {
     const validator = new FrontendValidator(
       document.fileName,
       document.getText()
     );
     const result = validator.validate();
+    updateFrontendDiagnostics(
+      document,
+      result,
+      frontendDiagnosticCollection
+    );
 
     if (result.hasIssues) {
       console.log(
@@ -1243,11 +1426,20 @@ async function validateFrontendFile(document) {
         console.log(`  - ${issue.message}`);
       });
     }
+
+    return result;
   } catch (error) {
     console.warn(
       `Frontend validation error for ${document.fileName}:`,
       error.message
     );
+    if (frontendDiagnosticCollection) {
+      frontendDiagnosticCollection.set(document.uri, []);
+    }
+    return {
+      hasIssues: false,
+      issues: []
+    };
   }
 }
 

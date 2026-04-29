@@ -3,8 +3,11 @@ const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
 const SelfDiagnosingErrorHandler = require("../self-healing/error-handler");
-const https = require("https");
-const http = require("http");
+const {
+  extractReadableContent,
+  extractUrls,
+  isUrlOnlyMessage
+} = require("./web-content-utils");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -22,6 +25,8 @@ const REPETITION_WINDOW_HEAVY = 300;
 const SCAN_STALE_MS = 45_000;
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
+const MAX_FETCHED_URLS = 2;
+const MAX_FETCHED_CONTENT_CHARS = 5_000;
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -1525,6 +1530,9 @@ class AIAgent {
     
     // Inject active file path so the model never needs to ask for it
     let resolvedMessage = userMessage;
+    if (isUrlOnlyMessage(userMessage)) {
+      resolvedMessage = `Analyze and summarize this link for me:\n${userMessage}`;
+    }
     
     // For news/current affairs questions, inject a hint to use FETCH
     if (
@@ -1535,6 +1543,14 @@ class AIAgent {
     ) {
       // Add hint to output FETCH and continue with analysis
       resolvedMessage = `${userMessage}\n\n[SYSTEM: Output FETCH: https://www.reuters.com on first line, then continue with your analysis. Format: "FETCH: https://www.reuters.com\n\nBased on recent developments..."]`;
+    }
+
+    const fetchedWebContext = await this._buildFetchedWebContext(
+      userMessage,
+      reportStatus
+    );
+    if (fetchedWebContext) {
+      resolvedMessage = `${resolvedMessage}\n\n${fetchedWebContext}`;
     }
     
     if (
@@ -4052,46 +4068,121 @@ ${userMessage}`;
   }
 
   async fetchFromWeb(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      const maxSize = options.maxSize || 500_000; // 500KB default
-      const timeout = options.timeout || 10_000; // 10s default
-      
-      const urlObj = new URL(url);
-      const protocol = urlObj.protocol === "https:" ? https : http;
-      
-      const req = protocol.get(url, { timeout }, (res) => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
-          return;
-        }
-        
-        let data = "";
-        let size = 0;
-        
-        res.on("data", (chunk) => {
-          size += chunk.length;
-          if (size > maxSize) {
-            req.destroy();
-            reject(new Error(`Response too large (>${maxSize} bytes)`));
-            return;
-          }
-          data += chunk.toString();
-        });
-        
-        res.on("end", () => {
-          resolve({ success: true, data, size, contentType: res.headers["content-type"] });
-        });
-      });
-      
-      req.on("error", (err) => {
-        reject(err);
-      });
-      
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("Request timeout"));
-      });
+    const maxSize = options.maxSize || 500_000;
+    const timeout = options.timeout || 10_000;
+
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeout),
+      headers: {
+        "User-Agent": "Code-Janitor/1.0 (+VS Code Extension)",
+        Accept: "text/html,application/json,text/plain;q=0.9,*/*;q=0.8"
+      }
     });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const data = await response.text();
+      return {
+        success: true,
+        data,
+        size: Buffer.byteLength(data),
+        contentType: response.headers.get("content-type") || "",
+        finalUrl: response.url,
+        redirected: response.url !== url
+      };
+    }
+
+    const chunks = [];
+    let size = 0;
+
+    let streamDone = false;
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) {
+        streamDone = true;
+        break;
+      }
+
+      size += value.byteLength;
+      if (size > maxSize) {
+        try {
+          reader.cancel();
+        } catch (_) {
+          // Ignore cancel failures after size limit is exceeded.
+        }
+        throw new Error(`Response too large (>${maxSize} bytes)`);
+      }
+
+      chunks.push(Buffer.from(value));
+    }
+
+    const buffer = Buffer.concat(chunks);
+    return {
+      success: true,
+      data: buffer.toString("utf8"),
+      size,
+      contentType: response.headers.get("content-type") || "",
+      finalUrl: response.url,
+      redirected: response.url !== url
+    };
+  }
+
+  async _buildFetchedWebContext(userMessage, reportStatus) {
+    const urls = extractUrls(userMessage, MAX_FETCHED_URLS);
+    if (urls.length === 0) {
+      return "";
+    }
+
+    reportStatus?.(
+      urls.length === 1
+        ? `Fetching referenced link: ${urls[0]}`
+        : `Fetching ${urls.length} referenced links...`
+    );
+
+    const sections = [
+      "[SYSTEM: The user provided web links. Use the fetched content below when answering. If the page fetch succeeded, analyze the content directly instead of saying you cannot access the link.]"
+    ];
+
+    for (const url of urls) {
+      try {
+        const fetchResult = await this.fetchFromWeb(url, {
+          maxSize: 750_000,
+          timeout: 15_000
+        });
+        const readable = extractReadableContent(
+          fetchResult.data,
+          fetchResult.contentType,
+          MAX_FETCHED_CONTENT_CHARS
+        );
+
+        sections.push(
+          [
+            `URL: ${fetchResult.finalUrl || url}`,
+            fetchResult.redirected && fetchResult.finalUrl
+              ? `Redirected from: ${url}`
+              : "",
+            fetchResult.contentType
+              ? `Content-Type: ${fetchResult.contentType}`
+              : "",
+            readable.title ? `Title: ${readable.title}` : "",
+            "Fetched content:",
+            readable.text || "[No readable text extracted]"
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+      } catch (error) {
+        sections.push(`URL: ${url}\nFetch error: ${error.message}`);
+      }
+    }
+
+    return sections.join("\n\n");
   }
 
   clearHistory() {

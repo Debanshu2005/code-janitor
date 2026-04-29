@@ -4,6 +4,7 @@ const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
 const AIAgent = require("./agent");
+const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
 
 const MODELS_BY_PROVIDER = {
@@ -3015,8 +3016,8 @@ ${trimmedText}`;
               try {
                 const fetchResult = await this.agent.fetchFromWeb(action.url);
                 if (fetchResult.success) {
-                  const preview = fetchResult.data.slice(0, 2000);
-                  const truncated = fetchResult.data.length > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
+                  const preview = formatFetchedPreview(action.url, fetchResult, 2000);
+                  const truncated = fetchResult.size > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
                   this._postMessage({
                     type: "applied",
                     text: `\u2705 Fetched ${action.url}${truncated}:\n\n${preview}`
