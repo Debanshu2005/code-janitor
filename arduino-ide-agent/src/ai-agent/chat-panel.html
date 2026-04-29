@@ -1906,7 +1906,32 @@
         return t
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function unescapeHtml(t) {
+        var textarea = document.createElement("textarea");
+        textarea.innerHTML = t;
+        return textarea.value;
+      }
+
+      function parseMarkdown(text) {
+        text = unescapeHtml(text);
+        text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        text = text.replace(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g, '<em>$1</em>');
+        text = text.replace(/(?<!_)_(?!_)([^_]+)_(?!_)/g, '<em>$1</em>');
+        text = text.replace(/`([^`]+)`/g, '<code style="background: rgba(88, 166, 255, 0.12); padding: 2px 6px; border-radius: 4px; font-family: Fira Code, monospace; font-size: 0.9em; color: #9ecbff;">$1</code>');
+        text = text.replace(/~~([^~]+)~~/g, '<del style="opacity: 0.7;">$1</del>');
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: var(--accent); text-decoration: underline;">$1</a>');
+        text = text.replace(/^### (.+)$/gm, '<h3 style="font-size: 1.1em; font-weight: 600; margin: 12px 0 6px 0; color: var(--text);">$1</h3>');
+        text = text.replace(/^## (.+)$/gm, '<h2 style="font-size: 1.2em; font-weight: 600; margin: 14px 0 8px 0; color: var(--text);">$1</h2>');
+        text = text.replace(/^# (.+)$/gm, '<h1 style="font-size: 1.3em; font-weight: 700; margin: 16px 0 10px 0; color: var(--text);">$1</h1>');
+        text = text.replace(/^[\-\*] (.+)$/gm, '<li style="margin-left: 20px; list-style-type: disc;">$1</li>');
+        text = text.replace(/^> (.+)$/gm, '<blockquote style="border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--muted); font-style: italic;">$1</blockquote>');
+        return text;
       }
 
       function copyText(text, btn) {
@@ -2351,7 +2376,9 @@
             }
             var sp = document.createElement("span");
             sp.style.whiteSpace = "pre-wrap";
-            sp.innerHTML = escapeHtml(line)
+            var processedLine = escapeHtml(line);
+            processedLine = parseMarkdown(processedLine);
+            sp.innerHTML = processedLine
               .replace(
                 /(error[^\n]*?line\s*\d+)/gi,
                 "<span style='color:#fca5a5;background:#450a0a;padding:1px 4px;border-radius:3px;'>$1</span>",
