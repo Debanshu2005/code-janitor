@@ -83,6 +83,33 @@
         flex-wrap: wrap;
         min-width: 0;
       }
+      #header-logo {
+        width: 52px;
+        height: 52px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 1px solid rgba(0, 151, 157, 0.32);
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 30% 30%, rgba(0, 151, 157, 0.22), transparent 60%),
+          linear-gradient(180deg, rgba(44, 44, 44, 0.96), rgba(31, 31, 31, 0.96));
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
+        flex-shrink: 0;
+      }
+      #header-logo.visible {
+        display: inline-flex;
+      }
+      #header-logo img {
+        width: 40px;
+        height: 40px;
+        display: none;
+        object-fit: contain;
+      }
+      #header-logo.visible img {
+        display: block;
+      }
       #header-title {
         font-size: 13px;
         font-weight: 600;
@@ -1201,6 +1228,9 @@
   <body>
     <div id="header">
       <div id="header-left">
+        <div id="header-logo" aria-hidden="true">
+          <img id="header-logo-img" alt="Code Janitor logo" />
+        </div>
         <div id="header-title">Code Janitor AI</div>
         <div id="header-sub">NVIDIA</div>
         <div id="session-controls">
@@ -1401,6 +1431,7 @@
       var btnNewChat = document.getElementById("btn-new-chat");
       var sessionSelect = document.getElementById("session-select");
       var providerSelect = document.getElementById("provider-select");
+      var headerLogoImg = document.getElementById("header-logo-img");
       var apiKeyRow = document.getElementById("api-key-row");
       var apiKeyInput = document.getElementById("api-key-input");
       var apiKeySave = document.getElementById("api-key-save");
@@ -1821,6 +1852,17 @@
       var suppressSessionEvents = false;
       var activityEmptyMessage =
         "No activity yet. Start a task to see the agent workflow.";
+
+      if (headerLogoImg && window.LOGO_URI) {
+        var headerLogoWrap = headerLogoImg.parentElement;
+        headerLogoImg.onload = function () {
+          if (headerLogoWrap) headerLogoWrap.classList.add("visible");
+        };
+        headerLogoImg.onerror = function () {
+          if (headerLogoWrap) headerLogoWrap.classList.remove("visible");
+        };
+        headerLogoImg.src = window.LOGO_URI;
+      }
 
       function resetActivity() {
         activityList.innerHTML = "";

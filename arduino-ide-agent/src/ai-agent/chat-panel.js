@@ -158,10 +158,14 @@ class ChatPanel {
       "codeJanitorChat",
       "Code Janitor AI",
       vscode.ViewColumn.Two,
-      { enableScripts: true, retainContextWhenHidden: true }
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.file(path.join(__dirname))]
+      }
     );
 
-    this.panel.webview.html = this._getHtmlContent();
+    this.panel.webview.html = this._getHtmlContent(this.panel.webview);
     // Initial state is sent when the webview fires the "ready" message
     this._setupMessageHandler();
     this.panel.onDidDispose(() => { this.panel = null; });
@@ -1073,8 +1077,17 @@ class ChatPanel {
     this.panel.webview.postMessage({ type: "done" });
   }
 
-  _getHtmlContent() {
-    return fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
+  _getHtmlContent(webview = null) {
+    const logoPath = vscode.Uri.file(path.join(__dirname, "logo.png"));
+    const logoUri = webview
+      ? webview.asWebviewUri(logoPath).toString()
+      : "";
+    let html = fs.readFileSync(path.join(__dirname, "chat-panel.html"), "utf8");
+    html = html.replace(
+      "</head>",
+      `<script>window.LOGO_URI = ${JSON.stringify(logoUri)};</script>\n  </head>`
+    );
+    return html;
   }
 
   _getWelcomeHtmlContent(webview = null) {
@@ -1101,11 +1114,14 @@ class ChatPanel {
     };
     webviewView.webview.html = this._getWelcomeHtmlContent(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage((message) => {
+    webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "welcomeDismiss") {
-        vscode.commands.executeCommand("workbench.action.closeSidebar");
+        await vscode.commands.executeCommand("workbench.action.closeSidebar");
       } else if (message.type === "welcomeOpenChat") {
-        this.show();
+        await this.show();
+        setTimeout(() => {
+          vscode.commands.executeCommand("workbench.action.closeSidebar");
+        }, 0);
       }
     });
 
