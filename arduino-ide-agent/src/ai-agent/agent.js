@@ -1968,8 +1968,15 @@ ${resolvedMessage}`
       let assistantText = cleanedFinalText || finalText
       let firstRetryText = ""
 
+      const shouldAllowClarification = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      )
+
       if (
         requiresFileActions &&
+        !shouldAllowClarification &&
         !this._hasRequiredActions(
           finalIntent,
           userMessage,
@@ -2018,9 +2025,16 @@ ${resolvedMessage}`
         assistantText = firstRetryText
       }
 
+      const shouldAllowClarificationAfterRetry = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      )
+
       if (
         requiresFileActions &&
-        !this._hasFileActions(parsedResponse.actions) &&
+        !shouldAllowClarificationAfterRetry &&
+        !this._hasEditActions(parsedResponse.actions) &&
         !abortSignal?.aborted
       ) {
         reportStatus?.("Retrying with FILE-only format for safe edits...")
@@ -2065,7 +2079,8 @@ ${resolvedMessage}`
 
       if (
         requiresFileActions &&
-        !this._hasFileActions(parsedResponse.actions)
+        !this._isClarificationResponse(assistantText, finalIntent, userMessage) &&
+        !this._hasEditActions(parsedResponse.actions)
       ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change."
@@ -2855,14 +2870,29 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Prefer robust, maintainable implementations over minimal placeholders.
 - Include concrete fixes, not advisory text.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
-You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
+You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
+
+Use PATCH for small, targeted edits:
+PATCH: <exact file path>
+SEARCH:
+\`\`\`
+(exact existing code)
+\`\`\`
+REPLACE:
+\`\`\`
+(new code to replace with)
+\`\`\`
+
+Use FILE for large rewrites, new files, or multi-section changes:
 FILE: <exact file path>
 \`\`\`
 (complete updated file content)
 \`\`\`
+
+Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`
+Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`
       case "scan":
         return `${base}
 ${operatingPrinciples}
@@ -2875,10 +2905,12 @@ Answer helpfully. Use FILE: or CMD: directives only when the user explicitly ask
   }
 
   _shouldForceStructuredEdit(intent, userMessage) {
-    if (intent === "create" || intent === "edit") return true
+    if (intent === "create") return true
+    if (intent === "edit" && this._isEditRequest(userMessage)) return true
     if (
       (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage)
+      this._isEditRequest(userMessage) &&
+      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
     ) {
       return true
     }
@@ -2890,7 +2922,9 @@ Answer helpfully. Use FILE: or CMD: directives only when the user explicitly ask
 Return ONLY executable actions now.
 
 Rules:
-- If the user asked you to change code/files, include at least one FILE: action with complete file content.
+- If the user asked you to change code/files, include at least one PATCH: or FILE: action.
+- Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
+- Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
@@ -2923,6 +2957,52 @@ Previous invalid reply:
 \`\`\`
 ${(rawResponse || "").slice(0, 4000)}
 \`\`\``
+  }
+
+  _isClarificationResponse(responseText, intent, userMessage) {
+    if (!this._shouldForceStructuredEdit(intent, userMessage)) {
+      return false
+    }
+
+    const text = String(responseText || "").trim()
+    if (!text) {
+      return false
+    }
+
+    if (this._hasMeaningfulActions(this._parseResponse(text).actions)) {
+      return false
+    }
+
+    const lower = text.toLowerCase()
+    const asksQuestion = text.includes("?")
+    const clarificationPatterns = [
+      /\b(can you|could you|would you|please)\s+(clarify|share|provide|confirm|specify)\b/i,
+      /\bwhich\s+(file|files|path|paths|part|function|component|version)\b/i,
+      /\bwhat\s+(exactly|should|do you want|file|path|part)\b/i,
+      /\bdo you want me to\b/i,
+      /\bshould i\b/i,
+      /\bi need\b.*\b(file|path|details|context|clarification|requirement|requirements)\b/i,
+      /\bmissing\b.*\b(file|path|detail|details|context|requirement|requirements)\b/i,
+      /\bplease provide\b.*\b(file|path|details|context|requirement|requirements)\b/i,
+      /\bnot enough\b.*\b(context|information|detail|details)\b/i
+    ]
+
+    const soundsLikeClarification = clarificationPatterns.some((pattern) =>
+      pattern.test(text)
+    )
+
+    const refusalPatterns = [
+      /\bi cannot\b/i,
+      /\bi can'?t\b/i,
+      /\bas an ai\b/i,
+      /\bi'm unable\b/i,
+      /\bi do not have access\b/i
+    ]
+    const looksLikeRefusal = refusalPatterns.some((pattern) =>
+      pattern.test(lower)
+    )
+
+    return soundsLikeClarification && asksQuestion && !looksLikeRefusal
   }
 
   _selectBestManualEditFallbackText(candidates) {
@@ -2967,13 +3047,29 @@ ${(rawResponse || "").slice(0, 4000)}
     })
   }
 
+  _hasPatchActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false
+    return actions.some((action) => {
+      if (!action || action.type !== "patch") return false
+      return (
+        typeof action.search === "string" &&
+        action.search.length > 0 &&
+        typeof action.replace === "string"
+      )
+    })
+  }
+
+  _hasEditActions(actions) {
+    return this._hasPatchActions(actions) || this._hasFileActions(actions)
+  }
+
   _hasRequiredActions(intent, userMessage, actions) {
     if (!this._hasMeaningfulActions(actions)) {
       return false
     }
 
     if (this._shouldForceStructuredEdit(intent, userMessage)) {
-      return this._hasFileActions(actions)
+      return this._hasEditActions(actions)
     }
 
     return true
@@ -2986,6 +3082,13 @@ ${(rawResponse || "").slice(0, 4000)}
 
     return actions.some((action) => {
       if (!action) return false
+      if (action.type === "patch") {
+        return (
+          typeof action.search === "string" &&
+          action.search.length > 0 &&
+          typeof action.replace === "string"
+        )
+      }
       if (action.type === "file") {
         return (
           typeof action.content === "string" && action.content.trim().length > 0
@@ -3546,9 +3649,35 @@ ${userMessage}`
       return false
     }
 
-    // Match FILE: with flexible code block format
-    const fileRegex = /FILE:\s*([^\n`]+)\n```[\w]*\n?([\s\S]*?)```/g
+    // Match PATCH: actions for targeted edits
+    const patchRegex = /PATCH:\s*([^\r\n`]+)\r?\nSEARCH:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```\s*\r?\nREPLACE:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```/g
     let match
+    while ((match = patchRegex.exec(response)) !== null) {
+      const pathInfo = normalizeActionPath(match[1])
+      const normalizedPath = pathInfo.path
+      const searchContent = match[2] || ""
+      const replaceContent = match[3] || ""
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`)
+        continue
+      }
+
+      actions.push({
+        type: "patch",
+        path: normalizedPath,
+        search: searchContent,
+        replace: replaceContent
+      })
+    }
+
+    // Match FILE: with flexible code block format
+    const fileRegex = /FILE:\s*([^\r\n`]+)\r?\n```[\w]*\r?\n?([\s\S]*?)```/g
     while ((match = fileRegex.exec(response)) !== null) {
       const pathInfo = normalizeActionPath(match[1])
       const normalizedPath = pathInfo.path
@@ -3575,7 +3704,7 @@ ${userMessage}`
     // Fallback: also try matching FILE: followed by content without code fences
     if (actions.length === 0) {
       const looseFIleRegex =
-        /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\n(?:FILE|File|MKDIR|CMD):|$)/g
+        /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|MKDIR|CMD):|$)/g
       while ((match = looseFIleRegex.exec(response)) !== null) {
         const pathInfo = normalizeActionPath(match[1])
         const normalizedPath = pathInfo.path
@@ -3707,33 +3836,95 @@ ${userMessage}`
       "md ",
       "findstr ",
       "rg ",
+      "grep ",
       "ls",
       "dir",
+      "cat ",
+      "type ",
+      "head ",
+      "tail ",
+      "echo ",
+      "pwd",
+      "cd ",
+      "tree ",
+      "find ",
+      "which ",
+      "where ",
       "npm install",
       "npm i",
       "npm run ",
       "npm test",
+      "npm start",
+      "npm build",
+      "npm list",
+      "npm outdated",
+      "npm audit",
       "npx ",
+      "yarn install",
+      "yarn add",
+      "yarn remove",
+      "yarn run",
+      "yarn test",
+      "yarn build",
+      "pnpm install",
+      "pnpm add",
+      "pnpm remove",
+      "pnpm run",
+      "pnpm test",
       "node --check",
       "node -e",
       "node ",
       "git status",
       "git diff",
       "git log",
+      "git show",
+      "git branch",
+      "git checkout",
+      "git add",
+      "git commit",
+      "git pull",
+      "git fetch",
+      "git merge",
+      "git rebase",
+      "git stash",
+      "git tag",
+      "git remote",
       "git rev-parse",
       "git push",
       "python -m py_compile",
       "python -m flake8",
       "python -m pylint",
+      "python -m pytest",
+      "python -m unittest",
       "python ",
       "python3 -m py_compile",
       "python3 -m flake8",
       "python3 -m pylint",
+      "python3 -m pytest",
+      "python3 -m unittest",
       "python3 ",
       "pytest",
       "eslint ",
+      "tsc ",
       "javac ",
       "java ",
+      "mvn clean",
+      "mvn compile",
+      "mvn test",
+      "mvn package",
+      "gradle build",
+      "gradle test",
+      "gradle clean",
+      "cargo build",
+      "cargo test",
+      "cargo check",
+      "cargo run",
+      "go build",
+      "go test",
+      "go run",
+      "dotnet build",
+      "dotnet test",
+      "dotnet run",
       ".\\node_modules\\.bin\\",
       "./node_modules/.bin/",
       "wmic path win32_pnpentity",

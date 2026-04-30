@@ -1,14 +1,35 @@
 const vscode = require("vscode");
 const Linter = require("./core/linter");
 const FrontendValidator = require("./core/frontend-validator");
+const {
+  getAddPackagesCommand,
+  inferPackageManager
+} = require("./core/frontend-package-manager");
 const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
 const GraphifyPanel = require("./graphify/graphify-panel");
+const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const AIAgent = require("./ai-agent/agent");
 const path = require("path");
 
-// Map file extensions / languageIds → fixer
+const FRONTEND_DIAGNOSTIC_SOURCE = "Code Janitor Frontend";
+const FRONTEND_VALIDATION_EXTENSIONS = [
+  ".html",
+  ".htm",
+  ".css",
+  ".scss",
+  ".sass",
+  ".less",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx"
+];
+
+// Map file extensions / languageIds to fixers
 function getFixerForDocument(document, code, fileName) {
   console.log(`Debug - Language ID: ${document.languageId}, File: ${fileName}`);
 
@@ -73,6 +94,99 @@ async function replaceDocumentText(document, nextCode, save = false) {
   if (save) {
     await document.save();
   }
+}
+
+function supportsFrontendValidation(document) {
+  const fileName = document.fileName.toLowerCase();
+  return FRONTEND_VALIDATION_EXTENSIONS.some((ext) => fileName.endsWith(ext));
+}
+
+function getMissingFrontendPackages(issues) {
+  return [...new Set(
+    (issues || [])
+      .filter((issue) => issue.type === "missing-package" && issue.packageName)
+      .map((issue) => issue.packageName)
+  )].sort();
+}
+
+function installFrontendPackages(issues) {
+  const workspaceRoot = issues.find((issue) => issue.workspaceRoot)?.workspaceRoot;
+  if (!workspaceRoot) {
+    vscode.window.showWarningMessage(
+      "Could not determine the project root for dependency installation."
+    );
+    return;
+  }
+
+  const packages = getMissingFrontendPackages(issues);
+  if (packages.length === 0) {
+    vscode.window.showInformationMessage(
+      "No missing frontend packages were detected for installation."
+    );
+    return;
+  }
+
+  const packageManager = inferPackageManager(workspaceRoot);
+  const command = getAddPackagesCommand(packageManager, packages);
+  if (!command) {
+    vscode.window.showWarningMessage(
+      "Could not build an install command for the detected frontend packages."
+    );
+    return;
+  }
+
+  const terminal = vscode.window.createTerminal({
+    name: "Code Janitor Frontend Install",
+    cwd: workspaceRoot
+  });
+  terminal.show(true);
+  terminal.sendText(command, true);
+
+  vscode.window.showInformationMessage(
+    `Started ${packageManager} install for ${packages.length} package(s): ${packages.join(", ")}`
+  );
+}
+
+function buildFrontendValidationSummaryMessage(
+  issueCount,
+  creatableCount,
+  missingPackageCount
+) {
+  const parts = [];
+  if (creatableCount > 0) {
+    parts.push(
+      `${creatableCount} missing file reference(s) can be created automatically`
+    );
+  }
+  if (missingPackageCount > 0) {
+    parts.push(
+      `${missingPackageCount} package import(s) can be installed automatically`
+    );
+  }
+
+  if (parts.length === 0) {
+    return `Found ${issueCount} frontend issue(s). Check the Problems panel for details.`;
+  }
+
+  return `Found ${issueCount} frontend issue(s). ${parts.join(". ")}.`;
+}
+
+function createFrontendValidator(document, options = {}) {
+  const graphContext = options.useGraphContext
+    ? loadGraphContextForFile(document.fileName)
+    : null;
+  const validator = new FrontendValidator(
+    document.fileName,
+    document.getText(),
+    graphContext
+      ? {
+          graphData: graphContext.data,
+          graphRoot: graphContext.graphRoot
+        }
+      : {}
+  );
+
+  return { validator, graphContext };
 }
 
 function getDocumentPathCandidates(document, workspaceFolder) {
@@ -201,8 +315,8 @@ async function runFixerAndApply(document, editor = null) {
   const fileName = document.fileName;
   const language = getNormalizedLanguageId(document);
 
-  console.log(`✓ Processing file: ${fileName}`);
-  console.log(`✓ File languageId: ${document.languageId}`);
+  console.log(`[OK] Processing file: ${fileName}`);
+  console.log(`[OK] File languageId: ${document.languageId}`);
 
   const fixer = getFixerForDocument(document, code, fileName);
   if (!fixer) {
@@ -211,7 +325,7 @@ async function runFixerAndApply(document, editor = null) {
   }
 
   try {
-    console.log("✓ Fixer loaded successfully, analyzing code...");
+    console.log("[OK] Fixer loaded successfully, analyzing code...");
     let result = null;
 
     if (fixer.analyze) {
@@ -246,14 +360,14 @@ async function runFixerAndApply(document, editor = null) {
         "html"
       ];
       if (supportedLanguages.includes(language)) {
-        console.log(`🤖 Using AI-only fixing for ${language}...`);
+        console.log(`[AI] Using AI-only fixing for ${language}...`);
         const aiResult = await ollamaClient.validateAndFix(
           code,
           fixedCode,
           language
         );
         if (aiResult && aiResult.shouldUseAI) {
-          console.log(`🤖 AI fixed code: ${aiResult.reason}`);
+          console.log(`[AI] AI fixed code: ${aiResult.reason}`);
           fixedCode = aiResult.fixedCode;
           const aiSafety = assessReplacementSafety(code, fixedCode);
           if (
@@ -266,7 +380,7 @@ async function runFixerAndApply(document, editor = null) {
             fixedCode = code;
           }
         } else {
-          console.log("✓ No AI changes needed");
+          console.log("[OK] No AI changes needed");
         }
       }
     }
@@ -284,11 +398,11 @@ async function runFixerAndApply(document, editor = null) {
     }
     if (fixedCode === code) {
 
-      console.log("✨ No changes detected");
+      console.log("[INFO] No changes detected");
       return false;
     }
 
-    console.log("✓ Code analysis complete, applying fixes...");
+    console.log("[OK] Code analysis complete, applying fixes...");
     await replaceDocumentText(document, fixedCode);
 
     if (editor) {
@@ -302,18 +416,22 @@ async function runFixerAndApply(document, editor = null) {
       result.changeLog.length > 0 &&
       fileName.endsWith(".html")
     ) {
-      const changes = result.changeLog.join("\n• ");
+      const changes = result.changeLog.join("\n- ");
 
       if (result.warning) {
         vscode.window.showWarningMessage(
-          `${result.warning}\n\nFixes applied:\n• ${changes}`,
+          `${result.warning}
+
+Fixes applied:
+- ${changes}` ,
           { modal: false }
         );
       } else {
         // Show changes with preview option
         vscode.window
           .showInformationMessage(
-            `HTML fixes applied:\n• ${changes}`,
+            `HTML fixes applied:
+- ${changes}`,
             "Show Preview"
           )
           .then((selection) => {
@@ -337,11 +455,11 @@ async function runFixerAndApply(document, editor = null) {
       vscode.window.showWarningMessage(result.warning);
     }
 
-    console.log("✓ Code formatted successfully!");
+    console.log("[OK] Code formatted successfully!");
     return true;
   } catch (error) {
-    console.error("✗ Code Janitor error:", error);
-    vscode.window.showErrorMessage(`Code Janitor Error: ${error.message}`);
+    console.error("[ERROR] Code Janitor error:", error);
+    console.error("[ERROR] Code Janitor error:", error);
     return false;
   }
 }
@@ -405,7 +523,7 @@ async function restorePersistedApiKeys(context) {
 
 async function activate(context) {
   globalContext = context;
-  console.log("✓ Code Janitor extension is activating...");
+  console.log("[OK] Code Janitor extension is activating...");
   await restorePersistedApiKeys(context);
 
   // Show setup guide on first install
@@ -413,7 +531,7 @@ async function activate(context) {
   if (!hasSeenSetup) {
     vscode.window
       .showInformationMessage(
-        "🧹 Welcome to Code Janitor! Check the setup guide to get started with AI models.",
+        "Welcome to Code Janitor! Check the setup guide to get started with AI models.",
         "Open Setup Guide",
         "Dismiss"
       )
@@ -468,13 +586,32 @@ async function activate(context) {
   const diagnosticCollection =
     vscode.languages.createDiagnosticCollection("codeJanitor");
   context.subscriptions.push(diagnosticCollection);
+  const frontendDiagnosticCollection =
+    vscode.languages.createDiagnosticCollection("codeJanitorFrontend");
+  context.subscriptions.push(frontendDiagnosticCollection);
 
   // Register Code Action Provider for "Quick Fix with AI"
   const codeActionProvider = vscode.languages.registerCodeActionsProvider(
-    ["javascript", "javascriptreact", "typescript", "typescriptreact", "python", "java", "c", "cpp", "html"],
+    [
+      "javascript",
+      "javascriptreact",
+      "typescript",
+      "typescriptreact",
+      "python",
+      "java",
+      "c",
+      "cpp",
+      "html",
+      "css",
+      "scss",
+      "sass",
+      "less"
+    ],
     {
       provideCodeActions(document, range, context) {
-        const diagnostics = context.diagnostics.filter(d => d.source === "Code Janitor");
+        const diagnostics = context.diagnostics.filter((d) =>
+          String(d.source || "").startsWith("Code Janitor")
+        );
         if (diagnostics.length === 0) return [];
 
         const fixes = [];
@@ -482,7 +619,7 @@ async function activate(context) {
         // Create "Fix with AI" action for each diagnostic
         for (const diagnostic of diagnostics) {
           const fix = new vscode.CodeAction(
-            `🤖 Fix with AI: ${diagnostic.message}`,
+            `Fix with AI: ${diagnostic.message}`,
             vscode.CodeActionKind.QuickFix
           );
           fix.command = {
@@ -498,7 +635,7 @@ async function activate(context) {
         // Create "Fix All with AI" action if multiple issues
         if (diagnostics.length > 1) {
           const fixAll = new vscode.CodeAction(
-            `🤖 Fix All ${diagnostics.length} Issues with AI`,
+            `Fix All ${diagnostics.length} Issues with AI`,
             vscode.CodeActionKind.QuickFix
           );
           fixAll.command = {
@@ -576,7 +713,7 @@ async function activate(context) {
           } else {
             // Clear diagnostics if no issues
             diagnosticCollection.set(document.uri, []);
-            vscode.window.showInformationMessage("✅ No linting issues found!");
+            vscode.window.showInformationMessage("No linting issues found.");
           }
         } else {
           vscode.window.showErrorMessage(`Linting failed: ${result.message}`);
@@ -651,50 +788,91 @@ async function activate(context) {
       }
 
       const document = editor.document;
-      const ext = document.fileName.toLowerCase();
-
-      if (
-        !ext.endsWith(".html") &&
-        !ext.endsWith(".css") &&
-        !ext.endsWith(".js")
-      ) {
+      if (!supportsFrontendValidation(document)) {
         vscode.window.showInformationMessage(
-          "Frontend validation is only supported for HTML, CSS, and JS files."
+          "Frontend validation is supported for HTML, CSS, JS, TS, and common frontend module files."
         );
         return;
       }
 
       try {
-        const validator = new FrontendValidator(
-          document.fileName,
-          document.getText()
-        );
+        const { validator, graphContext } = createFrontendValidator(document, {
+          useGraphContext: true
+        });
         const result = validator.validate();
+        updateFrontendDiagnostics(
+          document,
+          result,
+          frontendDiagnosticCollection
+        );
 
         if (result.hasIssues) {
           const issueCount = result.issues.length;
-          const message =
+          const missingPackages = getMissingFrontendPackages(result.issues);
+          const creatableCount = result.issues.filter(
+            (issue) => issue.creatable
+          ).length;
+          const details =
             `Found ${issueCount} frontend issue(s):\n` +
-            result.issues.map((issue) => `• ${issue.message}`).join("\n");
+            result.issues
+              .map(
+                (issue, index) =>
+                  `${index + 1}. Line ${issue.line}, Col ${issue.column}: ${issue.message}`
+              )
+              .join("\n");
+          const actions = [];
+
+          if (creatableCount > 0) {
+            actions.push("Create Files");
+          }
+          if (missingPackages.length > 0) {
+            actions.push("Install Dependencies");
+          }
+          actions.push("Show Details", "Open Problems");
 
           const action = await vscode.window.showWarningMessage(
-            `Found ${issueCount} missing file(s). Create missing files?`,
-            "Create Files",
-            "Show Details",
-            "Cancel"
+            buildFrontendValidationSummaryMessage(
+              issueCount,
+              creatableCount,
+              missingPackages.length
+            ),
+            ...actions
           );
 
           if (action === "Create Files") {
-            result._applyFixes();
-            vscode.window.showInformationMessage(
-              "✅ Missing files created successfully!"
+            const creation = validator.createMissingFiles(result.issues);
+            const refreshedResult = await validateFrontendFile(
+              document,
+              frontendDiagnosticCollection,
+              { useGraphContext: true }
             );
+
+            if (creation.createdFiles.length > 0) {
+              const remaining = refreshedResult.issues.length;
+              vscode.window.showInformationMessage(
+                remaining > 0
+                  ? `Created ${creation.createdFiles.length} file(s). ${remaining} frontend issue(s) still remain.`
+                  : `Created ${creation.createdFiles.length} missing file(s).`
+              );
+            } else {
+              vscode.window.showWarningMessage(
+                "No missing files were created automatically. Some paths may be outside the workspace or non-creatable assets."
+              );
+            }
+          } else if (action === "Install Dependencies") {
+            installFrontendPackages(result.issues);
           } else if (action === "Show Details") {
-            vscode.window.showInformationMessage(message);
+            vscode.window.showInformationMessage(details);
+          } else if (action === "Open Problems") {
+            await vscode.commands.executeCommand(
+              "workbench.actions.view.problems"
+            );
           }
         } else {
           vscode.window.showInformationMessage(
-            "✅ No frontend validation issues found!"
+            graphContext
+              ? "No frontend validation issues found. Graphify context was used."
+              : "No frontend validation issues found."
           );
         }
       } catch (error) {
@@ -717,7 +895,7 @@ async function activate(context) {
     () => livePreviewer(context, { inspect: true })
   );
   context.subscriptions.push(inspectPreviewDisposable);
-  console.log("✓ Enhanced Live Preview command registered.");
+  console.log("[OK] Enhanced Live Preview command registered.");
 
   // 5. AI Chat Command
   const chatDisposable = vscode.commands.registerCommand(
@@ -742,12 +920,13 @@ async function activate(context) {
       } catch (error) {
         console.error("[Extension] CRITICAL ERROR in openChat command:", error);
         console.error("[Extension] Error stack:", error.stack);
-        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}\n\nCheck Developer Console (Help → Toggle Developer Tools) for details.`);
+        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}
+Check Developer Console (Help -> Toggle Developer Tools) for details.`);
       }
     }
   );
   context.subscriptions.push(chatDisposable);
-  console.log("✓ AI Chat command registered.");
+  console.log("[OK] AI Chat command registered.");
 
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);
@@ -759,7 +938,7 @@ async function activate(context) {
     }
   );
   context.subscriptions.push(graphifyDisposable);
-  console.log("✓ Graphify command registered.");
+  console.log("[OK] Graphify command registered.");
 
   // 7. Performance Report Command
   const performanceDisposable = vscode.commands.registerCommand(
@@ -774,7 +953,7 @@ async function activate(context) {
     }
   );
   context.subscriptions.push(performanceDisposable);
-  console.log("✓ Performance report command registered.");
+  console.log("[OK] Performance report command registered.");
 
   // URI handler: vscode://Debanshu2005.code-janitor/check-models
   const uriHandler = vscode.window.registerUriHandler({
@@ -843,16 +1022,14 @@ async function activate(context) {
       // Auto-fix on save is now ENABLED by default
       if (!config.get("autoFixOnSave.enabled", true)) return;
 
-      console.log("🧹 Auto-fix triggered before save...");
+      console.log("[INFO] Auto-fix triggered before save...");
 
       // Validate frontend files
-      const ext = event.document.fileName.toLowerCase();
-      if (
-        ext.endsWith(".html") ||
-        ext.endsWith(".css") ||
-        ext.endsWith(".js")
-      ) {
-        await validateFrontendFile(event.document);
+      if (supportsFrontendValidation(event.document)) {
+        await validateFrontendFile(
+          event.document,
+          frontendDiagnosticCollection
+        );
       }
 
       // Apply fixes and show preview for HTML files
@@ -864,7 +1041,7 @@ async function activate(context) {
   );
   context.subscriptions.push(saveDisposable);
 
-  console.log("✓ Code Janitor extension activated successfully!");
+  console.log("[OK] Code Janitor extension activated successfully!");
 }
 
 // Helper function to run syntax check via CMD
@@ -963,10 +1140,10 @@ async function runSyntaxCheckAndFix(document, workspaceFolder) {
         const hasSyntaxErrors = !!error || hasErrorKeywords;
 
         if (hasSyntaxErrors) {
-          console.log(`✗ Syntax errors detected in ${fileName}`);
+          console.log(`[ERROR] Syntax errors detected in ${fileName}`);
           console.log("Error details:", output || error.message);
         } else {
-          console.log(`✓ No syntax errors in ${fileName}`);
+          console.log(`[OK] No syntax errors in ${fileName}`);
         }
 
         resolve({
@@ -1014,7 +1191,7 @@ async function applyRuleBasedFixes(document, editor) {
       }
 
       if (fixed !== code) {
-        console.log("✓ Applying changes to document...");
+        console.log("[OK] Applying changes to document...");
         const edit = new vscode.WorkspaceEdit();
         const fullRange = new vscode.Range(
           document.positionAt(0),
@@ -1023,10 +1200,10 @@ async function applyRuleBasedFixes(document, editor) {
         edit.replace(document.uri, fullRange, fixed);
         await vscode.workspace.applyEdit(edit);
         await document.save();
-        console.log("✓ Rule-based fixes applied and saved");
+        console.log("[OK] Rule-based fixes applied and saved");
         return { success: true, fixedCode: fixed };
       } else {
-        console.log("✗ No changes made by rule-based fixes");
+        console.log("[INFO] No changes made by rule-based fixes");
       }
     }
 
@@ -1036,7 +1213,7 @@ async function applyRuleBasedFixes(document, editor) {
       return { success: false, fixedCode: code };
     }
 
-    console.log(`🔧 Applying ${document.languageId} rule-based fixes...`);
+    console.log(`[FIX] Applying ${document.languageId} rule-based fixes...`);
     const result = await fixer.analyze();
     let fixed = code;
 
@@ -1055,14 +1232,14 @@ async function applyRuleBasedFixes(document, editor) {
       edit.replace(document.uri, fullRange, fixed);
       await vscode.workspace.applyEdit(edit);
       await document.save();
-      console.log("✓ Rule-based fixes applied");
+      console.log("[OK] Rule-based fixes applied");
       return { success: true, fixedCode: fixed };
     }
 
     console.log("  No rule-based fixes needed");
     return { success: false, fixedCode: code };
   } catch (error) {
-    console.error("✗ Rule-based fix error:", error.message);
+    console.error("[ERROR] Rule-based fix error:", error.message);
     console.error("Stack:", error.stack);
     return { success: false, fixedCode: code };
   }
@@ -1143,7 +1320,7 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
     );
 
     if (result.error) {
-      console.error(`✗ AI agent error: ${result.error}`);
+      console.error(`[ERROR] AI agent error: ${result.error}`);
       return { applied: false, fixedCode: code, reason: result.error };
     }
 
@@ -1182,20 +1359,20 @@ IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not tr
           };
         }
 
-        console.log("✓ AI agent provided fix");
+        console.log("[OK] AI agent provided fix");
         await replaceDocumentText(document, fileAction.content, true);
         return { applied: true, fixedCode: fileAction.content };
       }
     }
 
-    console.log("✗ AI agent didn't provide file actions");
+    console.log("[INFO] AI agent did not provide file actions");
     return {
       applied: false,
       fixedCode: code,
       reason: "No file actions generated"
     };
   } catch (error) {
-    console.error("✗ AI agent error:", error.message);
+    console.error("[ERROR] AI agent error:", error.message);
     return { applied: false, fixedCode: code, reason: error.message };
   }
 }
@@ -1220,14 +1397,47 @@ function isSupportedFile(fileName, languageId) {
   );
 }
 
-// Helper function to validate frontend files
-async function validateFrontendFile(document) {
-  try {
-    const validator = new FrontendValidator(
-      document.fileName,
-      document.getText()
+function updateFrontendDiagnostics(
+  document,
+  result,
+  frontendDiagnosticCollection
+) {
+  if (!frontendDiagnosticCollection) {
+    return;
+  }
+
+  const diagnostics = result.issues.map((issue) => {
+    const startLine = Math.max((issue.line || 1) - 1, 0);
+    const startColumn = Math.max((issue.column || 1) - 1, 0);
+    const endColumn = startColumn + Math.max(issue.length || 1, 1);
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(startLine, startColumn, startLine, endColumn),
+      issue.message,
+      vscode.DiagnosticSeverity.Error
     );
+
+    diagnostic.source = FRONTEND_DIAGNOSTIC_SOURCE;
+    diagnostic.code = issue.kind || issue.type || "frontend-validation";
+    return diagnostic;
+  });
+
+  frontendDiagnosticCollection.set(document.uri, diagnostics);
+}
+
+// Helper function to validate frontend files
+async function validateFrontendFile(
+  document,
+  frontendDiagnosticCollection,
+  options = {}
+) {
+  try {
+    const { validator } = createFrontendValidator(document, options);
     const result = validator.validate();
+    updateFrontendDiagnostics(
+      document,
+      result,
+      frontendDiagnosticCollection
+    );
 
     if (result.hasIssues) {
       console.log(
@@ -1238,11 +1448,20 @@ async function validateFrontendFile(document) {
         console.log(`  - ${issue.message}`);
       });
     }
+
+    return result;
   } catch (error) {
     console.warn(
       `Frontend validation error for ${document.fileName}:`,
       error.message
     );
+    if (frontendDiagnosticCollection) {
+      frontendDiagnosticCollection.set(document.uri, []);
+    }
+    return {
+      hasIssues: false,
+      issues: []
+    };
   }
 }
 
@@ -1477,7 +1696,7 @@ function fixHtmlLine(line, properIndent) {
 }
 
 function deactivate() {
-  console.log("✓ Code Janitor extension deactivated");
+  console.log("[OK] Code Janitor extension deactivated");
 }
 
 module.exports = { activate, deactivate };

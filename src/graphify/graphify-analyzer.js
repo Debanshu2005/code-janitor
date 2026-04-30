@@ -1,6 +1,29 @@
 const vscode = require("vscode");
 const path = require("path");
 const fs = require("fs").promises;
+const fsSync = require("fs");
+
+const SCRIPT_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"];
+const STYLE_EXTENSIONS = [".css", ".scss", ".sass", ".less"];
+const TRACKED_TEXT_EXTENSIONS = new Set([
+  ...SCRIPT_EXTENSIONS,
+  ...STYLE_EXTENSIONS,
+  ".html",
+  ".htm",
+  ".json",
+  ".webmanifest",
+  ".svg"
+]);
+const TRACKED_BINARY_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".ico",
+  ".bmp"
+]);
 
 class GraphifyAnalyzer {
   constructor(workspaceRoot) {
@@ -45,6 +68,12 @@ class GraphifyAnalyzer {
       "utf8"
     );
 
+    await fs.writeFile(
+      path.join(outputDir, "graph.json"),
+      JSON.stringify(this.getSerializableGraph(), null, 2),
+      "utf8"
+    );
+
     // Generate agent configurations
     await this.generateAgentConfigs();
 
@@ -58,7 +87,6 @@ class GraphifyAnalyzer {
   }
 
   async analyzeCodebase() {
-    const codeExtensions = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i;
     const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__", "graphify-out"]);
 
     const scanDirectory = async (dirPath) => {
@@ -72,31 +100,48 @@ class GraphifyAnalyzer {
           if (entry.isDirectory()) {
             if (ignoreDirs.has(entry.name)) continue;
             await scanDirectory(fullPath);
-          } else if (codeExtensions.test(entry.name)) {
+          } else if (this._shouldTrackFile(entry.name)) {
             try {
-              const content = await fs.readFile(fullPath, "utf8");
               const node = {
                 path: relativePath.replace(/\\/g, "/"),
                 name: entry.name,
                 type: this.getFileType(entry.name),
-                lines: content.split("\n").length,
+                lines: 0,
                 imports: [],
                 exports: [],
                 dependencies: []
               };
 
-              // Extract imports/exports
-              this.extractDependencies(content, node);
-              this.nodes.push(node);
+              if (this._isTextTrackedFile(entry.name)) {
+                const content = await fs.readFile(fullPath, "utf8");
+                node.lines = content.split("\n").length;
 
-              // Create edges
-              for (const dep of node.dependencies) {
-                this.edges.push({
-                  from: relativePath.replace(/\\/g, "/"),
-                  to: dep,
-                  type: "imports"
-                });
+                const references = this.extractDependencies(content, node);
+                const seenTargets = new Set();
+
+                for (const reference of references) {
+                  const resolvedDependency = this.resolveDependencyPath(
+                    reference.specifier,
+                    fullPath,
+                    reference.kind
+                  );
+                  if (!resolvedDependency) continue;
+
+                  if (!seenTargets.has(resolvedDependency)) {
+                    seenTargets.add(resolvedDependency);
+                    node.dependencies.push(resolvedDependency);
+                  }
+
+                  this.edges.push({
+                    from: node.path,
+                    to: resolvedDependency,
+                    type: reference.type,
+                    specifier: reference.specifier
+                  });
+                }
               }
+
+              this.nodes.push(node);
             } catch (err) {
               // Skip files that can't be read
             }
@@ -108,6 +153,24 @@ class GraphifyAnalyzer {
     };
 
     await scanDirectory(this.workspaceRoot);
+  }
+
+  _shouldTrackFile(fileName) {
+    const ext = path.extname(fileName).toLowerCase();
+    return TRACKED_TEXT_EXTENSIONS.has(ext) ||
+      TRACKED_BINARY_EXTENSIONS.has(ext) ||
+      this._isCodeGraphFile(fileName);
+  }
+
+  _isTextTrackedFile(fileName) {
+    const ext = path.extname(fileName).toLowerCase();
+    return TRACKED_TEXT_EXTENSIONS.has(ext) || this._isCodeGraphFile(fileName);
+  }
+
+  _isCodeGraphFile(fileName) {
+    return /\.(js|jsx|ts|tsx|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs|mjs|cjs)$/i.test(
+      fileName
+    );
   }
 
   getFileType(fileName) {
@@ -128,32 +191,72 @@ class GraphifyAnalyzer {
       ".go": "go",
       ".rb": "ruby",
       ".php": "php",
-      ".rs": "rust"
+      ".rs": "rust",
+      ".html": "html",
+      ".htm": "html",
+      ".css": "stylesheet",
+      ".scss": "stylesheet",
+      ".sass": "stylesheet",
+      ".less": "stylesheet",
+      ".json": "json",
+      ".webmanifest": "manifest",
+      ".svg": "asset",
+      ".png": "asset",
+      ".jpg": "asset",
+      ".jpeg": "asset",
+      ".gif": "asset",
+      ".webp": "asset",
+      ".avif": "asset",
+      ".ico": "asset",
+      ".bmp": "asset"
     };
     return typeMap[ext] || "unknown";
   }
 
   extractDependencies(content, node) {
     const ext = path.extname(node.name).toLowerCase();
+    const references = [];
 
-    if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
+    if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
       // JavaScript/TypeScript
       const importRegex = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
       const requireRegex = /require\s*\(['"](.+?)['"]\)/g;
       const exportRegex = /export\s+(default\s+)?(class|function|const|let|var)\s+(\w+)/g;
+      const dynamicImportRegex = /import\s*\(\s*['"](.+?)['"]\s*\)/g;
+      const importMetaAssetRegex =
+        /new\s+URL\(\s*['"](.+?)['"]\s*,\s*import\.meta\.url\s*\)/g;
 
       let match;
       while ((match = importRegex.exec(content)) !== null) {
-        if (match[1].startsWith(".")) {
-          node.dependencies.push(match[1]);
-          node.imports.push(match[1]);
-        }
+        node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "imports",
+          kind: "module"
+        });
       }
       while ((match = requireRegex.exec(content)) !== null) {
-        if (match[1].startsWith(".")) {
-          node.dependencies.push(match[1]);
-          node.imports.push(match[1]);
-        }
+        node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "requires",
+          kind: "module"
+        });
+      }
+      while ((match = dynamicImportRegex.exec(content)) !== null) {
+        node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "dynamic-import",
+          kind: "module"
+        });
+      }
+      while ((match = importMetaAssetRegex.exec(content)) !== null) {
+        references.push({
+          specifier: match[1],
+          type: "asset-url",
+          kind: "asset"
+        });
       }
       while ((match = exportRegex.exec(content)) !== null) {
         node.exports.push(match[3]);
@@ -170,8 +273,12 @@ class GraphifyAnalyzer {
       const includeRegex = /#include\s+["<](.+?)[">]/g;
       let match;
       while ((match = includeRegex.exec(content)) !== null) {
-        node.dependencies.push(match[1]);
         node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "include",
+          kind: "module"
+        });
       }
     } else if (ext === ".java") {
       // Java
@@ -180,7 +287,242 @@ class GraphifyAnalyzer {
       while ((match = importRegex.exec(content)) !== null) {
         node.imports.push(match[1]);
       }
+    } else if (ext === ".html" || ext === ".htm") {
+      this._collectHtmlReferences(content, references);
+    } else if (STYLE_EXTENSIONS.includes(ext)) {
+      this._collectCssReferences(content, references);
     }
+
+    return references;
+  }
+
+  _collectHtmlReferences(content, references) {
+    this._collectMatches(
+      /<link\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi,
+      content,
+      (match, href) => {
+        if (!this._shouldTrackHtmlLink(match[0], href)) return null;
+        return {
+          specifier: href,
+          type: "link",
+          kind: this._inferHtmlLinkKind(match[0], href)
+        };
+      },
+      references
+    );
+
+    this._collectMatches(
+      /<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>/gi,
+      content,
+      (_, src) => ({
+        specifier: src,
+        type: "script-src",
+        kind: "script"
+      }),
+      references
+    );
+
+    this._collectMatches(
+      /<(?:img|audio|video|source|track)\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>/gi,
+      content,
+      (_, src) => ({
+        specifier: src,
+        type: "asset-src",
+        kind: "asset"
+      }),
+      references
+    );
+
+    this._collectMatches(
+      /<video\b[^>]*poster\s*=\s*["']([^"']+)["'][^>]*>/gi,
+      content,
+      (_, src) => ({
+        specifier: src,
+        type: "poster",
+        kind: "asset"
+      }),
+      references
+    );
+
+    const srcsetRegex = /\bsrcset\s*=\s*["']([^"']+)["']/gi;
+    let match = srcsetRegex.exec(content);
+    while (match) {
+      const entries = (match[1] || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+      for (const entry of entries) {
+        const reference = entry.split(/\s+/)[0];
+        if (!reference || this._shouldIgnoreSpecifier(reference)) continue;
+        references.push({
+          specifier: reference,
+          type: "srcset",
+          kind: "asset"
+        });
+      }
+
+      match = srcsetRegex.exec(content);
+    }
+  }
+
+  _collectCssReferences(content, references) {
+    this._collectMatches(
+      /@import\s+(?:url\(\s*)?["']([^"']+)["']\s*\)?/gi,
+      content,
+      (_, src) => ({
+        specifier: src,
+        type: "css-import",
+        kind: "stylesheet"
+      }),
+      references
+    );
+
+    this._collectMatches(
+      /url\(\s*["']?([^"')]+)["']?\s*\)/gi,
+      content,
+      (_, src) => ({
+        specifier: src,
+        type: "css-url",
+        kind: "asset"
+      }),
+      references
+    );
+  }
+
+  _collectMatches(regex, content, buildReference, references) {
+    let match = regex.exec(content);
+    while (match) {
+      const reference = (match[1] || "").trim();
+      const nextReference = buildReference(match, reference);
+      if (nextReference && !this._shouldIgnoreSpecifier(nextReference.specifier)) {
+        references.push(nextReference);
+      }
+      match = regex.exec(content);
+    }
+  }
+
+  _shouldTrackHtmlLink(tagText, href) {
+    if (this._shouldIgnoreSpecifier(href)) {
+      return false;
+    }
+
+    const relMatch = tagText.match(/\brel\s*=\s*["']([^"']+)["']/i);
+    const rel = relMatch ? relMatch[1].toLowerCase() : "";
+
+    if (
+      /stylesheet|icon|manifest|preload|modulepreload|prefetch|apple-touch-icon/.test(
+        rel
+      )
+    ) {
+      return true;
+    }
+
+    return /\.(css|scss|sass|less|json|webmanifest|svg|png|jpe?g|gif|webp|avif|ico)$/i.test(
+      this._stripQueryAndHash(href)
+    );
+  }
+
+  _inferHtmlLinkKind(tagText, href) {
+    const relMatch = tagText.match(/\brel\s*=\s*["']([^"']+)["']/i);
+    const rel = relMatch ? relMatch[1].toLowerCase() : "";
+    const normalized = this._stripQueryAndHash(href).toLowerCase();
+    return /stylesheet|modulepreload/.test(rel) ||
+      STYLE_EXTENSIONS.some((candidateExt) => normalized.endsWith(candidateExt))
+      ? "stylesheet"
+      : "asset";
+  }
+
+  _shouldIgnoreSpecifier(specifier) {
+    const trimmed = (specifier || "").trim();
+    if (!trimmed) return true;
+
+    return (
+      /^__[\w.-]+__$/.test(trimmed) ||
+      /^\$\{[^}]+\}$/.test(trimmed) ||
+      /^\{\{[\s\S]+\}\}$/.test(trimmed) ||
+      /^<%[-=]?[\s\S]+%>$/.test(trimmed) ||
+      trimmed.startsWith("#") ||
+      /^data:/i.test(trimmed) ||
+      /^blob:/i.test(trimmed) ||
+      /^about:/i.test(trimmed) ||
+      /^mailto:/i.test(trimmed) ||
+      /^tel:/i.test(trimmed) ||
+      /^javascript:/i.test(trimmed) ||
+      /^https?:/i.test(trimmed) ||
+      /^\/\//.test(trimmed)
+    );
+  }
+
+  resolveDependencyPath(specifier, currentFilePath, kind) {
+    const normalizedSpecifier = this._stripQueryAndHash(specifier);
+    if (!normalizedSpecifier || this._shouldIgnoreSpecifier(normalizedSpecifier)) {
+      return null;
+    }
+
+    const baseDir = path.dirname(currentFilePath);
+    const isRootRelative =
+      /^[\\/]/.test(normalizedSpecifier) &&
+      !/^[a-zA-Z]:[\\/]/.test(normalizedSpecifier) &&
+      !normalizedSpecifier.startsWith("//") &&
+      !normalizedSpecifier.startsWith("\\\\");
+
+    const basePath = isRootRelative
+      ? path.join(this.workspaceRoot, normalizedSpecifier.replace(/^[\\/]+/, ""))
+      : path.resolve(baseDir, normalizedSpecifier);
+    const ext = path.extname(basePath).toLowerCase();
+    const candidateBases = [basePath];
+
+    if (
+      ["asset", "stylesheet", "script"].includes(kind) &&
+      !isRootRelative &&
+      !/^\.\.?(?:[\\/]|$)/.test(normalizedSpecifier) &&
+      /[\\/]/.test(normalizedSpecifier)
+    ) {
+      candidateBases.push(
+        path.join(this.workspaceRoot, normalizedSpecifier.replace(/^[\\/]+/, ""))
+      );
+    }
+
+    const candidates = [];
+    candidateBases.forEach((candidateBase) => {
+      candidates.push(candidateBase);
+    });
+
+    if (!ext) {
+      if (kind === "module" || kind === "script") {
+        candidateBases.forEach((candidateBase) => {
+          for (const candidateExt of SCRIPT_EXTENSIONS) {
+            candidates.push(candidateBase + candidateExt);
+            candidates.push(path.join(candidateBase, "index" + candidateExt));
+          }
+        });
+      } else if (kind === "stylesheet") {
+        candidateBases.forEach((candidateBase) => {
+          for (const candidateExt of STYLE_EXTENSIONS) {
+            candidates.push(candidateBase + candidateExt);
+            candidates.push(path.join(candidateBase, "index" + candidateExt));
+          }
+        });
+      }
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const stat = fsSync.statSync(candidate);
+        if (stat.isFile()) {
+          return path.relative(this.workspaceRoot, candidate).replace(/\\/g, "/");
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  _stripQueryAndHash(specifier) {
+    return (specifier || "").trim().replace(/[?#].*$/, "");
   }
 
   detectCommunities() {
@@ -296,6 +638,39 @@ Before searching raw files, consult this report to understand:
 `;
 
     return report;
+  }
+
+  getSerializableGraph() {
+    const godNodes = (this.communities.get("god_nodes") || []).map((node) => ({
+      path: node.path,
+      name: node.name,
+      type: node.type,
+      lines: node.lines,
+      inDegree: node.inDegree,
+      outDegree: node.outDegree,
+      totalDegree: node.totalDegree
+    }));
+    const directories = (this.communities.get("directories") || []).map(
+      ([directoryPath, files]) => ({
+        path: directoryPath || "",
+        fileCount: files.length,
+        types: [...new Set(files.map((file) => file.type))]
+      })
+    );
+
+    return {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      nodeCount: this.nodes.length,
+      edgeCount: this.edges.length,
+      communityCount: this.communities.size,
+      nodes: this.nodes,
+      edges: this.edges,
+      communities: {
+        godNodes,
+        directories
+      }
+    };
   }
 
   async generateAgentConfigs() {

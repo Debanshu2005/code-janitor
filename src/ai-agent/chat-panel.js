@@ -4,6 +4,7 @@ const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
 const AIAgent = require("./agent");
+const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
 
 const MODELS_BY_PROVIDER = {
@@ -12,6 +13,7 @@ const MODELS_BY_PROVIDER = {
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 };
+const OLLAMA_FALLBACK_MODELS = ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"];
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
@@ -19,7 +21,7 @@ class ChatPanel {
     this.context = context;
     this.panel = null;
     this.sidebarView = null;
-    this.agent = new AIAgent();
+    this.agent = new AIAgent(context);
     this.performanceMonitor = new PerformanceMonitor(context);
     this.abortController = null;
     this.lastActiveEditor = vscode.window.activeTextEditor || null;
@@ -54,6 +56,10 @@ class ChatPanel {
       type: "thinkingState",
       enabled: this.showThinking
     });
+  }
+
+  _shouldSuppressInternalStatus(text) {
+    return /replied with prose/i.test(text || "");
   }
 
   async show() {
@@ -97,7 +103,7 @@ class ChatPanel {
     if (!hasSeenSetup) {
       this.context.globalState.update("codeJanitor.seenSetup", true);
       vscode.window.showInformationMessage(
-        "👋 New to Code Janitor? Check the setup guide to configure AI models and API keys.",
+        "New to Code Janitor? Check the setup guide to configure AI models and API keys.",
         "Open Setup Guide"
       ).then(selection => {
         if (selection === "Open Setup Guide") {
@@ -266,7 +272,7 @@ class ChatPanel {
 
       const installedResult = await this.agent.executeCommand("arduino-cli lib list --format json", workspaceFolder);
       if (!installedResult.success) {
-        report += "⚠️ Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n";
+        report += "Warning: Could not check installed Arduino libraries. Install arduino-cli to enable this check.\n\n";
       } else {
 
         const installedLibraries = this._parseInstalledLibraries(installedResult.output);
@@ -312,7 +318,7 @@ class ChatPanel {
         }
 
         if (missing.length === 0) {
-          report += "\n✅ All C/C++ libraries are installed.\n\n";
+          report += "\nAll C/C++ libraries are installed.\n\n";
         } else {
 
           report += "\nMissing C/C++ library candidates:\n";
@@ -344,13 +350,13 @@ class ChatPanel {
             report += "\nInstall missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  pip install ${pkg}\n`;
           } else {
-            report += "✅ All Python packages are installed.\n";
+            report += "All Python packages are installed.\n";
           }
         } catch (_) {
-          report += "⚠️ Could not parse pip output.\n";
+          report += "Warning: Could not parse pip output.\n";
         }
       } else {
-        report += "⚠️ Could not check installed packages. Run 'pip list' manually.\n";
+        report += "Warning: Could not check installed packages. Run 'pip list' manually.\n";
       }
       report += "\n";
     }
@@ -372,13 +378,13 @@ class ChatPanel {
             report += "\nAdd missing packages:\n";
             for (const pkg of missing.slice(0, 10)) report += `  npm install ${pkg}\n`;
           } else {
-            report += "✅ All imports are in package.json.\n";
+            report += "All imports are in package.json.\n";
           }
         } catch (_) {
-          report += "⚠️ Could not parse package.json.\n";
+          report += "Warning: Could not parse package.json.\n";
         }
       } else {
-        report += "⚠️ No package.json found.\n";
+        report += "Warning: No package.json found.\n";
       }
       report += "\n";
     }
@@ -399,9 +405,9 @@ class ChatPanel {
       report += `Imported packages: ${imports.size}\n`;
       const goModPath = path.join(workspaceFolder, "go.mod");
       if (fsSync.existsSync(goModPath)) {
-        report += "✅ go.mod found. Run 'go mod tidy' to sync dependencies.\n";
+        report += "go.mod found. Run 'go mod tidy' to sync dependencies.\n";
       } else {
-        report += "⚠️ No go.mod found. Run 'go mod init' to create one.\n";
+        report += "go.mod found. Run 'go mod tidy' to sync dependencies.\n";
       }
       report += "\n";
     }
@@ -413,9 +419,9 @@ class ChatPanel {
       report += `Imported crates: ${imports.size}\n`;
       const cargoPath = path.join(workspaceFolder, "Cargo.toml");
       if (fsSync.existsSync(cargoPath)) {
-        report += "✅ Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
+        report += "Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
       } else {
-        report += "⚠️ No Cargo.toml found.\n";
+        report += "Cargo.toml found. Run 'cargo build' to fetch dependencies.\n";
       }
       report += "\n";
     }
@@ -427,9 +433,9 @@ class ChatPanel {
       report += `Required gems: ${imports.size}\n`;
       const gemfilePath = path.join(workspaceFolder, "Gemfile");
       if (fsSync.existsSync(gemfilePath)) {
-        report += "✅ Gemfile found. Run 'bundle install' to install gems.\n";
+        report += "Gemfile found. Run 'bundle install' to install gems.\n";
       } else {
-        report += "⚠️ No Gemfile found.\n";
+        report += "Gemfile found. Run 'bundle install' to install gems.\n";
       }
       report += "\n";
     }
@@ -441,9 +447,9 @@ class ChatPanel {
       report += `Imported namespaces: ${imports.size}\n`;
       const composerPath = path.join(workspaceFolder, "composer.json");
       if (fsSync.existsSync(composerPath)) {
-        report += "✅ composer.json found. Run 'composer install' to install packages.\n";
+        report += "composer.json found. Run 'composer install' to install packages.\n";
       } else {
-        report += "⚠️ No composer.json found.\n";
+        report += "composer.json found. Run 'composer install' to install packages.\n";
       }
       report += "\n";
     }
@@ -823,7 +829,7 @@ class ChatPanel {
     if (syntaxCheck.success) {
       this._postMessage({
         type: "stream",
-        text: `✅ No syntax errors found in ${relativePath}.`
+        text: `No syntax errors found in ${relativePath}.`
       });
       this._postMessage({ type: "done" });
       return;
@@ -843,7 +849,7 @@ class ChatPanel {
     
     this._postMessage({
       type: "stream",
-      text: `❌ Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
+      text: `Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
     });
 
     const ext = path.extname(fileName).toLowerCase();
@@ -932,12 +938,12 @@ class ChatPanel {
     if (verifyCheck && verifyCheck.success) {
       this._postMessage({
         type: "stream",
-        text: "\n\n✅ Syntax errors fixed successfully!"
+        text: "\n\nSyntax errors fixed successfully!"
       });
     } else {
       this._postMessage({
         type: "stream",
-        text: "\n\n⚠️ Fix applied, but some syntax issues may remain. Please review the changes."
+        text: "\n\nWarning: Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
 
@@ -1164,6 +1170,24 @@ class ChatPanel {
         protocol: provider.protocol || "openai"
       }))
     ];
+  }
+
+  _postSessionState(extra = {}) {
+    this._postMessage({
+      type: "sessionState",
+      ...this.agent.getSessionState(),
+      ...extra
+    });
+  }
+
+  _getFallbackModelsForProvider(provider) {
+    if (provider === "ollama") return OLLAMA_FALLBACK_MODELS.slice();
+
+    const customProvider = this._getCustomProviderById(provider);
+    if (customProvider?.models?.length) return customProvider.models.slice();
+
+    const providerModels = MODELS_BY_PROVIDER[provider];
+    return Array.isArray(providerModels) ? providerModels.slice() : [];
   }
 
   _sanitizeApiKey(value) {
@@ -1633,11 +1657,16 @@ ${document.getText()}
   _summarizePlannedActions(actions, insideActions, outsideFiles) {
     const fileSummaries = [];
     for (const { action, result } of insideActions) {
+      if (action.type === "patch") {
+        fileSummaries.push(`patch ${action.path}`);
+        continue;
+      }
       if (action.type !== "file" || !result?.success) continue;
       fileSummaries.push(`${result.created ? "add" : "edit"} ${action.path}`);
     }
     for (const { action } of outsideFiles) {
       if (action.type === "file") fileSummaries.push(`edit ${action.path}`);
+      if (action.type === "patch") fileSummaries.push(`patch ${action.path}`);
       if (action.type === "mkdir") fileSummaries.push(`mkdir ${action.path}`);
     }
 
@@ -1651,6 +1680,310 @@ ${document.getText()}
       parts.push(`Commands: ${cmdCount}`);
     }
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
+  }
+
+  _resolveActionFilePath(workspaceFolder, filePath) {
+    const targetPath = String(filePath || "").trim();
+    if (!targetPath) {
+      return "";
+    }
+    if (!workspaceFolder) {
+      return path.resolve(targetPath);
+    }
+    return path.isAbsolute(targetPath)
+      ? path.resolve(targetPath)
+      : path.resolve(workspaceFolder, targetPath);
+  }
+
+  _normalizeActionPathForMatch(filePath) {
+    return String(filePath || "").replace(/\\/g, "/").trim().toLowerCase();
+  }
+
+  _findEditActionForPath(actions, targetPath, type = null) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return null;
+    }
+
+    const candidates = actions.filter((action) => {
+      if (!action || (action.type !== "patch" && action.type !== "file")) {
+        return false;
+      }
+      return type ? action.type === type : true;
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const normalizedTarget = this._normalizeActionPathForMatch(targetPath);
+    if (!normalizedTarget) {
+      return candidates[0] || null;
+    }
+
+    const exactMatch = candidates.find(
+      (action) =>
+        this._normalizeActionPathForMatch(action.path) === normalizedTarget
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    return (
+      candidates.find((action) => {
+        const normalizedPath = this._normalizeActionPathForMatch(action.path);
+        return (
+          normalizedPath.endsWith(`/${normalizedTarget}`) ||
+          normalizedTarget.endsWith(`/${normalizedPath}`)
+        );
+      }) || null
+    );
+  }
+
+  _buildRecoveryFileContext(actionPath, currentContent, maxChars = 12_000) {
+    const content = String(currentContent || "");
+    if (!content) {
+      return `Current file content for ${actionPath} was unavailable.`;
+    }
+
+    if (content.length <= maxChars) {
+      return `Current file content for ${actionPath}:\n\`\`\`\n${content}\n\`\`\``;
+    }
+
+    const headChars = Math.max(Math.floor(maxChars * 0.6), 2_000);
+    const tailChars = Math.max(maxChars - headChars, 1_500);
+    const head = content.slice(0, headChars);
+    const tail = content.slice(-tailChars);
+
+    return `Current file content for ${actionPath} (truncated, preserve unaffected code):\n\`\`\`\n${head}\n...\n[truncated ${content.length - head.length - tail.length} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _buildPatchRecoveryPrompt(originalRequest, action, currentContent) {
+    const previousSearch = String(action.search || "").trim();
+    const searchContext = previousSearch
+      ? `Previous failed SEARCH block:\n\`\`\`\n${previousSearch.slice(0, 2_500)}\n\`\`\`\n\n`
+      : "";
+
+    return `The previous PATCH for ${action.path} did not match the current file.
+Return executable structured edits only.
+
+Rules:
+- Edit ONLY ${action.path}.
+- Prefer exactly one PATCH action for ${action.path}.
+- Copy SEARCH text exactly from the current file content below.
+- Use a larger unique SEARCH anchor, usually 3-12 surrounding lines and up to about 80 replacement lines when needed.
+- If an exact PATCH would still be brittle, return exactly one FILE action for ${action.path} with the complete updated file content.
+- Do not output explanations, CMD, or MKDIR.
+
+Original user request:
+${originalRequest}
+
+${searchContext}${this._buildRecoveryFileContext(action.path, currentContent)}`;
+  }
+
+  _buildFileFallbackPrompt(originalRequest, action, currentContent, priorReply = "") {
+    const priorContext = String(priorReply || "").trim();
+    const priorReplyBlock = priorContext
+      ? `Previous retry reply:\n\`\`\`\n${priorContext.slice(0, 3_000)}\n\`\`\`\n\n`
+      : "";
+
+    return `The PATCH retries for ${action.path} were not reliable.
+Return exactly one FILE action for ${action.path} with the COMPLETE updated file content.
+
+Rules:
+- Edit ONLY ${action.path}.
+- Preserve unrelated code, formatting, and behavior.
+- Do not output PATCH, CMD, MKDIR, or explanations.
+- The FILE block must contain the full file from start to finish.
+
+Original user request:
+${originalRequest}
+
+${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}`;
+  }
+
+  async _requestEditRecovery(prompt, workspaceFolder, label) {
+    const recoveryMode = this.chatMode === "fast" ? "heavy" : this.chatMode;
+    return this.agent.chat(prompt, workspaceFolder, null, null, {
+      mode: recoveryMode,
+      onStatus: (text) => {
+        if (this._shouldSuppressInternalStatus(text)) {
+          return;
+        }
+        this._postMessage({
+          type: "status",
+          text: `${label}: ${text}`
+        });
+      }
+    });
+  }
+
+  async _recoverFailedPatch(
+    originalRequest,
+    workspaceFolder,
+    action,
+    currentContent,
+    outside,
+    writeOptions
+  ) {
+    this._postMessage({
+      type: "status",
+      text: `Patch did not match ${action.path}. Retrying with broader file context...`
+    });
+
+    const retryResponse = await this._requestEditRecovery(
+      this._buildPatchRecoveryPrompt(originalRequest, action, currentContent),
+      workspaceFolder,
+      "Patch retry"
+    );
+
+    if (retryResponse.error) {
+      return {
+        success: false,
+        error: `Patch retry failed for ${action.path}: ${retryResponse.error}`
+      };
+    }
+
+    const retryPatch = this._findEditActionForPath(
+      retryResponse.actions,
+      action.path,
+      "patch"
+    );
+    const retryFile = this._findEditActionForPath(
+      retryResponse.actions,
+      action.path,
+      "file"
+    );
+
+    if (retryPatch) {
+      const patched = this._buildPatchedContent(
+        currentContent,
+        retryPatch.search,
+        retryPatch.replace
+      );
+      if (patched.matched) {
+        this._postMessage({
+          type: "status",
+          text: `Applying repaired patch to: ${retryPatch.path}`
+        });
+        return this.agent.applyChanges(
+          retryPatch.path,
+          patched.content,
+          outside,
+          writeOptions
+        );
+      }
+    }
+
+    if (retryFile) {
+      this._postMessage({
+        type: "status",
+        text: `Falling back to full-file rewrite for: ${retryFile.path}`
+      });
+      return this.agent.applyChanges(
+        retryFile.path,
+        retryFile.content,
+        outside,
+        writeOptions
+      );
+    }
+
+    this._postMessage({
+      type: "status",
+      text: `Patch retry was still not reliable for ${action.path}. Requesting a complete file rewrite...`
+    });
+
+    const fileFallbackResponse = await this._requestEditRecovery(
+      this._buildFileFallbackPrompt(
+        originalRequest,
+        action,
+        currentContent,
+        retryResponse.text
+      ),
+      workspaceFolder,
+      "File fallback"
+    );
+
+    if (fileFallbackResponse.error) {
+      return {
+        success: false,
+        error: `FILE fallback failed for ${action.path}: ${fileFallbackResponse.error}`
+      };
+    }
+
+    const fileAction = this._findEditActionForPath(
+      fileFallbackResponse.actions,
+      action.path,
+      "file"
+    );
+
+    if (!fileAction) {
+      return {
+        success: false,
+        error: `Automatic recovery for ${action.path} did not produce a valid FILE action.`
+      };
+    }
+
+    this._postMessage({
+      type: "status",
+      text: `Applying full-file fallback to: ${fileAction.path}`
+    });
+
+    return this.agent.applyChanges(
+      fileAction.path,
+      fileAction.content,
+      outside,
+      writeOptions
+    );
+  }
+
+  _buildPatchedContent(currentContent, searchContent, replaceContent) {
+    const source = String(currentContent || "");
+    const search = String(searchContent || "");
+    const replace = String(replaceContent || "");
+
+    if (!search) {
+      return { matched: false, reason: "empty_search" };
+    }
+
+    if (source.includes(search)) {
+      return {
+        matched: true,
+        content: source.replace(search, replace)
+      };
+    }
+
+    const normalizeLineEndings = (text) => text.replace(/\r\n/g, "\n");
+    const currentUnix = normalizeLineEndings(source);
+    const searchUnix = normalizeLineEndings(search);
+    const replaceUnix = normalizeLineEndings(replace);
+    const prefersCrlf = source.includes("\r\n");
+
+    if (currentUnix.includes(searchUnix)) {
+      let content = currentUnix.replace(searchUnix, replaceUnix);
+      if (prefersCrlf) {
+        content = content.replace(/\n/g, "\r\n");
+      }
+      return { matched: true, content };
+    }
+
+    const normalizeWhitespace = (text) => text.replace(/\s+/g, " ").trim();
+    const normalizedCurrent = normalizeWhitespace(source);
+    const normalizedSearch = normalizeWhitespace(search);
+
+    if (!normalizedSearch || !normalizedCurrent.includes(normalizedSearch)) {
+      return { matched: false, reason: "search_not_found" };
+    }
+
+    const whitespaceAwarePattern = new RegExp(
+      search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
+    );
+    const content = source.replace(whitespaceAwarePattern, () => replace);
+
+    if (content === source) {
+      return { matched: false, reason: "search_not_found" };
+    }
+
+    return { matched: true, content };
   }
 
   _readWorkspaceScripts(workspaceFolder) {
@@ -1842,6 +2175,9 @@ ${trimmedText}`;
       {
         mode: this.chatMode,
         onStatus: (text) => {
+          if (this._shouldSuppressInternalStatus(text)) {
+            return;
+          }
           this._postMessage({
             type: "status",
             text: `README retry: ${text}`
@@ -1877,6 +2213,77 @@ ${trimmedText}`;
     );
   }
 
+  async _runPreEditDiagnostics(workspaceFolder, filePath, actionType = "file") {
+    if (!workspaceFolder || !filePath) {
+      return { success: true, diagnostics: [] };
+    }
+
+    const results = { success: true, diagnostics: [], fileInfo: {} };
+    const fullPath = this._resolveActionFilePath(workspaceFolder, filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const relativePath = path
+      .relative(workspaceFolder, fullPath)
+      .replace(/\\/g, "/");
+    const isOutsideWorkspace =
+      relativePath.startsWith("..") || path.isAbsolute(relativePath);
+
+    // Get file status
+    try {
+      const stat = await fs.stat(fullPath);
+      results.fileInfo = {
+        exists: true,
+        size: stat.size,
+        modified: stat.mtime,
+        readable: true
+      };
+    } catch (err) {
+      results.fileInfo = { exists: false, error: err.message };
+      if (actionType === "patch") {
+        results.diagnostics.push({
+          type: "missing",
+          message: "Patch target does not exist yet."
+        });
+        results.success = false;
+      }
+      return results;
+    }
+
+    // Check git status for this file (only show if modified)
+    const gitStatus = !isOutsideWorkspace
+      ? await this.agent.executeCommand(
+          `git status --short "${relativePath}"`,
+          workspaceFolder
+        )
+      : null;
+    if (gitStatus?.success && gitStatus.output.trim()) {
+      const status = gitStatus.output.trim();
+      // Only report if file has uncommitted changes
+      if (status.startsWith('M ') || status.startsWith('A ') || status.startsWith('D ')) {
+        results.diagnostics.push({
+          type: "git",
+          status: status,
+          message: `Git: ${status}`
+        });
+      }
+    }
+
+    // Run syntax check only for code files
+    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java'].includes(ext)) {
+      const syntaxCheck = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
+      if (syntaxCheck && !syntaxCheck.skipped && !syntaxCheck.success) {
+        // Only report syntax errors, not successes
+        results.diagnostics.push({
+          type: "syntax",
+          passed: false,
+          message: `Syntax error: ${(syntaxCheck.error || syntaxCheck.output).substring(0, 200)}`
+        });
+        results.success = false;
+      }
+    }
+
+    return results;
+  }
+
   async _runPostEditVerification(workspaceFolder, changedFiles) {
     if (!workspaceFolder || !Array.isArray(changedFiles) || changedFiles.length === 0) {
       return { success: true, checks: [] };
@@ -1892,117 +2299,87 @@ ${trimmedText}`;
       c: changedFiles.filter(file => /\.(c|cpp|h|hpp)$/i.test(file))
     };
 
-    // Run syntax checks for each file type
-    if (fileTypes.py.length > 0) {
-      this._postMessage({
-        type: "status",
-        text: `🔍 Verifying Python syntax (${fileTypes.py.length} file(s))...`
-      });
-      for (const file of fileTypes.py) {
+    // Run syntax checks for each file type (only report errors)
+    for (const [lang, files] of Object.entries(fileTypes)) {
+      if (files.length === 0 || lang === 'c') continue; // Skip C/C++ (needs compiler)
+      
+      for (const file of files) {
         const fullPath = path.join(workspaceFolder, file);
         const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
+        
         if (result && !result.success && !result.skipped) {
           results.success = false;
-          results.errors.push({ file, error: result.error || result.output, type: "syntax" });
+          results.errors.push({ 
+            file, 
+            error: (result.error || result.output).substring(0, 300), 
+            type: "syntax" 
+          });
           this._postMessage({
             type: "status",
-            text: `❌ Python syntax error in ${file}:\n${result.error || result.output}`
+            text: `⚠️ Syntax error in ${file}`
           });
         } else if (result && result.success) {
-          results.checks.push({ file, check: "python-syntax", passed: true });
-          this._postMessage({
-            type: "status",
-            text: `✅ Python syntax OK: ${file}`
-          });
+          results.checks.push({ file, check: `${lang}-syntax`, passed: true });
         }
       }
     }
 
-    if (fileTypes.java.length > 0) {
-      this._postMessage({
-        type: "status",
-        text: `🔍 Verifying Java syntax (${fileTypes.java.length} file(s))...`
-      });
-      for (const file of fileTypes.java) {
-        const fullPath = path.join(workspaceFolder, file);
-        const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
-        if (result && !result.success && !result.skipped) {
-          results.success = false;
-          results.errors.push({ file, error: result.error || result.output, type: "syntax" });
-          this._postMessage({
-            type: "status",
-            text: `❌ Java syntax error in ${file}:\n${result.error || result.output}`
-          });
-        } else if (result && result.success) {
-          results.checks.push({ file, check: "java-syntax", passed: true });
-          this._postMessage({
-            type: "status",
-            text: `✅ Java syntax OK: ${file}`
-          });
-        }
-      }
-    }
-
+    // Warn about C/C++ files (need manual compilation)
     if (fileTypes.c.length > 0) {
       this._postMessage({
         type: "status",
-        text: `⚠️ C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler manually to verify syntax.`
+        text: `⚠️ C/C++ files changed: ${fileTypes.c.join(", ")}. Run compiler to verify.`
       });
     }
 
     // Run npm scripts only for JS/TS files
     if (fileTypes.js.length === 0) {
-      this._postMessage({
-        type: "status",
-        text: "✅ Verification complete (no JS/TS files changed)"
-      });
+      if (results.errors.length === 0) {
+        this._postMessage({
+          type: "status",
+          text: "✅ Verification complete"
+        });
+      }
       return results;
     }
 
     const commands = this._getPostEditVerificationCommands(workspaceFolder);
     if (commands.length === 0) {
-      this._postMessage({
-        type: "status",
-        text: "✅ Verification complete (no npm scripts configured)"
-      });
+      if (results.errors.length === 0) {
+        this._postMessage({
+          type: "status",
+          text: "✅ Verification complete (no npm scripts configured)"
+        });
+      }
       return results;
     }
 
     this._postMessage({
       type: "status",
-      text: `🔍 Running ${commands.length} verification check(s): ${commands.join(", ")}`
+      text: `Running ${commands.length} verification check(s)...`
     });
 
     // Run all checks, don't stop on first failure
     for (const command of commands) {
       const validation = this.agent.validateCommand(command);
       if (!validation.allowed) {
-        this._postMessage({
-          type: "status",
-          text: `⚠️ Skipped check (${command}): ${validation.reason}`
-        });
         continue;
       }
 
-      this._postMessage({
-        type: "status",
-        text: `Running: ${command}...`
-      });
       const result = await this.agent.executeCommand(command, workspaceFolder);
       if (result.success) {
         results.checks.push({ command, passed: true });
-        this._postMessage({
-          type: "status",
-          text: `✅ ${command} passed`
-        });
       } else {
         results.success = false;
-        results.errors.push({ command, error: result.error || result.output, type: "npm" });
+        results.errors.push({ 
+          command, 
+          error: (result.error || result.output).substring(0, 500), 
+          type: "npm" 
+        });
         this._postMessage({
           type: "status",
-          text: `❌ ${command} failed:\n${this._summarizeCommandOutput(result.error || result.output)}`
+          text: `⚠️ ${command} failed`
         });
-        // Continue to next check instead of breaking
       }
     }
 
@@ -2010,12 +2387,12 @@ ${trimmedText}`;
     if (results.success) {
       this._postMessage({
         type: "status",
-        text: `✅ All verification checks passed (${results.checks.length} checks)`
+        text: `✅ All checks passed (${results.checks.length} checks)`
       });
     } else {
       this._postMessage({
         type: "status",
-        text: `⚠️ Verification completed with ${results.errors.length} error(s). Review changes before committing.`
+        text: `⚠️ ${results.errors.length} error(s) found. Review changes before committing.`
       });
     }
 
@@ -2024,49 +2401,90 @@ ${trimmedText}`;
 
   async _fetchAndSendModels(forceProvider = null) {
     let provider = forceProvider || "ollama";
-    // Only needed for Ollama — other providers populate models client-side
+    
     try {
       const config = await this._getEffectiveAiConfig();
       provider = forceProvider || config.provider;
-      if (provider !== "ollama" && provider !== "nvidia") return;
-      const models = await this.agent.getAvailableModelsForProvider(provider, {
-        ollamaUrl: config.ollamaUrl,
-        nvidiaApiKey: config.nvidiaApiKey,
-        timeoutMs: 15_000,
-        forceRefresh: provider === "nvidia"
-      });
-      if (models.length > 0 && this.panel) {
-        this._postMessage({ type: "setModelOptions", models, provider });
+
+      const customProvider = this._getCustomProviderById(provider);
+      const effectiveCustomProvider = config.customProvider || customProvider;
+      const keyByProvider = {
+        groq: config.groqApiKey,
+        openrouter: config.openrouterApiKey,
+        anthropic: config.anthropicApiKey,
+        nvidia: config.nvidiaApiKey
+      };
+      const needsKey = provider !== "ollama" && (this._isBuiltInProvider(provider) || customProvider);
+      const hasKey = !needsKey || !!(customProvider ? effectiveCustomProvider?.apiKey : keyByProvider[provider]);
+      const defaultModels = this._getFallbackModelsForProvider(provider);
+
+      if (defaultModels.length > 0 && this.panel) {
+        this._postMessage({
+          type: "setModelOptions",
+          models: defaultModels,
+          provider
+        });
+      }
+
+      if (!hasKey) {
+        console.log(`[ChatPanel] Skipping model discovery for ${provider}: API key is not configured`);
         return;
       }
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text:
-            provider === "nvidia"
-              ? "NVIDIA model discovery failed. Showing fallback models."
-              : "Ollama responded, but no models were returned. Showing defaults."
-        });
-      }
-    } catch (err) {
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model list failed: ${err.message || err}. Showing defaults.`
-        });
-      }
-    }
-    // Ollama unreachable or no models — show defaults
-    if (this.panel) {
-      this._postMessage({
-        type: "setModelOptions",
-        models:
-          provider === "nvidia"
-            ? MODELS_BY_PROVIDER.nvidia
-            : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-        provider: provider === "nvidia" ? "nvidia" : "ollama"
+      
+      console.log(`[ChatPanel] Discovering live models from ${provider}...`);
+      this.agent.getAvailableModelsForProvider(provider, {
+        ollamaUrl: config.ollamaUrl,
+        groqApiKey: config.groqApiKey,
+        openrouterApiKey: config.openrouterApiKey,
+        anthropicApiKey: config.anthropicApiKey,
+        nvidiaApiKey: config.nvidiaApiKey,
+        timeoutMs: 8_000,
+        forceRefresh: true,
+        customProvider: effectiveCustomProvider
+      }).then(models => {
+        if (models.length > 0 && this.panel) {
+          console.log(`[ChatPanel] Discovered ${models.length} live models for ${provider}`);
+          this._postMessage({ type: "setModelOptions", models, provider });
+        } else if (defaultModels.length > 0 && this.panel) {
+          this._postMessage({
+            type: "setModelOptions",
+            models: defaultModels,
+            provider
+          });
+          this._postMessage({
+            type: "status",
+            text: `Could not discover live ${provider} models. Showing fallback models.`
+          });
+        }
+      }).catch(err => {
+        console.warn(`[ChatPanel] Live model discovery failed for ${provider}:`, err.message);
+        if (defaultModels.length > 0 && this.panel) {
+          this._postMessage({
+            type: "setModelOptions",
+            models: defaultModels,
+            provider
+          });
+        }
       });
+      
+    } catch (err) {
+      console.error(`[ChatPanel] Critical error in _fetchAndSendModels:`, err);
+      // Still send defaults even if config fails
+      const defaultModels = this._getFallbackModelsForProvider(provider);
+      
+      if (this.panel) {
+        this._postMessage({
+          type: "setModelOptions",
+          models: defaultModels,
+          provider
+        });
+      }
     }
+  }
+
+  _getModelsForInitialProviderState(provider) {
+    const models = this._getFallbackModelsForProvider(provider);
+    return models.length > 0 ? models : null;
   }
 
   _getDefaultModelForProvider(provider) {
@@ -2419,16 +2837,16 @@ ${trimmedText}`;
                 const models = (data.models || []).map(m => m.name);
                 this._postMessage({ 
                   type: "stream", 
-                  text: `✅ Ollama is running at ${config.ollamaUrl}\n\nAvailable models: ${models.join(", ") || "none"}\n\nCurrent model: ${config.model}` 
+                  text: `Ollama is running at ${config.ollamaUrl}\n\nAvailable models: ${models.join(", ") || "none"}\n\nCurrent model: ${config.model}` 
                 });
               } else {
-                this._postMessage({ type: "error", text: `❌ Ollama returned status ${res.status}` });
+                this._postMessage({ type: "error", text: `Ollama returned status ${res.status}` });
               }
             } else {
-              this._postMessage({ type: "stream", text: `✅ Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
+              this._postMessage({ type: "stream", text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
             }
           } catch (err) {
-            this._postMessage({ type: "error", text: `❌ Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
+            this._postMessage({ type: "error", text: `Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
           }
           this._postMessage({ type: "done" });
           return;
@@ -2532,7 +2950,7 @@ ${trimmedText}`;
         if (config.model === "minimaxai/minimax-m2.7") {
           this._postMessage({ 
             type: "status", 
-            text: "⚠️ MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
+            text: "Warning: MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
           });
         }
         
@@ -2540,7 +2958,7 @@ ${trimmedText}`;
           if (this.abortController && !this.abortController.signal.aborted) {
             this._postMessage({ 
               type: "status", 
-              text: `⏳ Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
+              text: `Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
             });
           }
         }, 30000); // Warn after 30 seconds
@@ -2562,7 +2980,12 @@ ${trimmedText}`;
             {
               mode: this.chatMode,
               runtimeConfig: config,
-              onStatus: (text) => { this._postMessage({ type: "status", text }); }
+              onStatus: (text) => {
+                if (this._shouldSuppressInternalStatus(text)) {
+                  return;
+                }
+                this._postMessage({ type: "status", text });
+              }
             }
           );
           
@@ -2594,6 +3017,7 @@ ${trimmedText}`;
         }
 
         this._postMessage({ type: "done" });
+        this._postSessionState();
 
         if (response.warnings && response.warnings.length > 0) {
           for (const warning of response.warnings) {
@@ -2616,9 +3040,12 @@ ${trimmedText}`;
         if (response.actions && response.actions.length > 0) {
           const hasFileAction = response.actions.some(
             (action) =>
-              action.type === "file" &&
+              (action.type === "file" &&
               typeof action.content === "string" &&
-              action.content.trim().length > 0
+              action.content.trim().length > 0) ||
+              (action.type === "patch" &&
+              typeof action.search === "string" &&
+              typeof action.replace === "string")
           );
           const hasPreviewInspectionAction = response.actions.some(
             (action) => action.type === "preview_inspect"
@@ -2629,7 +3056,7 @@ ${trimmedText}`;
           if (isEditLikeIntent && !hasFileAction && !hasPreviewInspectionAction) {
             this._postMessage({
               type: "status",
-              text: "Blocked execution: edit requests must include at least one FILE action."
+              text: "Blocked execution: edit requests must include at least one PATCH or FILE action."
             });
             this._postMessage({
               type: "error",
@@ -2669,6 +3096,64 @@ ${trimmedText}`;
                       : `\u2705 Opened draft ${result.path}`
                     : result.error
                 });
+              } else if (action.type === "patch") {
+                const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+                const activeFileName = activeEditor?.document?.fileName || "";
+                const activeNormalized = activeFileName
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetNormalized = String(action.path || "")
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetBaseName = path.basename(targetNormalized);
+                const canPatchOpenFile =
+                  !!activeEditor &&
+                  !!activeEditor.document &&
+                  (wantsActiveFileEdit ||
+                    !targetNormalized ||
+                    activeNormalized === targetNormalized ||
+                    activeNormalized.endsWith(`/${targetNormalized}`) ||
+                    path.basename(activeNormalized) === targetBaseName);
+
+                if (!canPatchOpenFile) {
+                  this._postMessage({
+                    type: "error",
+                    text: `Cannot patch ${action.path}: open the target file or use a workspace so PATCH actions can be applied.`
+                  });
+                  continue;
+                }
+
+                const patchResult = this._buildPatchedContent(
+                  activeEditor.document.getText(),
+                  action.search,
+                  action.replace
+                );
+                if (!patchResult.matched) {
+                  this._postMessage({
+                    type: "error",
+                    text:
+                      patchResult.reason === "empty_search"
+                        ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                        : `Cannot patch ${action.path}: SEARCH content not found in the open file.`
+                  });
+                  continue;
+                }
+
+                this._postMessage({
+                  type: "status",
+                  text: `Applying patch to open file: ${path.basename(activeFileName || action.path)}`
+                });
+                const result = await this._applyToEditor(
+                  activeEditor,
+                  patchResult.content
+                );
+                this._postMessage({
+                  type: result.success ? "applied" : "error",
+                  filePath: result.success ? result.path : undefined,
+                  text: result.success
+                    ? `\u2705 Patched open file ${result.relativePath || result.path}`
+                    : result.error
+                });
               } else if (action.type === "mkdir") {
                 this._postMessage({
                   type: "status",
@@ -2696,11 +3181,27 @@ ${trimmedText}`;
           const insideActions = [];
           const fileActionPaths = new Set(
             response.actions
-              .filter((a) => a.type === "file" && a.path)
+              .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
               .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
           );
           for (const action of response.actions) {
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              // PATCH actions need to check if file is outside workspace
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
+              );
+              const relativePath = workspaceFolder
+                ? path.relative(workspaceFolder, fullPath)
+                : action.path;
+              const isOutside = relativePath.startsWith("..") || path.isAbsolute(relativePath);
+              
+              if (isOutside) {
+                outsideFiles.push({ action, path: fullPath });
+              } else {
+                insideActions.push({ action, result: null });
+              }
+            } else if (action.type === "file") {
               const probe = await this.agent.applyChanges(
                 action.path,
                 action.content,
@@ -2768,11 +3269,142 @@ ${trimmedText}`;
           const changedFiles = [];
           let stopFurtherActions = false;
 
+          // Run pre-edit diagnostics for file actions
+          const fileActions = allActions.filter(a => a.action.type === "file" || a.action.type === "patch");
+          if (fileActions.length > 0 && workspaceFolder) {
+            this._postMessage({
+              type: "status",
+              text: `Pre-edit check: ${fileActions.length} file(s)...`
+            });
+            
+            for (const { action } of fileActions) {
+              const diagnostics = await this._runPreEditDiagnostics(
+                workspaceFolder,
+                action.path,
+                action.type
+              );
+              
+              // Only show issues, not successes
+              if (!diagnostics.fileInfo.exists) {
+                this._postMessage({
+                  type: "status",
+                  text:
+                    action.type === "patch"
+                      ? `Missing patch target: ${action.path}`
+                      : `Creating new file: ${action.path}`
+                });
+              } else if (diagnostics.diagnostics.length > 0) {
+                for (const diag of diagnostics.diagnostics) {
+                  this._postMessage({
+                    type: "status",
+                    text: `${action.path}: ${diag.message}`
+                  });
+                }
+              }
+            }
+          }
+
           for (const { action, result: preResult, outside } of allActions) {
             if (stopFurtherActions) {
               break;
             }
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              // Handle PATCH actions for targeted edits
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Applying patch to: ${action.path}` });
+              
+              // Read current file content
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
+              );
+              let currentContent = "";
+              try {
+                currentContent = await fs.readFile(fullPath, "utf8");
+              } catch (err) {
+                this._postMessage({
+                  type: "error",
+                  text: `Cannot patch ${action.path}: file not found or unreadable`
+                });
+                continue;
+              }
+              
+              // Apply the patch (search and replace)
+              const searchContent = action.search || "";
+              const replaceContent = action.replace || "";
+
+              const patchResult = this._buildPatchedContent(
+                currentContent,
+                searchContent,
+                replaceContent
+              );
+              if (!patchResult.matched) {
+                const recoveryResult = isEditLikeIntent
+                  ? await this._recoverFailedPatch(
+                      trimmedText,
+                      workspaceFolder,
+                      action,
+                      currentContent,
+                      outside,
+                      writeOptions
+                    )
+                  : null;
+
+                if (recoveryResult) {
+                  this._postMessage({
+                    type: recoveryResult.success ? "applied" : "error",
+                    filePath: recoveryResult.success
+                      ? recoveryResult.path
+                      : undefined,
+                    text: recoveryResult.success
+                      ? `\u2705 Recovered edit ${recoveryResult.relativePath || action.path}\n${recoveryResult.changeSummary || ""}`
+                      : recoveryResult.error
+                  });
+
+                  if (recoveryResult.success && !outside) {
+                    changedFiles.push(recoveryResult.relativePath || action.path);
+                    await this._revealWorkspaceFile(recoveryResult.path);
+                  }
+                  continue;
+                }
+
+                const lines = currentContent.split("\n");
+                const preview = lines.slice(0, 10).join("\n");
+                this._postMessage({
+                  type: "error",
+                  text:
+                    patchResult.reason === "empty_search"
+                      ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                      : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${searchContent.substring(0, 200)}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
+                });
+                continue;
+              }
+              
+              // Apply the patched content
+              const result = await this.agent.applyChanges(
+                action.path,
+                patchResult.content,
+                outside,
+                writeOptions
+              );
+              
+              this._postMessage({
+                type: result.success ? "applied" : "error",
+                filePath: result.success ? result.path : undefined,
+                text: result.success
+                  ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
+                  : result.error
+              });
+              
+              if (result.success && !outside) {
+                changedFiles.push(result.relativePath || action.path);
+                await this._revealWorkspaceFile(result.path);
+              }
+            } else if (action.type === "file") {
               if (outside && !allowOutside) {
                 this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
@@ -2904,7 +3536,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.lintCode");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ Lint command executed. Check the Problems panel and notifications for results."
+                  text: "Lint command executed. Check the Problems panel and notifications for results."
                 });
               } catch (err) {
                 this._postMessage({
@@ -2918,7 +3550,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.validateFrontend");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ Frontend validation command executed."
+                  text: "Frontend validation command executed."
                 });
               } catch (err) {
                 this._postMessage({
@@ -2959,7 +3591,7 @@ ${trimmedText}`;
                     } else {
                       this._postMessage({
                         type: "applied",
-                        text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                        text: `Updated ${fixResult.path} using preview diagnostics.`
                       });
 
                       const verificationDiagnostics = fixResult.verification?.diagnostics || null;
@@ -2968,7 +3600,7 @@ ${trimmedText}`;
                         this._postMessage({
                           type: cleanPreview ? "applied" : "status",
                           text: cleanPreview
-                            ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                            ? `Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                             : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                         });
                       }
@@ -2986,7 +3618,7 @@ ${trimmedText}`;
                   await vscode.commands.executeCommand("codeJanitor.livePreview");
                   this._postMessage({
                     type: "applied",
-                    text: "✅ Live preview command executed."
+                    text: "Live preview command executed."
                   });
                 } catch (err) {
                   this._postMessage({
@@ -3026,7 +3658,7 @@ ${trimmedText}`;
                   } else {
                     this._postMessage({
                       type: "applied",
-                      text: `✅ Updated ${fixResult.path} using preview diagnostics.`
+                        text: `Updated ${fixResult.path} using preview diagnostics.`
                     });
 
                     const verificationDiagnostics = fixResult.verification?.diagnostics || null;
@@ -3035,7 +3667,7 @@ ${trimmedText}`;
                       this._postMessage({
                         type: cleanPreview ? "applied" : "status",
                         text: cleanPreview
-                          ? `✅ Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
+                            ? `Post-fix preview check passed. ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                           : `Post-fix preview check: ${this._summarizePreviewDiagnostics(verificationDiagnostics)}`
                       });
                     }
@@ -3053,7 +3685,7 @@ ${trimmedText}`;
                 await vscode.commands.executeCommand("codeJanitor.showPerformance");
                 this._postMessage({
                   type: "applied",
-                  text: "✅ AI performance report command executed."
+                  text: "AI performance report command executed."
                 });
               } catch (err) {
                 this._postMessage({
@@ -3066,8 +3698,8 @@ ${trimmedText}`;
               try {
                 const fetchResult = await this.agent.fetchFromWeb(action.url);
                 if (fetchResult.success) {
-                  const preview = fetchResult.data.slice(0, 2000);
-                  const truncated = fetchResult.data.length > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
+                  const preview = formatFetchedPreview(action.url, fetchResult, 2000);
+                  const truncated = fetchResult.size > 2000 ? ` (truncated from ${fetchResult.size} bytes)` : "";
                   this._postMessage({
                     type: "applied",
                     text: `\u2705 Fetched ${action.url}${truncated}:\n\n${preview}`
@@ -3089,7 +3721,7 @@ ${trimmedText}`;
               // Skip processing YouTube actions from AI responses to improve performance
               this._postMessage({
                 type: "status",
-                text: "💡 Use the YouTube search button in the chat to search for videos"
+                text: "Use the YouTube search button in the chat to search for videos"
               });
             } else if (action.type === "cmd") {
               if (isEditLikeIntent && !hasExplicitCommandRequest) {
@@ -3164,6 +3796,7 @@ ${trimmedText}`;
         this.agent.clearHistory();
         this._outsideWorkspaceAllowed = false;
         this._postMessage({ type: "cleared" });
+        this._postSessionState();
       } else if (message.type === "openChatCommand") {
         await vscode.commands.executeCommand("codeJanitor.openChat");
       } else if (message.type === "openFile") {
@@ -3175,7 +3808,7 @@ ${trimmedText}`;
         this._postMessage({ type: "stream", text: overview });
         this._postMessage({ type: "done" });
       } else if (message.type === "syntaxScan") {
-        // Triggered by action chip — run directly without model
+        // Triggered by action chip - run directly without model
         const activeEditor = this._getCurrentFileEditor();
         const files = message.activeOnly
           ? (activeEditor ? [path.relative(workspaceFolder, activeEditor.document.fileName).replace(/\\/g, "/")] : [])
@@ -3189,35 +3822,56 @@ ${trimmedText}`;
         // Quick Fix from chat panel - lint and fix with AI
         await this._runActiveSyntaxFix(workspaceFolder);
       } else if (message.type === "refreshProviderModels" || message.type === "ready") {
-        let selectedProvider = this._getSelectedProviderId() || this.agent.getConfig().provider;
-        // Webview signals it's fully loaded or user switched to Ollama — send current state
+        // CRITICAL FIX: Make ready handler completely non-blocking
+        const savedConfig = this.agent.getConfig();
+        const selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+        
         if (message.type === "ready") {
-          const keyPresence = await this._getProviderPresence();
-          const savedConfig = this.agent.getConfig();
-          selectedProvider = this._getSelectedProviderId() || savedConfig.provider;
+          // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(selectedProvider);
-          const hasKey = selectedProvider === "ollama" || !!keyPresence[selectedProvider];
-          const models = selectedProvider === "ollama" || selectedProvider === "nvidia"
-            ? null
-            : customProvider?.models?.length
-              ? customProvider.models
-              : hasKey
-                ? (MODELS_BY_PROVIDER[selectedProvider] || null)
-                : null;
+          const defaultModels = this._getModelsForInitialProviderState(selectedProvider);
+          
           this._postMessage({
             type: "setCurrentProvider",
             provider: selectedProvider,
             model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
             providers: this._buildProviderCatalog(),
-            keyPresence,
-            models
+            keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Default, will update
+            models: defaultModels
           });
           this._postMessage({
             type: "thinkingState",
             enabled: this.showThinking
           });
+          this._postSessionState();
+          
+          // Fetch real key presence in background
+          this._getProviderPresence().then(keyPresence => {
+            if (this.panel) {
+              this._postMessage({
+                type: "setCurrentProvider",
+                provider: selectedProvider,
+                model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+                providers: this._buildProviderCatalog(),
+                keyPresence,
+                models: defaultModels
+              });
+            }
+          }).catch(err => {
+            console.warn('[ChatPanel] Background key presence check failed:', err);
+          });
         }
-        this._fetchAndSendModels(selectedProvider === "nvidia" ? "nvidia" : "ollama");
+        
+        // Fetch models in background (non-blocking)
+        this._fetchAndSendModels(selectedProvider);
+      } else if (message.type === "createSession") {
+        this.agent.createSession();
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
+      } else if (message.type === "switchSession") {
+        this.agent.switchSession(message.sessionId);
+        this._outsideWorkspaceAllowed = false;
+        this._postSessionState();
       } else if (message.type === "mode") {
         this.chatMode =
           message.value === "deep"
@@ -3259,34 +3913,42 @@ ${trimmedText}`;
             await this._persistApiKey(message.provider, message.apiKey);
           }
           
-          // Wait for config to persist before fetching models
-          await new Promise(r => setTimeout(r, 300));
-          const keyPresence = await this._getProviderPresence();
+          // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(message.provider);
+          const defaultModels = this._getModelsForInitialProviderState(message.provider);
+          
           if (this.panel) {
-            const hasKey = message.provider === "ollama" || !!keyPresence[message.provider];
             this._postMessage({
               type: "setCurrentProvider",
               provider: message.provider,
               model: nextModel,
               providers: this._buildProviderCatalog(),
-              keyPresence,
-              models: message.provider === "ollama" || message.provider === "nvidia"
-                ? null
-                : customProvider?.models?.length
-                  ? customProvider.models
-                  : hasKey
-                    ? (MODELS_BY_PROVIDER[message.provider] || null)
-                    : null
+              keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Will update in background
+              models: defaultModels
             });
-          }
-          if (this.panel) {
             this._postMessage({
               type: "status",
               text: `Provider switched to ${message.provider}. Model set to ${nextModel}.`
             });
           }
-          await this._fetchAndSendModels(message.provider === "nvidia" ? "nvidia" : "ollama");
+          
+          // Fetch models and key presence in background
+          this._fetchAndSendModels(message.provider);
+          
+          this._getProviderPresence().then(keyPresence => {
+            if (this.panel) {
+              this._postMessage({
+                type: "setCurrentProvider",
+                provider: message.provider,
+                model: nextModel,
+                providers: this._buildProviderCatalog(),
+                keyPresence,
+                models: defaultModels
+              });
+            }
+          }).catch(err => {
+            console.warn('[ChatPanel] Background key presence check failed:', err);
+          });
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);
           if (this.panel) {
@@ -3366,23 +4028,21 @@ ${trimmedText}`;
           const data = await response.json();
           
           // Format search results
-          let resultText = `🔍 Search results for "${query}":\n\n`;
+          let resultText = `Search results for "${query}":\n\n`;
           
           if (data.AbstractText) {
-            resultText += `📝 Summary:\n${data.AbstractText}\n\n`;
+            resultText += `Summary:\n${data.AbstractText}\n\n`;
           }
           
           if (data.AbstractURL) {
-            resultText += `🔗 Source: ${data.AbstractURL}\n\n`;
+            resultText += `Source: ${data.AbstractURL}\n\n`;
           }
 
           if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-            resultText += "📚 Related Topics:\n";
+            resultText += "Related Topics:\n";
             const topics = data.RelatedTopics.slice(0, 5);
             for (const topic of topics) {
-              if (topic.Text && topic.FirstURL) {
-                resultText += `• ${topic.Text}\n  ${topic.FirstURL}\n\n`;
-              }
+              resultText += `- ${topic.Text}\n  ${topic.FirstURL}\n\n`;
             }
           }
 
@@ -3426,7 +4086,7 @@ ${trimmedText}`;
             return;
           }
 
-          this._postMessage({ type: "status", text: `▶️ Searching YouTube for: ${query}` });
+          this._postMessage({ type: "status", text: `Searching YouTube for: ${query}` });
           this._postMessage({ type: "thinking" });
 
           const results = await this._searchYouTube(query);
@@ -3436,15 +4096,15 @@ ${trimmedText}`;
           }
 
           // Format results with embeds
-          let resultText = `▶️ YouTube results for "${query}":\n\n`;
+          let resultText = `YouTube results for "${query}":\n\n`;
           
           if (results.fallback) {
-            resultText += `ℹ️ ${results.message}\n\n`;
+            resultText += `${results.message}\n\n`;
           }
           
           if (results.videos && results.videos.length > 0) {
             for (const video of results.videos) {
-              resultText += `📺 ${video.title}\n\n${video.url}\n\n`;
+              resultText += `${video.title}\n\n${video.url}\n\n`;
             }
           } else {
             resultText += "No videos found. Try a different search term.";

@@ -3,20 +3,37 @@ const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
 const SelfDiagnosingErrorHandler = require("../self-healing/error-handler");
-const https = require("https");
-const http = require("http");
+const {
+  extractReadableContent,
+  extractUrls,
+  isUrlOnlyMessage
+} = require("./web-content-utils");
+const {
+  buildGraphLookupContext,
+  isValidGraphData,
+  matchGraphPathsFromHints
+} = require("./graph-context");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
-const MAX_RELEVANT_FILES = 4;
-const MAX_OPEN_TAB_SNIPPETS = 2;
-const MAX_HISTORY_ENTRIES = 4;
-const REPETITION_WINDOW = 180;
-const REPETITION_WINDOW_HEAVY = 400;
-const SCAN_STALE_MS = 30_000;
+const MAX_EDIT_TARGET_SNIPPET = 6_000;
+const MAX_FAST_EDIT_ACTIVE_FILE_CHARS = 4_000;
+const MAX_RELEVANT_FILES = 3;
+const MAX_OPEN_TAB_SNIPPETS = 1;
+const MAX_HISTORY_ENTRIES = 3;
+const MAX_SESSION_RECENT_ENTRIES = 8;
+const MAX_SESSION_PERSISTED_ENTRIES = 24;
+const MAX_SESSION_SUMMARY_CHARS = 2_400;
+const MAX_CHAT_SESSIONS = 12;
+const RELEVANT_FILE_CACHE_LIMIT = 30;
+const REPETITION_WINDOW = 150;
+const REPETITION_WINDOW_HEAVY = 300;
+const SCAN_STALE_MS = 45_000;
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
+const MAX_FETCHED_URLS = 2;
+const MAX_FETCHED_CONTENT_CHARS = 5_000;
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -93,23 +110,31 @@ const NVIDIA_FALLBACK_MODELS = [
 ];
 
 class AIAgent {
-  constructor() {
+  constructor(context = null) {
     this.codebaseContext = new Map();
+    this.context = context;
+    const persistedChatState = this._loadPersistedChatState();
+    this.chatSessions = persistedChatState.sessions;
+    this.currentSessionId = persistedChatState.currentSessionId;
     this.conversationHistory = [];
     this.scanVersion = 0;
     this.lastScanAt = 0;
     this.workspaceRoot = null;
     this.currentEditableTargets = null;
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
+    this._relevantFileCache = new Map();
+    this._knowledgeGraphCache = new Map();
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
+    this._syncCurrentSessionReferences();
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
         this._lastActiveEditor = editor;
       }
+      this._relevantFileCache.clear();
     });
   }
 
@@ -117,6 +142,313 @@ class AIAgent {
     if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor;
     }
+  }
+
+  _getConversationStateKey() {
+    return "codeJanitor.ai.chatHistory";
+  }
+
+  _getChatSessionsStateKey() {
+    return "codeJanitor.ai.chatSessions";
+  }
+
+  _sanitizeHistoryEntries(history) {
+    if (!Array.isArray(history)) return [];
+    return history
+      .filter(
+        (entry) =>
+          entry &&
+          (entry.role === "user" || entry.role === "assistant") &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      .map((entry) => ({
+        role: entry.role,
+        content: entry.content.trim()
+      }))
+      .slice(-MAX_SESSION_PERSISTED_ENTRIES);
+  }
+
+  _createSessionId() {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  _buildDefaultSessionTitle() {
+    return `New Chat ${this.chatSessions?.length ? this.chatSessions.length + 1 : 1}`;
+  }
+
+  _createSessionRecord(overrides = {}) {
+    const now = Date.now();
+    return {
+      id: overrides.id || this._createSessionId(),
+      title:
+        typeof overrides.title === "string" && overrides.title.trim()
+          ? overrides.title.trim()
+          : this._buildDefaultSessionTitle(),
+      createdAt:
+        Number.isFinite(overrides.createdAt) && overrides.createdAt > 0
+          ? overrides.createdAt
+          : now,
+      updatedAt:
+        Number.isFinite(overrides.updatedAt) && overrides.updatedAt > 0
+          ? overrides.updatedAt
+          : now,
+      summary:
+        typeof overrides.summary === "string" ? overrides.summary.trim() : "",
+      compactedCount:
+        Number.isFinite(overrides.compactedCount) && overrides.compactedCount > 0
+          ? overrides.compactedCount
+          : 0,
+      history: this._sanitizeHistoryEntries(overrides.history || [])
+    };
+  }
+
+  _loadPersistedChatState() {
+    const rawState = this.context?.globalState?.get(
+      this._getChatSessionsStateKey(),
+      null
+    );
+    if (
+      rawState &&
+      Array.isArray(rawState.sessions) &&
+      rawState.sessions.length > 0
+    ) {
+      const sessions = rawState.sessions.map((session) =>
+        this._createSessionRecord(session)
+      );
+      if (sessions.length > 0) {
+        const currentSessionId = sessions.some(
+          (session) => session.id === rawState.currentSessionId
+        )
+          ? rawState.currentSessionId
+          : sessions[0].id;
+        return { sessions, currentSessionId };
+      }
+    }
+
+    const legacyHistory = this._sanitizeHistoryEntries(
+      this.context?.globalState?.get(this._getConversationStateKey(), [])
+    );
+    const defaultSession = this._createSessionRecord({
+      title: "New Chat 1",
+      history: legacyHistory
+    });
+    return {
+      sessions: [defaultSession],
+      currentSessionId: defaultSession.id
+    };
+  }
+
+  _getCurrentSession() {
+    let session = this.chatSessions.find(
+      (candidate) => candidate.id === this.currentSessionId
+    );
+    if (!session) {
+      session =
+        this.chatSessions[0] || this._createSessionRecord({ title: "New Chat 1" });
+      if (this.chatSessions.length === 0) {
+        this.chatSessions = [session];
+      }
+      this.currentSessionId = session.id;
+    }
+    return session;
+  }
+
+  _syncCurrentSessionReferences() {
+    const session = this._getCurrentSession();
+    this.conversationHistory = session.history;
+    return session;
+  }
+
+  _persistChatState() {
+    if (!this.context?.globalState) return;
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_CHAT_SESSIONS)
+      .map((session) =>
+        this._createSessionRecord({
+          ...session,
+          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
+        })
+      );
+    this.chatSessions = sessions;
+    if (!sessions.some((session) => session.id === this.currentSessionId)) {
+      this.currentSessionId = sessions[0]?.id || this._createSessionRecord().id;
+    }
+    this.context.globalState.update(this._getChatSessionsStateKey(), {
+      currentSessionId: this.currentSessionId,
+      sessions
+    });
+    this.context.globalState.update(this._getConversationStateKey(), undefined);
+  }
+
+  _touchCurrentSession() {
+    const session = this._getCurrentSession();
+    session.updatedAt = Date.now();
+    return session;
+  }
+
+  _condenseHistoryEntry(content, maxLength = 220) {
+    const normalized = String(content || "")
+      .replace(/```[\s\S]*?```/g, "[code block]")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return "";
+    return normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 3)}...`
+      : normalized;
+  }
+
+  _buildHistorySummaryChunk(entries) {
+    return entries
+      .map((entry) => {
+        const condensed = this._condenseHistoryEntry(entry.content);
+        if (!condensed) return "";
+        return `- ${entry.role === "user" ? "User" : "Assistant"}: ${condensed}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  _mergeSessionSummary(existingSummary, nextChunk) {
+    const sections = [String(existingSummary || "").trim(), String(nextChunk || "").trim()]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (sections.length <= MAX_SESSION_SUMMARY_CHARS) {
+      return sections;
+    }
+    return sections.slice(sections.length - MAX_SESSION_SUMMARY_CHARS);
+  }
+
+  _compactCurrentSessionHistory() {
+    const session = this._getCurrentSession();
+    if (session.history.length <= MAX_SESSION_RECENT_ENTRIES + 4) {
+      return false;
+    }
+
+    const compactedEntries = session.history.slice(
+      0,
+      session.history.length - MAX_SESSION_RECENT_ENTRIES
+    );
+    if (compactedEntries.length === 0) {
+      return false;
+    }
+
+    const summaryChunk = this._buildHistorySummaryChunk(compactedEntries);
+    session.summary = this._mergeSessionSummary(session.summary, summaryChunk);
+    session.compactedCount =
+      Number(session.compactedCount || 0) + compactedEntries.length;
+    session.history = session.history.slice(-MAX_SESSION_RECENT_ENTRIES);
+    this.conversationHistory = session.history;
+    return true;
+  }
+
+  _maybeAutoTitleCurrentSession(content) {
+    const session = this._getCurrentSession();
+    const currentTitle = String(session.title || "").trim();
+    if (!/^New Chat(?: \d+)?$/i.test(currentTitle)) {
+      return;
+    }
+
+    const title = this._condenseHistoryEntry(content, 42)
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .trim();
+    if (title) {
+      session.title = title;
+    }
+  }
+
+  _appendConversationEntry(role, content) {
+    if (
+      (role !== "user" && role !== "assistant") ||
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      return;
+    }
+
+    const session = this._touchCurrentSession();
+    session.history.push({ role, content: content.trim() });
+    if (role === "user") {
+      this._maybeAutoTitleCurrentSession(content);
+    }
+    this._compactCurrentSessionHistory();
+    this._persistChatState();
+  }
+
+  getConversationHistory() {
+    return this._getCurrentSession().history.slice();
+  }
+
+  getSessionState() {
+    const currentSession = this._syncCurrentSessionReferences();
+    const sessions = this.chatSessions
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        compactedCount: session.compactedCount || 0
+      }));
+    return {
+      currentSessionId: currentSession.id,
+      currentSessionTitle: currentSession.title,
+      compactedCount: currentSession.compactedCount || 0,
+      sessions,
+      history: currentSession.history.slice()
+    };
+  }
+
+  createSession(title = "") {
+    const session = this._createSessionRecord({
+      title: title || this._buildDefaultSessionTitle()
+    });
+    this.chatSessions = [session].concat(
+      this.chatSessions.filter((candidate) => candidate.id !== session.id)
+    );
+    this.currentSessionId = session.id;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
+    return this.getSessionState();
+  }
+
+  switchSession(sessionId) {
+    if (!sessionId) return this.getSessionState();
+    const sessionExists = this.chatSessions.some(
+      (session) => session.id === sessionId
+    );
+    if (!sessionExists) return this.getSessionState();
+    this.currentSessionId = sessionId;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
+    return this.getSessionState();
+  }
+
+  _buildPromptHistoryContext(isTabQuestion = false) {
+    const session = this._getCurrentSession();
+    const parts = [];
+    if (session.summary) {
+      parts.push(`Conversation summary:\n${session.summary}`);
+    }
+
+    const recentEntries = isTabQuestion
+      ? session.history.filter((entry) => entry.role === "user").slice(-2, -1)
+      : session.history.slice(-MAX_HISTORY_ENTRIES, -1);
+    const historyText = recentEntries
+      .map(
+        (entry) =>
+          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
+      )
+      .join("\n\n");
+    if (historyText) {
+      parts.push(historyText);
+    }
+
+    return parts.join("\n\n");
   }
 
   getConfig() {
@@ -247,6 +579,124 @@ class AIAgent {
     return !blockedFragments.some((fragment) => value.includes(fragment));
   }
 
+  _looksLikeChatModel(modelId) {
+    const value = String(modelId || "").trim().toLowerCase();
+    if (!value) return false;
+
+    const blockedFragments = [
+      "embed",
+      "embedding",
+      "rerank",
+      "guard",
+      "safety",
+      "moderation",
+      "whisper",
+      "tts",
+      "asr",
+      "speech-to-text",
+      "text-to-speech"
+    ];
+
+    return !blockedFragments.some((fragment) => value.includes(fragment));
+  }
+
+  _extractModelIds(data, filterFn = null) {
+    const entries = Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.models)
+        ? data.models
+        : Array.isArray(data)
+          ? data
+          : [];
+
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) =>
+            typeof entry === "string"
+              ? entry.trim()
+              : String(entry?.id || entry?.name || "").trim()
+          )
+          .filter(Boolean)
+          .filter((modelId) => (filterFn ? filterFn(modelId) : true))
+      )
+    );
+  }
+
+  async _fetchModelIdsFromEndpoint(url, { headers = {}, timeoutMs = 8_000, filterFn = null } = {}) {
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: this._createRequestSignal(null, timeoutMs)
+      });
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      return this._extractModelIds(data, filterFn);
+    } catch {
+      return [];
+    }
+  }
+
+  _getOpenAiCompatibleModelsUrl(baseUrl) {
+    const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!normalized) return "";
+    if (/\/chat\/completions$/i.test(normalized)) {
+      return normalized.replace(/\/chat\/completions$/i, "/models");
+    }
+    if (/\/v1$/i.test(normalized)) return `${normalized}/models`;
+    if (/\/models$/i.test(normalized)) return normalized;
+    return `${normalized}/v1/models`;
+  }
+
+  async _fetchGroqModelNames(apiKey, timeoutMs = 8_000) {
+    if (!apiKey) return [];
+    return this._fetchModelIdsFromEndpoint("https://api.groq.com/openai/v1/models", {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
+  async _fetchOpenRouterModelNames(apiKey, timeoutMs = 8_000) {
+    const headers = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+    return this._fetchModelIdsFromEndpoint("https://openrouter.ai/api/v1/models?output_modalities=text", {
+      headers,
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
+  async _fetchAnthropicModelNames(apiKey, timeoutMs = 8_000) {
+    if (!apiKey) return [];
+    return this._fetchModelIdsFromEndpoint("https://api.anthropic.com/v1/models", {
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      timeoutMs
+    });
+  }
+
+  async _fetchOpenAiCompatibleModelNames(baseUrl, apiKey, timeoutMs = 8_000) {
+    const modelsUrl = this._getOpenAiCompatibleModelsUrl(baseUrl);
+    if (!modelsUrl) return [];
+
+    const headers = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+    return this._fetchModelIdsFromEndpoint(modelsUrl, {
+      headers,
+      timeoutMs,
+      filterFn: (modelId) => this._looksLikeChatModel(modelId)
+    });
+  }
+
   async _fetchNvidiaModelNames(apiKey, timeoutMs = 8_000, forceRefresh = false) {
     const cacheAge = Date.now() - this._nvidiaModelsFetchedAt;
     if (
@@ -328,11 +778,38 @@ class AIAgent {
 
   async getAvailableModelsForProvider(
     provider,
-    { ollamaUrl = "", nvidiaApiKey = "", timeoutMs = 8_000, forceRefresh = false } = {}
+    {
+      ollamaUrl = "",
+      groqApiKey = "",
+      openrouterApiKey = "",
+      anthropicApiKey = "",
+      nvidiaApiKey = "",
+      timeoutMs = 8_000,
+      forceRefresh = false,
+      customProvider = null
+    } = {}
   ) {
     if (provider === "ollama") {
       return this._fetchOllamaModelNames(
         ollamaUrl || this.getConfig().ollamaUrl,
+        timeoutMs
+      );
+    }
+
+    if (provider === "groq") {
+      return this._fetchGroqModelNames(groqApiKey || this.getConfig().groqApiKey, timeoutMs);
+    }
+
+    if (provider === "openrouter") {
+      return this._fetchOpenRouterModelNames(
+        openrouterApiKey || this.getConfig().openrouterApiKey,
+        timeoutMs
+      );
+    }
+
+    if (provider === "anthropic") {
+      return this._fetchAnthropicModelNames(
+        anthropicApiKey || this.getConfig().anthropicApiKey,
         timeoutMs
       );
     }
@@ -345,6 +822,14 @@ class AIAgent {
       );
     }
 
+    if (customProvider) {
+      return this._fetchOpenAiCompatibleModelNames(
+        customProvider.chatCompletionsUrl || customProvider.baseUrl,
+        customProvider.apiKey || "",
+        timeoutMs
+      );
+    }
+
     return [];
   }
 
@@ -353,90 +838,139 @@ class AIAgent {
       return config;
     }
 
-    if (config.provider === "nvidia") {
-      const discoveredModels = await this._fetchNvidiaModelNames(
-        config.nvidiaApiKey,
-        8_000
-      );
-      const currentModel = this._sanitizeNvidiaModel(
-        config.model || config.nvidiaModel
-      );
-      const resolvedModel = this._pickNvidiaModel(
-        discoveredModels,
-        currentModel
-      );
-
-      if (discoveredModels.length > 0 && resolvedModel !== currentModel) {
-        reportStatus?.(
-          `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
-        );
-      }
-
-      return {
-        ...config,
-        model: resolvedModel,
-        nvidiaModel: resolvedModel,
-        timeout: Math.max(config.timeout || 0, 300_000)
-      };
-    }
-
     const baseConfig = {
       ...config,
       timeout: Math.max(config.timeout || 0, 300_000)
     };
 
-    if (baseConfig.provider !== "ollama") {
+    // Skip model discovery for non-Ollama/NVIDIA providers
+    if (config.provider !== "nvidia" && config.provider !== "ollama") {
       return baseConfig;
     }
 
-    const models = await this._fetchOllamaModelNames(baseConfig.ollamaUrl);
-    if (models.length === 0) {
+    // For NVIDIA: Try quick model discovery with short timeout, fallback to configured model
+    if (config.provider === "nvidia") {
+      try {
+        const discoveredModels = await Promise.race([
+          this._fetchNvidiaModelNames(config.nvidiaApiKey, 3_000),
+          new Promise((resolve) => setTimeout(() => resolve([]), 3_000))
+        ]);
+        
+        const currentModel = this._sanitizeNvidiaModel(
+          config.model || config.nvidiaModel
+        );
+        
+        if (discoveredModels.length > 0) {
+          const resolvedModel = this._pickNvidiaModel(discoveredModels, currentModel);
+          if (resolvedModel !== currentModel) {
+            reportStatus?.(
+              `NVIDIA model ${currentModel} was unavailable. Using ${resolvedModel} instead.`
+            );
+          }
+          return {
+            ...baseConfig,
+            model: resolvedModel,
+            nvidiaModel: resolvedModel
+          };
+        }
+      } catch (err) {
+        console.warn('[Agent] NVIDIA model discovery failed, using configured model:', err.message);
+      }
+      
+      // Fallback: use configured model without discovery
+      return {
+        ...baseConfig,
+        model: this._sanitizeNvidiaModel(config.model || config.nvidiaModel),
+        nvidiaModel: this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+      };
+    }
+
+    // For Ollama: Try quick model discovery with short timeout, fallback to configured model
+    if (config.provider === "ollama") {
+      try {
+        const models = await Promise.race([
+          this._fetchOllamaModelNames(baseConfig.ollamaUrl, 3_000),
+          new Promise((resolve) => setTimeout(() => resolve([]), 3_000))
+        ]);
+        
+        if (models.length > 0) {
+          const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
+          if (resolvedModel !== baseConfig.model) {
+            reportStatus?.(
+              `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
+            );
+          }
+          return {
+            ...baseConfig,
+            model: resolvedModel
+          };
+        }
+      } catch (err) {
+        console.warn('[Agent] Ollama model discovery failed, using configured model:', err.message);
+      }
+      
+      // Fallback: use configured model without discovery
       return baseConfig;
     }
 
-    const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
-    if (resolvedModel !== baseConfig.model) {
-      reportStatus?.(
-        `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
-      );
-    }
+    return baseConfig;
+  }
 
-    return {
-      ...baseConfig,
-      model: resolvedModel
+  _getLatencyProfile(config, mode = "fast", intent = "general") {
+    const resolvedModel =
+      config?.provider === "nvidia"
+        ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+        : String(config?.model || "").trim();
+    const profile = {
+      maxTokens: mode === "deep" ? 4608 : mode === "heavy" ? 3072 : 1024,
+      relevantFileCount: MAX_RELEVANT_FILES,
+      fileSnippetChars: MAX_FILE_SNIPPET,
+      contextChars: MAX_CONTEXT_CHARS,
+      repoContextPolicy: "normal"
     };
+
+    if ((mode === "heavy" || mode === "deep") && intent === "create") {
+      profile.maxTokens = 8192;
+    }
+
+    if (config?.provider === "nvidia" && mode === "fast") {
+      profile.maxTokens = 640;
+      profile.relevantFileCount = 2;
+      profile.fileSnippetChars = 700;
+      profile.contextChars = 3500;
+      profile.repoContextPolicy = "explicit";
+    }
+
+    if (
+      config?.provider === "nvidia" &&
+      resolvedModel === "meta/llama-3.1-70b-instruct"
+    ) {
+      if (mode === "fast") {
+        profile.maxTokens = 768;
+        profile.relevantFileCount = 2;
+        profile.fileSnippetChars = 850;
+        profile.contextChars = 4200;
+        profile.repoContextPolicy = "explicit";
+      } else if (mode === "heavy") {
+        profile.maxTokens = intent === "create" ? 4096 : 2304;
+        profile.relevantFileCount = 3;
+        profile.fileSnippetChars = 950;
+        profile.contextChars = 5200;
+      } else if (mode === "deep") {
+        profile.maxTokens = intent === "create" ? 8192 : 4608;
+        profile.relevantFileCount = 3;
+        profile.fileSnippetChars = 1100;
+        profile.contextChars = 6500;
+      }
+    }
+
+    return profile;
   }
 
   _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
-    const isDeep = mode === "deep";
-    const isHeavyLike = mode === "heavy" || isDeep;
-    const isUnlimited = isHeavyLike && intent === "create";
-    
-    // Calculate max tokens based on provider
-    let baseMaxTokens;
-    let optimizedMaxTokens;
-    
-    if (config.provider === "nvidia") {
-      // NVIDIA NIM: Use maximum possible tokens (no artificial limits)
-      baseMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
-      optimizedMaxTokens = baseMaxTokens;
-      console.log(`[Agent] NVIDIA NIM: Using ${baseMaxTokens} max tokens (no artificial limits)`);
-    } else {
-      // Other providers: Use configurable limits
-      baseMaxTokens = isUnlimited 
-        ? (config.maxTokens?.create || 16384)
-        : isDeep
-          ? (config.maxTokens?.deep || 8192)
-          : isHeavyLike
-          ? (config.maxTokens?.heavy || 8192)
-          : (config.maxTokens?.fast || 4096);
-      
-      // Optimize for slow models
-      const isMinimax = config.model === "minimaxai/minimax-m2.7";
-      optimizedMaxTokens = isMinimax 
-        ? (mode === "fast" ? 1024 : isDeep ? 6144 : isHeavyLike ? 4096 : 2048)
-        : baseMaxTokens;
-    }
+    const isUnlimited = mode === "deep" && intent === "create";
+    const latencyProfile = this._getLatencyProfile(config, mode, intent);
+    const optimizedMaxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens;
 
     // Log API key status for debugging
     console.log("[Agent] Building request for provider:", config.provider);
@@ -503,7 +1037,7 @@ class AIAgent {
         },
         body: JSON.stringify({
           model: config.model,
-          max_tokens: baseMaxTokens,
+          max_tokens: optimizedMaxTokens,
           stream: true,
           system: sysContent,
           messages: [{ role: "user", content: userContent }]
@@ -587,20 +1121,22 @@ class AIAgent {
       };
     }
     if (config.provider === "nvidia") {
-      // NVIDIA NIM: Use high token limits for complete code generation
-      const nvidiaMaxTokens = isUnlimited ? 32768 : isDeep ? 24576 : isHeavyLike ? 16384 : 8192;
-      console.log(`[Agent] NVIDIA NIM: Using ${nvidiaMaxTokens} max tokens`);
-      
-      const isMinimax = config.model === "minimaxai/minimax-m2.7";
-      const isNemotron = config.model === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
+      const resolvedModel = this._sanitizeNvidiaModel(config.model || config.nvidiaModel);
+      const isMinimax = resolvedModel === "minimaxai/minimax-m2.7";
+      const isLlama70b = resolvedModel === "meta/llama-3.1-70b-instruct";
+      const isNemotron = resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
       
       const minimaxOptimizations = isMinimax ? {
         top_p: 0.8,
         frequency_penalty: 0.3,
         presence_penalty: 0.1
       } : {};
+      const llama70bOptimizations = isLlama70b ? {
+        top_p: 0.72,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0
+      } : {};
       
-      // Nemotron-specific optimizations for smoother streaming
       const nemotronOptimizations = isNemotron ? {
         top_p: 0.95,
         frequency_penalty: 0.0,
@@ -614,15 +1150,16 @@ class AIAgent {
           Authorization: `Bearer ${config.nvidiaApiKey}`
         },
         body: JSON.stringify({
-          model: config.model,
+          model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
             { role: "user", content: userContent }
           ],
           stream: true,
-          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : 0.2,
-          max_tokens: nvidiaMaxTokens,
+          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
+          max_tokens: optimizedMaxTokens,
           ...minimaxOptimizations,
+          ...llama70bOptimizations,
           ...nemotronOptimizations
         }),
         parseChunk: (line) => {
@@ -655,11 +1192,11 @@ class AIAgent {
         stream: true,
         options: {
           temperature: 0.2,
-          num_predict: isDeep ? 4096 : isHeavyLike ? 2048 : 1024,
-          top_k: 20,
-          top_p: 0.9,
+          num_predict: mode === "deep" ? -1 : mode === "heavy" ? 2048 : 1024,
+          top_k: 15,
+          top_p: 0.85,
           num_ctx: 2048,
-          repeat_penalty: 1.1
+          repeat_penalty: 1.15
         }
       }),
       parseChunk: (line) => {
@@ -733,6 +1270,7 @@ class AIAgent {
     this.codebaseContext.clear();
     this.scanVersion += 1;
     this.workspaceRoot = workspaceFolder;
+    this._relevantFileCache.clear();
 
     const files = await this._getAllFiles(workspaceFolder);
     for (const file of files) {
@@ -933,6 +1471,97 @@ class AIAgent {
     ].join("\n");
   }
 
+  _getActiveRelativePath(workspaceFolder) {
+    const activeEditor =
+      vscode.window.activeTextEditor || this._lastActiveEditor;
+    if (!activeEditor || !workspaceFolder) {
+      return "";
+    }
+
+    const relativePath = path.relative(
+      workspaceFolder,
+      activeEditor.document.fileName
+    );
+    if (
+      !relativePath ||
+      relativePath.startsWith("..") ||
+      path.isAbsolute(relativePath)
+    ) {
+      return "";
+    }
+
+    return relativePath.replace(/\\/g, "/").toLowerCase();
+  }
+
+  _getCachedKnowledgeGraphData(workspaceFolder) {
+    if (!workspaceFolder) return null;
+    return this._knowledgeGraphCache.get(workspaceFolder)?.data?.graphData || null;
+  }
+
+  async _getKnowledgeGraphAssets(workspaceFolder) {
+    if (!workspaceFolder) return null;
+
+    const reportPath = path.join(
+      workspaceFolder,
+      "graphify-out",
+      "GRAPH_REPORT.md"
+    );
+    const graphJsonPath = path.join(
+      workspaceFolder,
+      "graphify-out",
+      "graph.json"
+    );
+    const reportExists = fsSync.existsSync(reportPath);
+    const graphExists = fsSync.existsSync(graphJsonPath);
+
+    if (!reportExists && !graphExists) {
+      this._knowledgeGraphCache.delete(workspaceFolder);
+      return null;
+    }
+
+    const reportMtime = reportExists ? fsSync.statSync(reportPath).mtimeMs : 0;
+    const graphMtime = graphExists ? fsSync.statSync(graphJsonPath).mtimeMs : 0;
+    const cached = this._knowledgeGraphCache.get(workspaceFolder);
+
+    if (
+      cached &&
+      cached.reportMtime === reportMtime &&
+      cached.graphMtime === graphMtime
+    ) {
+      return cached.data;
+    }
+
+    const data = {
+      reportPath: reportExists ? reportPath : null,
+      graphJsonPath: graphExists ? graphJsonPath : null,
+      reportText: "",
+      graphData: null
+    };
+
+    if (reportExists) {
+      data.reportText = await fs.readFile(reportPath, "utf8");
+    }
+
+    if (graphExists) {
+      try {
+        const parsedGraph = JSON.parse(await fs.readFile(graphJsonPath, "utf8"));
+        if (isValidGraphData(parsedGraph)) {
+          data.graphData = parsedGraph;
+        }
+      } catch {
+        data.graphData = null;
+      }
+    }
+
+    this._knowledgeGraphCache.set(workspaceFolder, {
+      reportMtime,
+      graphMtime,
+      data
+    });
+
+    return data;
+  }
+
   async chat(
     userMessage,
     workspaceFolder,
@@ -965,11 +1594,12 @@ class AIAgent {
       return { error: "AI is disabled in Code Janitor settings." };
     }
 
-    this.conversationHistory.push({ role: "user", content: userMessage });
+    this._appendConversationEntry("user", userMessage);
     const isTabQuestion = this._isTabQuestion(userMessage);
 
     // Detect intent early for knowledge graph decision
     const earlyIntent = this._detectIntent(userMessage);
+    const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Check for knowledge graph only for code-related intents
     const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent);
@@ -999,6 +1629,9 @@ class AIAgent {
     
     // Inject active file path so the model never needs to ask for it
     let resolvedMessage = userMessage;
+    if (isUrlOnlyMessage(userMessage)) {
+      resolvedMessage = `Analyze and summarize this link for me:\n${userMessage}`;
+    }
     
     // For news/current affairs questions, inject a hint to use FETCH
     if (
@@ -1010,6 +1643,14 @@ class AIAgent {
       // Add hint to output FETCH and continue with analysis
       resolvedMessage = `${userMessage}\n\n[SYSTEM: Output FETCH: https://www.reuters.com on first line, then continue with your analysis. Format: "FETCH: https://www.reuters.com\n\nBased on recent developments..."]`;
     }
+
+    const fetchedWebContext = await this._buildFetchedWebContext(
+      userMessage,
+      reportStatus
+    );
+    if (fetchedWebContext) {
+      resolvedMessage = `${resolvedMessage}\n\n${fetchedWebContext}`;
+    }
     
     if (
       /\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(
@@ -1018,7 +1659,7 @@ class AIAgent {
     ) {
       const reply = `Today is ${new Date().toDateString()}.`;
       if (streamCallback) streamCallback(reply);
-      this.conversationHistory.push({ role: "assistant", content: reply });
+      this._appendConversationEntry("assistant", reply);
       return { text: reply, actions: [] };
     }
     if (
@@ -1028,7 +1669,7 @@ class AIAgent {
     ) {
       const reply = `Current date and time: ${new Date().toString()}.`;
       if (streamCallback) streamCallback(reply);
-      this.conversationHistory.push({ role: "assistant", content: reply });
+      this._appendConversationEntry("assistant", reply);
       return { text: reply, actions: [] };
     }
 
@@ -1049,34 +1690,36 @@ class AIAgent {
     let prompt;
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...");
+      const intent = earlyIntent;
       const activeFileContext = this._getActiveFileContext(
         effectiveWorkspace,
-        1_200
+        intent === "edit" || intent === "debug" || intent === "refactor"
+          ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS
+          : 1_200
       );
       const editorState = this._getEditorState(effectiveWorkspace);
       let fastContext = "";
       if (
         effectiveWorkspace &&
-        this._shouldUseRepoContextInFastMode(userMessage)
+        this._shouldUseRepoContextInFastMode(userMessage, config.provider)
       ) {
         reportStatus?.("Scanning relevant files for fast mode...");
         await this.ensureCodebaseScanned(effectiveWorkspace);
         const relevantFiles = this._findRelevantFiles(
           userMessage,
-          effectiveWorkspace
+          effectiveWorkspace,
+          {
+            maxResults: latencyProfile.relevantFileCount,
+            snippetChars: latencyProfile.fileSnippetChars
+          }
         );
-        fastContext = this._buildRelevantFileContext(relevantFiles, 600, 4_000);
+        fastContext = this._buildRelevantFileContext(
+          relevantFiles,
+          latencyProfile.fileSnippetChars,
+          latencyProfile.contextChars
+        );
       }
-      const history = this.conversationHistory
-        .slice(-2, -1)
-        .map(
-          (e) =>
-            `${e.role === "user" ? "User" : "Assistant"}: ${String(
-              e.content || ""
-            ).slice(0, 200)}`
-        )
-        .join("\n\n");
-      const intent = this._detectIntent(userMessage);
+      const history = this._buildPromptHistoryContext(false);
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -1099,9 +1742,9 @@ class AIAgent {
       const activeCtx = isCreateIntent ? "" : activeFileContext;
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nOutput the complete updated file using FILE: path then a code block."
+          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context and use a larger unique anchor when needed. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
-      const fastKnowledgeGraph = intent === "scan" ? knowledgeGraphContext : "";
+      const fastKnowledgeGraph = knowledgeGraphContext;
       prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
@@ -1129,25 +1772,27 @@ ${resolvedMessage}`;
         await this.ensureCodebaseScanned(effectiveWorkspace);
 
       // For full codebase scan requests, inject the overview + snippets directly
-      const isFullScan =
-        /\b(scan|read|overview|summarize|readme|describe|review|analyze|audit|entire|all files|whole|codebase|repo|repository|project|directory)\b/i.test(
-          userMessage
-        );
+      const isFullScan = this._isRepoWideScanRequest(userMessage);
       const relevantFiles = isFullScan
         ? Array.from(this.codebaseContext.entries())
-            .slice(0, MAX_RELEVANT_FILES)
+            .slice(0, latencyProfile.relevantFileCount)
             .map(([p, d]) => ({
               path: p.replace(/\\/g, "/"),
               score: 1,
-              content: d.content.slice(0, MAX_FILE_SNIPPET)
+              content: d.content.slice(0, latencyProfile.fileSnippetChars)
             }))
-        : this._findRelevantFiles(userMessage, effectiveWorkspace);
+        : this._findRelevantFiles(userMessage, effectiveWorkspace, {
+            maxResults: latencyProfile.relevantFileCount,
+            snippetChars: latencyProfile.fileSnippetChars
+          });
       const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
       const editorStateContext = this._buildEditorStateContext(editorState);
       const openTabSnippetContext = isScopedActiveFileEdit
         ? this._getTargetSnippetContext(
             editableTargets.paths,
-            effectiveWorkspace
+            effectiveWorkspace,
+            MAX_RELEVANT_FILES,
+            MAX_EDIT_TARGET_SNIPPET
           )
         : this._getOpenTabSnippetContext(
             editorState.allOpenTabs,
@@ -1172,10 +1817,7 @@ ${resolvedMessage}`;
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
-      const reqIntent =
-        mode === "fast"
-          ? this._detectIntent(userMessage)
-          : this._detectIntent(userMessage);
+      const reqIntent = earlyIntent;
       const shouldCheckRepetition = !this._shouldForceStructuredEdit(
         reqIntent,
         userMessage
@@ -1278,9 +1920,15 @@ ${resolvedMessage}`;
       );
       let assistantText = finalText;
       let firstRetryText = "";
+      const shouldAllowClarification = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      );
 
       if (
         requiresFileActions &&
+        !shouldAllowClarification &&
         !this._hasRequiredActions(
           finalIntent,
           userMessage,
@@ -1349,9 +1997,16 @@ ${resolvedMessage}`;
         assistantText = firstRetryText;
       }
 
+      const shouldAllowClarificationAfterRetry = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      );
+
       if (
         requiresFileActions &&
-        !this._hasFileActions(parsedResponse.actions) &&
+        !shouldAllowClarificationAfterRetry &&
+        !this._hasEditActions(parsedResponse.actions) &&
         !abortSignal?.aborted
       ) {
         reportStatus?.("Retrying with FILE-only format for safe edits...");
@@ -1414,13 +2069,14 @@ ${resolvedMessage}`;
         parsedResponse = this._parseResponse(assistantText);
       }
 
-      if (requiresFileActions && !this._hasFileActions(parsedResponse.actions)) {
+      if (
+        requiresFileActions &&
+        !this._isClarificationResponse(assistantText, finalIntent, userMessage) &&
+        !this._hasEditActions(parsedResponse.actions)
+      ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change.";
-        this.conversationHistory.push({
-          role: "assistant",
-          content: assistantText || noEditsMessage
-        });
+        this._appendConversationEntry("assistant", assistantText || noEditsMessage);
         return {
           text: noEditsMessage,
           actions: [],
@@ -1428,14 +2084,13 @@ ${resolvedMessage}`;
         };
       }
 
-      this.conversationHistory.push({
-        role: "assistant",
-        content:
-          assistantText ||
+      this._appendConversationEntry(
+        "assistant",
+        assistantText ||
           (repetitionDetected
             ? `${fullResponse}\n\n[stopped repetitive output]`
             : fullResponse || this._getEmptyResponseFallback(mode))
-      });
+      );
 
       return parsedResponse;
     } catch (error) {
@@ -1459,6 +2114,7 @@ ${resolvedMessage}`;
       intent === "refactor" ||
       intent === "edit" ||
       intent === "show_graph" ||
+      this._extractPathHints(userMessage).length > 0 ||
       /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
         userMessage
       );
@@ -1466,13 +2122,27 @@ ${resolvedMessage}`;
     if (!shouldLoadGraph) return "";
 
     try {
-      const graphReportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md");
-      const graphReport = await fs.readFile(graphReportPath, "utf8");
+      const graphAssets = await this._getKnowledgeGraphAssets(workspaceFolder);
+      if (!graphAssets) {
+        return "";
+      }
+
+      const graphReport = graphAssets.reportText || "";
       
-      const overviewMatch = graphReport.match(/## Overview[\s\S]*?(?=##|$)/);
-      const godNodesMatch = graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/);
-      const directoryMatch = graphReport.match(/## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/);
-      const insightsMatch = graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/);
+      const overviewMatch = graphReport
+        ? graphReport.match(/## Overview[\s\S]*?(?=##|$)/)
+        : null;
+      const godNodesMatch = graphReport
+        ? graphReport.match(/## God Nodes[\s\S]*?(?=##|$)/)
+        : null;
+      const directoryMatch = graphReport
+        ? graphReport.match(
+            /## Directory Structure[\s\S]*?(?=## Architecture Insights|## Usage|$)/
+          )
+        : null;
+      const insightsMatch = graphReport
+        ? graphReport.match(/## Architecture Insights[\s\S]*?(?=## Usage|$)/)
+        : null;
 
       const sections = [];
 
@@ -1494,8 +2164,30 @@ ${resolvedMessage}`;
         sections.push(insightsMatch[0].trim());
       }
 
-      if (sections.length > 0) {
-        return `\n**Knowledge Graph Context**\nA Graphify knowledge-graph report is available at \`graphify-out/GRAPH_REPORT.md\`. Use it first for architecture, codebase navigation, multi-file debugging, and refactors.\n${sections.join("\n\n").slice(0, 1800)}\n`;
+      const graphMatches = graphAssets.graphData
+        ? this._preferActivePathMatches(
+            matchGraphPathsFromHints(
+              graphAssets.graphData,
+              this._extractPathHints(userMessage)
+            ),
+            this._getActiveRelativePath(workspaceFolder)
+          )
+        : [];
+      const graphLookupContext = graphAssets.graphData
+        ? buildGraphLookupContext(graphAssets.graphData, graphMatches)
+        : "";
+
+      if (sections.length > 0 || graphLookupContext) {
+        const graphAvailability = graphAssets.graphData
+          ? "A Graphify knowledge graph is available in `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json`."
+          : "A Graphify summary report is available in `graphify-out/GRAPH_REPORT.md`, but `graphify-out/graph.json` is not available right now.";
+        const graphContextBody = [
+          sections.join("\n\n").slice(0, 1800),
+          graphLookupContext
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        return `\n**Knowledge Graph Context**\n${graphAvailability} Use it first for architecture, codebase navigation, file lookup, multi-file debugging, and refactors.\n${graphContextBody}\n`;
       }
 
       return "";
@@ -1717,7 +2409,8 @@ ${resolvedMessage}`;
   _getTargetSnippetContext(
     targetPaths,
     workspaceFolder,
-    maxSnippets = MAX_RELEVANT_FILES
+    maxSnippets = MAX_RELEVANT_FILES,
+    maxChars = MAX_FILE_SNIPPET
   ) {
     if (!Array.isArray(targetPaths) || targetPaths.length === 0) {
       return "";
@@ -1743,7 +2436,7 @@ ${resolvedMessage}`;
           "Editable target content",
           openDocument,
           workspaceFolder,
-          MAX_FILE_SNIPPET
+          maxChars
         );
       } else {
         const fileData = this.codebaseContext.get(targetPath);
@@ -1753,7 +2446,7 @@ ${resolvedMessage}`;
 
         snippet = `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
           0,
-          MAX_FILE_SNIPPET
+          maxChars
         )}\n\`\`\``;
       }
 
@@ -1937,11 +2630,11 @@ ${resolvedMessage}`;
 
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
     const thinkingInstruction = showThinking
-      ? "\n\nIMPORTANT: Before the final answer, include a short visible reasoning summary titled \"Thinking\" with 3-6 concise bullets that explain your approach, tradeoffs, or checks. Keep it brief and useful. Then provide the final answer under a heading titled \"Answer\". Do not expose hidden internal chain-of-thought or long private reasoning."
+      ? "\n\nIMPORTANT: Structure your reply in exactly two top-level sections when possible: a heading titled \"Thinking\" with 3-6 concise bullets summarizing approach, tradeoffs, or checks, followed by a heading titled \"Answer\" for the final response. Keep the Thinking section brief and useful. Do not expose hidden internal chain-of-thought or long private reasoning."
       : "";
     const base =
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)";
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" + thinkingInstruction;
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      thinkingInstruction;
     const compactRules = [
       "Operational rules (fast):",
       "- Be concise and correct.",
@@ -1969,7 +2662,9 @@ ${resolvedMessage}`;
       "- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.",
       "- When the user asks for a flowchart, sequence diagram, class diagram, state diagram, ER diagram, gantt chart, or architecture visualization, respond with a valid fenced ```mermaid block first, then add a short explanation after it.",
       "- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.",
+      "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
+      "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
       "- If the user wants to visualize architecture, dependencies, or the project graph, use the `GRAPHIFY: open` action instead of only describing it.",
       "- If the user wants lint results for the active JavaScript file, use `LINT: active`.",
@@ -2203,16 +2898,67 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
 
-CRITICAL: When outputting FILE actions, you MUST include the ENTIRE file from start to finish. DO NOT truncate, abbreviate, or use placeholders like "... rest of file ...". Include EVERY SINGLE LINE of the complete file.
+**CRITICAL: Choose the right edit format:**
 
-You have access to structured shell actions when needed. Prefer FILE and MKDIR actions; use CMD only when file edits alone cannot solve the request. Use the file context provided below to understand the codebase, then output executable actions using these exact formats:
+**Use PATCH by default for PRECISE edits to existing files:**
+- Single function or block modification
+- Localized bug fix
+- Small-to-medium targeted refactor in one area
+- Adding/removing an import or dependency line
+- Updating config values, JSON entries, markup blocks, or a contained section
+
+PATCH format:
+PATCH: <exact file path>
+SEARCH:
+\`\`\`
+(exact code to find - copy it EXACTLY from the provided file context)
+\`\`\`
+REPLACE:
+\`\`\`
+(new code to replace with)
+\`\`\`
+
+PATCH guidance:
+- Prefer a unique SEARCH anchor, usually 3-12 surrounding lines.
+- It is okay for a PATCH to replace a larger block when needed; do not artificially keep it under 20 lines.
+- If the edit touches one localized region, PATCH is usually still the right choice even when the replacement is 40-80 lines.
+- Preserve surrounding formatting and unrelated logic.
+
+**Use FILE for BROAD rewrites:**
+- Creating new files
+- Multiple functions changed
+- Structural reorganization
+- Changes across multiple sections
+- Whole-file rewrites
+- Cases where an exact PATCH would be brittle or ambiguous
+- User asks for complete rewrite
+
+FILE format:
 FILE: <exact file path>
 \`\`\`
-(COMPLETE file content - EVERY line from start to finish, no truncation)
+(COMPLETE file content - EVERY line from start to finish)
 \`\`\`
+
+**Example PATCH usage:**
+User: "Fix the typo in the greeting function"
+PATCH: src/app.js
+SEARCH:
+\`\`\`
+function greet(name) {
+  return \`Hello, \${nmae}!\`;
+}
+\`\`\`
+REPLACE:
+\`\`\`
+function greet(name) {
+  return \`Hello, \${name}!\`;
+}
+\`\`\`
+
+You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
       case "scan":
         return `${base}
 ${rules}
@@ -2240,10 +2986,13 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
   }
 
   _shouldForceStructuredEdit(intent, userMessage) {
-    if (intent === "create" || intent === "edit") return true;
+    // Only force structured edits when user explicitly asks to change files
+    if (intent === "create") return true;
+    if (intent === "edit" && this._isEditRequest(userMessage)) return true;
     if (
       (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage)
+      this._isEditRequest(userMessage) &&
+      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
     ) {
       return true;
     }
@@ -2255,7 +3004,9 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
 Return ONLY executable actions now.
 
 Rules:
-- If the user asked you to change code/files, include at least one FILE: action with complete file content.
+- If the user asked you to change code/files, include at least one PATCH: or FILE: action.
+- Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
+- Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
@@ -2290,6 +3041,64 @@ ${(rawResponse || "").slice(0, 4000)}
 \`\`\``;
   }
 
+  _isClarificationResponse(responseText, intent, userMessage) {
+    if (!this._shouldForceStructuredEdit(intent, userMessage)) {
+      return false;
+    }
+
+    const text = String(responseText || "").trim();
+    if (!text) {
+      return false;
+    }
+
+    if (this._hasMeaningfulActions(this._parseResponse(text).actions)) {
+      return false;
+    }
+
+    const lower = text.toLowerCase();
+    const asksQuestion = text.includes("?");
+    const clarificationPatterns = [
+      /\b(can you|could you|would you|please)\s+(clarify|share|provide|confirm|specify)\b/i,
+      /\bwhich\s+(file|files|path|paths|part|function|component|version)\b/i,
+      /\bwhat\s+(exactly|should|do you want|file|path|part)\b/i,
+      /\bdo you want me to\b/i,
+      /\bshould i\b/i,
+      /\bi need\b.*\b(file|path|details|context|clarification|requirement|requirements)\b/i,
+      /\bmissing\b.*\b(file|path|detail|details|context|requirement|requirements)\b/i,
+      /\bplease provide\b.*\b(file|path|details|context|requirement|requirements)\b/i,
+      /\bnot enough\b.*\b(context|information|detail|details)\b/i
+    ];
+
+    const soundsLikeClarification = clarificationPatterns.some((pattern) =>
+      pattern.test(text)
+    );
+
+    const refusalPatterns = [
+      /\bi cannot\b/i,
+      /\bi can'?t\b/i,
+      /\bas an ai\b/i,
+      /\bi'm unable\b/i,
+      /\bi do not have access\b/i
+    ];
+    const looksLikeRefusal = refusalPatterns.some((pattern) =>
+      pattern.test(lower)
+    );
+
+    return soundsLikeClarification && asksQuestion && !looksLikeRefusal;
+  }
+
+  _hasPatchActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || action.type !== "patch") return false;
+      return (
+        typeof action.search === "string" &&
+        action.search.length > 0 &&
+        typeof action.replace === "string"
+      );
+    });
+  }
+
   _hasFileActions(actions) {
     if (!Array.isArray(actions) || actions.length === 0) return false;
     return actions.some((action) => {
@@ -2298,13 +3107,17 @@ ${(rawResponse || "").slice(0, 4000)}
     });
   }
 
+  _hasEditActions(actions) {
+    return this._hasPatchActions(actions) || this._hasFileActions(actions);
+  }
+
   _hasRequiredActions(intent, userMessage, actions) {
     if (!this._hasMeaningfulActions(actions)) {
       return false;
     }
 
     if (this._shouldForceStructuredEdit(intent, userMessage)) {
-      return this._hasFileActions(actions);
+      return this._hasEditActions(actions);
     }
 
     return true;
@@ -2317,6 +3130,13 @@ ${(rawResponse || "").slice(0, 4000)}
 
     return actions.some((action) => {
       if (!action) return false;
+      if (action.type === "patch") {
+        return (
+          typeof action.search === "string" &&
+          action.search.length > 0 &&
+          typeof action.replace === "string"
+        );
+      }
       if (action.type === "file") {
         return (
           typeof action.content === "string" && action.content.trim().length > 0
@@ -2332,12 +3152,48 @@ ${(rawResponse || "").slice(0, 4000)}
       : "I didn't produce a quick reply. Try asking again, switch to Heavy mode for code-heavy tasks, or use /heavy.";
   }
 
-  _shouldUseRepoContextInFastMode(message) {
-    const text = message || "";
+  _isRepoWideScanRequest(message) {
+    const text = (message || "").toLowerCase();
+    if (!text) {
+      return false;
+    }
+
+    const hasScanVerb =
+      /\b(scan|read|overview|summari[sz]e|describe|review|analy[sz]e|audit|inspect|map out|walk through|walkthrough)\b/i.test(
+        text
+      );
+    const hasRepoScope =
+      /\b(all files|entire|whole|codebase|repo|repository|project|workspace|directory|directories|folder|folders|architecture)\b/i.test(
+        text
+      );
+    const hasSpecificPathHint = this._extractPathHints(text).length > 0;
+    const singularFileScope =
+      /\bfile\b/i.test(text) && !/\bfiles\b/i.test(text);
+
     return (
+      hasScanVerb &&
+      hasRepoScope &&
+      !hasSpecificPathHint &&
+      !singularFileScope
+    );
+  }
+
+  _shouldUseRepoContextInFastMode(message, provider = "") {
+    const text = message || "";
+    const wantsRepoWideContext =
       /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all files|overview|summarize|audit|architecture|graph|graphify|readme)\b/i.test(
         text
-      ) ||
+      );
+    const mentionsSpecificPath =
+      /[/\\]|\.[a-z0-9]{1,5}\b/i.test(text) ||
+      this._extractPathHints(text).length > 0;
+
+    if (provider === "nvidia") {
+      return wantsRepoWideContext || mentionsSpecificPath;
+    }
+
+    return (
+      wantsRepoWideContext ||
       (/\b(error|issue|bug|broken|not working|failing|cannot|can't|why)\b/i.test(
         text
       ) &&
@@ -2696,24 +3552,61 @@ ${(rawResponse || "").slice(0, 4000)}
     };
   }
 
-  _findRelevantFiles(query, workspaceFolder) {
-    const keywords = this._extractKeywords(query);
-    const pathHints = this._extractPathHints(query);
-    const relevant = [];
-    const allowContentSearch = this._shouldSearchContent(query, pathHints);
-
+  _buildRelevantFilesCacheKey(query, workspaceFolder, options = {}) {
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor;
-    const activeRelativePath =
+    const activePath =
       activeEditor && workspaceFolder
         ? path
             .relative(workspaceFolder, activeEditor.document.fileName)
             .replace(/\\/g, "/")
-            .toLowerCase()
         : "";
+    return [
+      workspaceFolder || "",
+      this.scanVersion,
+      activePath,
+      Number.isFinite(options.maxResults) ? options.maxResults : MAX_RELEVANT_FILES,
+      Number.isFinite(options.snippetChars) ? options.snippetChars : MAX_FILE_SNIPPET,
+      this._extractKeywords(query).join(","),
+      this._extractPathHints(query).join(",")
+    ].join("::");
+  }
+
+  _findRelevantFiles(query, workspaceFolder, options = {}) {
+    const cacheKey = this._buildRelevantFilesCacheKey(
+      query,
+      workspaceFolder,
+      options
+    );
+    if (this._relevantFileCache.has(cacheKey)) {
+      return this._relevantFileCache.get(cacheKey).map((entry) => ({ ...entry }));
+    }
+
+    const snippetChars =
+      Number.isFinite(options.snippetChars) && options.snippetChars > 0
+        ? options.snippetChars
+        : MAX_FILE_SNIPPET;
+    const maxResults =
+      Number.isFinite(options.maxResults) && options.maxResults > 0
+        ? options.maxResults
+        : MAX_RELEVANT_FILES;
+    const keywords = this._extractKeywords(query);
+    const pathHints = this._extractPathHints(query);
+    const relevant = [];
+    const allowContentSearch = this._shouldSearchContent(query, pathHints);
+    const activeRelativePath = this._getActiveRelativePath(workspaceFolder);
     const preferredHintMatches = new Set(
       this._preferActivePathMatches(
         this._matchPathsFromHints(pathHints),
+        activeRelativePath
+      ).map((candidate) => candidate.replace(/\\/g, "/").toLowerCase())
+    );
+    const preferredGraphMatches = new Set(
+      this._preferActivePathMatches(
+        matchGraphPathsFromHints(
+          this._getCachedKnowledgeGraphData(workspaceFolder),
+          pathHints
+        ),
         activeRelativePath
       ).map((candidate) => candidate.replace(/\\/g, "/").toLowerCase())
     );
@@ -2732,6 +3625,10 @@ ${(rawResponse || "").slice(0, 4000)}
 
       if (preferredHintMatches.has(normalizedPath)) {
         score += 120;
+      }
+
+      if (preferredGraphMatches.has(normalizedPath)) {
+        score += 140;
       }
 
       for (const hint of pathHints) {
@@ -2764,12 +3661,12 @@ ${(rawResponse || "").slice(0, 4000)}
         relevant.push({
           path: relativePath,
           score,
-          content: fileData.content.slice(0, MAX_FILE_SNIPPET)
+          content: fileData.content.slice(0, snippetChars)
         });
       }
     }
 
-    return relevant
+    const result = relevant
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (activeRelativePath) {
@@ -2785,7 +3682,18 @@ ${(rawResponse || "").slice(0, 4000)}
         }
         return a.path.localeCompare(b.path);
       })
-      .slice(0, MAX_RELEVANT_FILES);
+      .slice(0, maxResults);
+
+    this._relevantFileCache.set(
+      cacheKey,
+      result.map((entry) => ({ ...entry }))
+    );
+    if (this._relevantFileCache.size > RELEVANT_FILE_CACHE_LIMIT) {
+      const oldestKey = this._relevantFileCache.keys().next().value;
+      if (oldestKey) this._relevantFileCache.delete(oldestKey);
+    }
+
+    return result;
   }
 
   _buildPrompt(
@@ -2799,17 +3707,7 @@ ${(rawResponse || "").slice(0, 4000)}
     mode,
     knowledgeGraphContext = ""
   ) {
-    const historyEntries = isTabQuestion
-      ? this.conversationHistory
-          .filter((entry) => entry.role === "user")
-          .slice(-2, -1)
-      : this.conversationHistory.slice(-MAX_HISTORY_ENTRIES, -1);
-    const history = historyEntries
-      .map(
-        (entry) =>
-          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
-      )
-      .join("\n\n");
+    const history = this._buildPromptHistoryContext(isTabQuestion);
 
     const intent = this._detectIntent(userMessage);
       const systemInstruction = this._buildSystemInstruction(
@@ -2819,7 +3717,10 @@ ${(rawResponse || "").slice(0, 4000)}
         this.showThinking
       );
     const isCreateIntent = intent === "create";
-    const MAX_PROMPT_CHARS = 12_000;
+    const MAX_PROMPT_CHARS =
+      intent === "edit" || intent === "debug" || intent === "refactor"
+        ? 18_000
+        : 12_000;
 
     let context = "";
     if (!isCreateIntent) {
@@ -2914,9 +3815,35 @@ ${userMessage}`;
       return false;
     };
 
-    // Match FILE: with flexible code block format
-    const fileRegex = /FILE:\s*([^\n`]+)\n```[\w]*\n?([\s\S]*?)```/g;
+    // Match PATCH: actions for targeted edits
+    const patchRegex = /PATCH:\s*([^\r\n`]+)\r?\nSEARCH:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```\s*\r?\nREPLACE:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     let match;
+    while ((match = patchRegex.exec(response)) !== null) {
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      const searchContent = match[2] || "";
+      const replaceContent = match[3] || "";
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        continue;
+      }
+
+      actions.push({
+        type: "patch",
+        path: normalizedPath,
+        search: searchContent,
+        replace: replaceContent
+      });
+    }
+
+    // Match FILE: with flexible code block format
+    const fileRegex = /FILE:\s*([^\r\n`]+)\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     while ((match = fileRegex.exec(response)) !== null) {
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
@@ -2943,7 +3870,7 @@ ${userMessage}`;
     // Fallback: also try matching FILE: followed by content without code fences
     if (actions.length === 0) {
       const looseFIleRegex =
-        /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\n(?:FILE|File|MKDIR|CMD):|$)/g;
+        /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|MKDIR|CMD):|$)/g;
       while ((match = looseFIleRegex.exec(response)) !== null) {
         const pathInfo = normalizeActionPath(match[1]);
         const normalizedPath = pathInfo.path;
@@ -3083,7 +4010,7 @@ ${userMessage}`;
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
-      /\bformat\b/
+      /^format(?:\s|$)/
     ];
 
     if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
@@ -3105,35 +4032,103 @@ ${userMessage}`;
       "md ",
       "findstr ",
       "rg ",
+      "grep ",
       "ls",
       "dir",
+      "cat ",
+      "type ",
+      "get-content ",
+      "gc ",
+      "head ",
+      "tail ",
+      "echo ",
+      "pwd",
+      "cd ",
+      "tree ",
+      "find ",
+      "which ",
+      "where ",
+      "get-childitem ",
+      "gci ",
+      "select-string ",
+      "sls ",
       "npm install",
       "npm i",
       "npm run",
       "npm test",
       "npm start",
       "npm build",
+      "npm list",
+      "npm outdated",
+      "npm audit",
       "npx ",
+      "yarn install",
+      "yarn add",
+      "yarn remove",
+      "yarn run",
+      "yarn test",
+      "yarn build",
+      "pnpm install",
+      "pnpm add",
+      "pnpm remove",
+      "pnpm run",
+      "pnpm test",
       "node --check",
       "node -e",
       "node ",
       "git status",
       "git diff",
       "git log",
+      "git show",
+      "git branch",
+      "git checkout",
+      "git add",
+      "git commit",
+      "git pull",
+      "git fetch",
+      "git merge",
+      "git rebase",
+      "git stash",
+      "git tag",
+      "git remote",
       "git rev-parse",
       "git push",
       "python -m py_compile",
       "python -m flake8",
       "python -m pylint",
+      "python -m pytest",
+      "python -m unittest",
+      "pip list",
+      "pip3 list",
       "python ",
       "python3 -m py_compile",
       "python3 -m flake8",
       "python3 -m pylint",
+      "python3 -m pytest",
+      "python3 -m unittest",
       "python3 ",
       "pytest",
       "eslint ",
+      "tsc ",
       "javac ",
       "java ",
+      "mvn clean",
+      "mvn compile",
+      "mvn test",
+      "mvn package",
+      "gradle build",
+      "gradle test",
+      "gradle clean",
+      "cargo build",
+      "cargo test",
+      "cargo check",
+      "cargo run",
+      "go build",
+      "go test",
+      "go run",
+      "dotnet build",
+      "dotnet test",
+      "dotnet run",
       "arduino-cli lib list",
       "arduino-cli lib search",
       ".\\node_modules\\.bin\\",
@@ -3482,50 +4477,130 @@ ${userMessage}`;
   }
 
   async fetchFromWeb(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      const maxSize = options.maxSize || 500_000; // 500KB default
-      const timeout = options.timeout || 10_000; // 10s default
-      
-      const urlObj = new URL(url);
-      const protocol = urlObj.protocol === "https:" ? https : http;
-      
-      const req = protocol.get(url, { timeout }, (res) => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
-          return;
-        }
-        
-        let data = "";
-        let size = 0;
-        
-        res.on("data", (chunk) => {
-          size += chunk.length;
-          if (size > maxSize) {
-            req.destroy();
-            reject(new Error(`Response too large (>${maxSize} bytes)`));
-            return;
-          }
-          data += chunk.toString();
-        });
-        
-        res.on("end", () => {
-          resolve({ success: true, data, size, contentType: res.headers["content-type"] });
-        });
-      });
-      
-      req.on("error", (err) => {
-        reject(err);
-      });
-      
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("Request timeout"));
-      });
+    const maxSize = options.maxSize || 500_000;
+    const timeout = options.timeout || 10_000;
+
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeout),
+      headers: {
+        "User-Agent": "Code-Janitor/1.0 (+VS Code Extension)",
+        Accept: "text/html,application/json,text/plain;q=0.9,*/*;q=0.8"
+      }
     });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const data = await response.text();
+      return {
+        success: true,
+        data,
+        size: Buffer.byteLength(data),
+        contentType: response.headers.get("content-type") || "",
+        finalUrl: response.url,
+        redirected: response.url !== url
+      };
+    }
+
+    const chunks = [];
+    let size = 0;
+
+    let streamDone = false;
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) {
+        streamDone = true;
+        break;
+      }
+
+      size += value.byteLength;
+      if (size > maxSize) {
+        try {
+          reader.cancel();
+        } catch (_) {
+          // Ignore cancel failures after size limit is exceeded.
+        }
+        throw new Error(`Response too large (>${maxSize} bytes)`);
+      }
+
+      chunks.push(Buffer.from(value));
+    }
+
+    const buffer = Buffer.concat(chunks);
+    return {
+      success: true,
+      data: buffer.toString("utf8"),
+      size,
+      contentType: response.headers.get("content-type") || "",
+      finalUrl: response.url,
+      redirected: response.url !== url
+    };
+  }
+
+  async _buildFetchedWebContext(userMessage, reportStatus) {
+    const urls = extractUrls(userMessage, MAX_FETCHED_URLS);
+    if (urls.length === 0) {
+      return "";
+    }
+
+    reportStatus?.(
+      urls.length === 1
+        ? `Fetching referenced link: ${urls[0]}`
+        : `Fetching ${urls.length} referenced links...`
+    );
+
+    const sections = [
+      "[SYSTEM: The user provided web links. Use the fetched content below when answering. If the page fetch succeeded, analyze the content directly instead of saying you cannot access the link.]"
+    ];
+
+    for (const url of urls) {
+      try {
+        const fetchResult = await this.fetchFromWeb(url, {
+          maxSize: 750_000,
+          timeout: 15_000
+        });
+        const readable = extractReadableContent(
+          fetchResult.data,
+          fetchResult.contentType,
+          MAX_FETCHED_CONTENT_CHARS
+        );
+
+        sections.push(
+          [
+            `URL: ${fetchResult.finalUrl || url}`,
+            fetchResult.redirected && fetchResult.finalUrl
+              ? `Redirected from: ${url}`
+              : "",
+            fetchResult.contentType
+              ? `Content-Type: ${fetchResult.contentType}`
+              : "",
+            readable.title ? `Title: ${readable.title}` : "",
+            "Fetched content:",
+            readable.text || "[No readable text extracted]"
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+      } catch (error) {
+        sections.push(`URL: ${url}\nFetch error: ${error.message}`);
+      }
+    }
+
+    return sections.join("\n\n");
   }
 
   clearHistory() {
-    this.conversationHistory = [];
+    const session = this._touchCurrentSession();
+    session.history = [];
+    session.summary = "";
+    session.compactedCount = 0;
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
   }
 }
 

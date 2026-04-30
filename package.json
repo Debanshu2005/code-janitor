@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.15.4",
+  "version": "1.16.6",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -291,7 +291,7 @@
         "command": "codeJanitor.validateFrontend",
         "key": "alt+v",
         "mac": "alt+v",
-        "when": "editorTextFocus && (resourceExtname == '.html' || resourceExtname == '.css' || resourceExtname == '.js' || resourceExtname == '.jsx' || resourceExtname == '.tsx')"
+        "when": "editorTextFocus && (resourceExtname == '.html' || resourceExtname == '.htm' || resourceExtname == '.css' || resourceExtname == '.scss' || resourceExtname == '.sass' || resourceExtname == '.less' || resourceExtname == '.js' || resourceExtname == '.jsx' || resourceExtname == '.mjs' || resourceExtname == '.cjs' || resourceExtname == '.ts' || resourceExtname == '.tsx')"
       },
       {
         "command": "codeJanitor.openChat",

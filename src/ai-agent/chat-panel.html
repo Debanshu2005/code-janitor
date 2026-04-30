@@ -41,7 +41,7 @@
         font-size: 13px;
       }
 
-      /* ── Header ── */
+      /* Header */
       #header {
         padding: 10px 14px;
         background: rgba(15, 20, 27, 0.94);
@@ -94,6 +94,15 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
+      }
+      #session-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      #session-select {
+        max-width: 180px;
       }
       #header-title {
         font-size: 14px;
@@ -352,7 +361,7 @@
         border-color: var(--accent);
       }
 
-      /* ── Progress bar ── */
+      /* Progress bar */
       #progress-bar-wrap {
         display: none;
         padding: 4px 14px;
@@ -383,7 +392,7 @@
         transition: width 0.2s ease;
       }
 
-      /* ── Action bar ── */
+      /* Action bar */
       #action-bar {
         padding: 6px 14px;
         background: transparent;
@@ -454,7 +463,7 @@
         color: var(--accent);
       }
 
-      /* ── Search bar ── */
+      /* Search bar */
       #search-bar {
         padding: 8px 14px;
         background: transparent;
@@ -663,7 +672,7 @@
         color: #a371f7;
       }
 
-      /* ── Chat area ── */
+      /* Chat area */
       #chat {
         flex: 1;
         overflow-y: auto;
@@ -724,6 +733,40 @@
         background: rgba(15, 20, 27, 0.92);
         border: 1px solid var(--border);
         box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+      }
+      .assistant-sections {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .assistant-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .assistant-section.thinking {
+        padding: 10px 12px;
+        border: 1px solid rgba(88, 166, 255, 0.28);
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 0.04));
+      }
+      .assistant-section.answer {
+        padding-top: 2px;
+      }
+      .assistant-section-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .assistant-section.thinking .assistant-section-title {
+        color: #9ecbff;
+      }
+      .assistant-section-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
       .bubble.user {
         background: rgba(24, 34, 48, 0.9);
@@ -1038,7 +1081,7 @@
         font-size: 12px;
       }
 
-      /* ── Input area ── */
+      /* Input area */
       #input-area {
         padding: 10px 14px;
         background: rgba(15, 20, 27, 0.96);
@@ -1417,7 +1460,7 @@
         position: relative;
       }
       .tutorial-section li:before {
-        content: "→";
+        content: ">";
         position: absolute;
         left: 0;
         color: var(--accent);
@@ -1524,12 +1567,12 @@
     <div id="tutorial-overlay" class="hidden">
       <div class="tutorial-container">
         <div class="tutorial-header">
-          <div class="tutorial-title">🎓 Welcome to Code Janitor!</div>
+          <div class="tutorial-title">Welcome to Code Janitor!</div>
           <div class="tutorial-subtitle">Your AI-powered coding assistant. Let's learn how to use it.</div>
         </div>
 
         <div class="tutorial-section">
-          <h3>🚀 Getting Started</h3>
+          <h3>Getting Started</h3>
           <p>Code Janitor is an intelligent coding assistant that helps you write, fix, and improve code. Here's what you need to know:</p>
           <ul>
             <li><strong>AI Provider:</strong> Select your AI provider from the dropdown (Ollama for local, or cloud providers like Groq, OpenRouter, Anthropic, NVIDIA)</li>
@@ -1539,61 +1582,61 @@
         </div>
 
         <div class="tutorial-section">
-          <h3>⚡ Quick Action Buttons</h3>
+          <h3>Quick Action Buttons</h3>
           <p>Use these buttons for instant actions without typing:</p>
           <div class="tutorial-action-grid">
             <div class="tutorial-action-item">
-              <strong>⚡ Check syntax</strong>
+              <strong>Check syntax</strong>
               <span>Scans your active file for syntax errors without using AI</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>🔍 Scan codebase</strong>
+              <strong>Scan codebase</strong>
               <span>Analyzes your entire workspace for syntax issues</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>💡 Explain file</strong>
+              <strong>Explain file</strong>
               <span>AI explains what your active file does in plain English</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>🔧 Fix issues</strong>
+              <strong>Fix issues</strong>
               <span>AI automatically detects and fixes syntax errors in your active file</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>♻️ Refactor</strong>
+              <strong>Refactor</strong>
               <span>AI improves code clarity, performance, and best practices</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>🧪 Generate tests</strong>
+              <strong>Generate tests</strong>
               <span>AI creates unit tests for your active file</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>📝 Add docs</strong>
+              <strong>Add docs</strong>
               <span>AI adds JSDoc/docstring comments to your code</span>
             </div>
             <div class="tutorial-action-item">
-              <strong>📋 Git status</strong>
+              <strong>Git status</strong>
               <span>Shows your current Git status and changed files</span>
             </div>
           </div>
         </div>
 
         <div class="tutorial-section">
-          <h3>🎤 Voice Input & Text-to-Speech</h3>
+          <h3>Voice Input & Text-to-Speech</h3>
           <p>Use voice commands and hear AI responses:</p>
           <ul>
-            <li><strong>Voice Input:</strong> Click the 🎤 microphone button to speak your questions (requires microphone permission)</li>
-            <li><strong>Text-to-Speech:</strong> Click 🔊 TTS button in header to enable AI response reading</li>
+            <li><strong>Voice Input:</strong> Click the microphone button to speak your questions (requires microphone permission)</li>
+            <li><strong>Text-to-Speech:</strong> Click the TTS button in header to enable AI response reading</li>
             <li>Your spoken words appear in the input field in real-time</li>
             <li>Works in Chrome, Edge, and Safari browsers</li>
           </ul>
           <div class="tutorial-tip">
-            <strong>💡 Pro Tip:</strong>
+            <strong>Pro Tip:</strong>
             <span>Grant microphone permission once, and it will be remembered for future sessions</span>
           </div>
         </div>
 
         <div class="tutorial-section">
-          <h3>🌐 Web Search</h3>
+          <h3>Web Search</h3>
           <p>Search the internet directly from Code Janitor:</p>
           <ul>
             <li>Type your query in the search bar below the action buttons</li>
@@ -1604,7 +1647,7 @@
         </div>
 
         <div class="tutorial-section">
-          <h3>💬 Chat with AI</h3>
+          <h3>Chat with AI</h3>
           <p>Ask anything in natural language:</p>
           <ul>
             <li><strong>"Fix the syntax errors in this file"</strong> - AI will analyze and fix issues</li>
@@ -1614,13 +1657,13 @@
             <li><strong>"Run npm test"</strong> - Execute commands (with your approval)</li>
           </ul>
           <div class="tutorial-tip">
-            <strong>💡 Pro Tip:</strong>
+            <strong>Pro Tip:</strong>
             <span>Use /fast or /heavy to switch modes, /scan to analyze your workspace, /ping to test AI connection</span>
           </div>
         </div>
 
         <div class="tutorial-section">
-          <h3>🎯 Key Features</h3>
+          <h3>Key Features</h3>
           <h4>Agent Activity Panel</h4>
           <p>Track what Code Janitor is doing in real-time. Click "Show" to expand and see file operations, commands, and scans.</p>
           
@@ -1637,7 +1680,7 @@
         </div>
 
         <div class="tutorial-section">
-          <h3>⌨️ Keyboard Shortcuts</h3>
+          <h3>Keyboard Shortcuts</h3>
           <p>Speed up your workflow with these shortcuts:</p>
           <ul>
             <li><strong>Alt + D:</strong> Format and fix code in active file</li>
@@ -1650,7 +1693,7 @@
         </div>
 
         <div class="tutorial-section">
-          <h3>🔑 Setting Up API Keys</h3>
+          <h3>Setting Up API Keys</h3>
           <p>For cloud AI providers (Groq, OpenRouter, Anthropic, NVIDIA):</p>
           <ul>
             <li>Select the provider from the dropdown</li>
@@ -1660,14 +1703,14 @@
             <li>Keys are stored securely in VS Code's secret storage</li>
           </ul>
           <div class="tutorial-tip">
-            <strong>💡 Free Options:</strong>
+            <strong>Free Options:</strong>
             <span>Ollama (local, free), Groq (fast, free tier), OpenRouter (free models available)</span>
           </div>
         </div>
 
         <div class="tutorial-footer">
           <button class="tutorial-btn" id="tutorial-later">Remind Me Later</button>
-          <button class="tutorial-btn primary" id="tutorial-start">Let's Start Coding! 🚀</button>
+          <button class="tutorial-btn primary" id="tutorial-start">Let's Start Coding!</button>
         </div>
       </div>
     </div>
@@ -1690,7 +1733,7 @@
         </div>
         <div class="welcome-grid">
           <div class="welcome-card">
-            <h4>🎯 Core Features</h4>
+            <h4>Core Features</h4>
             <ul>
               <li>Code formatting & linting (Python, JS, Java, C/C++, HTML, CSS)</li>
               <li>AI-powered syntax repair with safety checks</li>
@@ -1699,7 +1742,7 @@
             </ul>
           </div>
           <div class="welcome-card">
-            <h4>⚡ Quick Actions</h4>
+            <h4>Quick Actions</h4>
             <ul>
               <li>Auto-correction while typing</li>
               <li>Real-time syntax checking</li>
@@ -1719,7 +1762,7 @@
         </div>
         <div class="welcome-grid">
           <div class="welcome-card">
-            <h4>🚀 AI Features</h4>
+            <h4>AI Features</h4>
             <ul>
               <li>Syntax checking for JS, TS, Python, Java, C/C++</li>
               <li>Code generation and refactoring</li>
@@ -1728,7 +1771,7 @@
             </ul>
           </div>
           <div class="welcome-card">
-            <h4>⌨️ Keybindings</h4>
+            <h4>Keybindings</h4>
             <ul>
               <li class="welcome-key"><span>Format Code</span><kbd>Alt + D</kbd></li>
               <li class="welcome-key"><span>Lint Code</span><kbd>Alt + L</kbd></li>
@@ -1747,9 +1790,9 @@
       </div>
       
       <div class="welcome-actions">
-        <button class="welcome-btn" id="welcome-prev" style="display:none;">← Previous</button>
+        <button class="welcome-btn" id="welcome-prev" style="display:none;">Previous</button>
         <button class="welcome-btn" id="welcome-later">Show Later</button>
-        <button class="welcome-btn primary" id="welcome-next">Next →</button>
+        <button class="welcome-btn primary" id="welcome-next">Next</button>
         <button class="welcome-btn primary" id="welcome-ok" style="display:none;">Let's go!</button>
       </div>
     </div>
@@ -1761,6 +1804,12 @@
         <div id="header-brand">
           <div id="header-title">Code Janitor AI</div>
           <div id="header-sub">Ollama</div>
+          <div id="session-controls">
+            <select id="session-select" title="Chat sessions">
+              <option value="">Loading chats...</option>
+            </select>
+            <button class="pill-btn" id="btn-new-chat" title="New chat">New</button>
+          </div>
         </div>
         <div id="connectivity-status" class="checking" title="Checking internet connectivity...">
           <span class="connectivity-dot pulse"></span>
@@ -1768,20 +1817,20 @@
         </div>
       </div>
       <div id="header-controls">
-        <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">🎓 Tutorial</button>
+        <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">Tutorial</button>
         <button class="pill-btn" id="btn-deep" title="Deep mode">
           Deep
         </button>
         <button class="pill-btn" id="btn-think" title="Show reasoning summary">
           Think
         </button>
-        <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">🔊</button>
+        <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">TTS</button>
         <select id="provider-select" title="AI Provider">
-          <option value="ollama">🖥 Ollama (local)</option>
-          <option value="groq">⚡ Groq (cloud)</option>
-          <option value="openrouter">🌐 OpenRouter</option>
-          <option value="anthropic">🤖 Anthropic (Claude)</option>
-          <option value="nvidia">🚀 NVIDIA NIM</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="groq">Groq (cloud)</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="nvidia">NVIDIA NIM</option>
         </select>
         <button class="pill-btn" id="provider-add-btn" title="Add a custom provider">Add New</button>
         <select id="model-select" title="Switch model">
@@ -1813,7 +1862,7 @@
             <h3>Add Custom Provider</h3>
             <p>Add an OpenAI-compatible chat provider with its base URL, model, and API key. It will appear in the provider dropdown immediately.</p>
           </div>
-          <button class="provider-dialog-close" id="custom-provider-close" title="Close">×</button>
+          <button class="provider-dialog-close" id="custom-provider-close" title="Close">x</button>
         </div>
         <div class="provider-form-grid">
           <div class="provider-form-field">
@@ -1856,31 +1905,31 @@
 
     <div id="action-bar">
       <button id="actions-dropdown-btn">
-        <span>⚡ Quick Actions</span>
-        <span id="dropdown-arrow">▼</span>
+        <span>Quick Actions</span>
+        <span id="dropdown-arrow">v</span>
       </button>
       <div id="actions-dropdown-menu">
-        <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
-        <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
-        <div class="action-chip" data-action="graphify">📊 Graphify</div>
-        <div class="action-chip" data-action="quickfix">🔧 Quick Fix</div>
-        <div class="action-chip" data-action="explain">💡 Explain file</div>
-        <div class="action-chip" data-action="fix">🔧 Fix issues</div>
-        <div class="action-chip" data-action="refactor">♻️ Refactor</div>
-        <div class="action-chip" data-action="tests">🧪 Generate tests</div>
-        <div class="action-chip" data-action="docs">📝 Add docs</div>
-        <div class="action-chip" data-action="git">📋 Git status</div>
+        <div class="action-chip" data-action="syntax">Check syntax</div>
+        <div class="action-chip" data-action="scan">Scan codebase</div>
+        <div class="action-chip" data-action="graphify">Graphify</div>
+        <div class="action-chip" data-action="quickfix">Quick Fix</div>
+        <div class="action-chip" data-action="explain">Explain file</div>
+        <div class="action-chip" data-action="fix">Fix issues</div>
+        <div class="action-chip" data-action="refactor">Refactor</div>
+        <div class="action-chip" data-action="tests">Generate tests</div>
+        <div class="action-chip" data-action="docs">Add docs</div>
+        <div class="action-chip" data-action="git">Git status</div>
       </div>
     </div>
 
     <div id="search-bar">
       <div id="search-row">
         <select id="search-engine" title="Search engine">
-          <option value="web">🌐 Web</option>
-          <option value="youtube">▶️ YouTube</option>
+          <option value="web">Web</option>
+          <option value="youtube">YouTube</option>
         </select>
-        <input id="search-input" type="text" placeholder="🌐 Search the web..." />
-        <button id="search-btn">🔍 Search</button>
+        <input id="search-input" type="text" placeholder="Search the web..." />
+        <button id="search-btn">Search</button>
       </div>
     </div>
 
@@ -1902,8 +1951,8 @@
     <div id="input-area">
       <div id="input-row">
         <button id="mic-btn" title="Voice input (click to start/stop recording)">
-          🎤
-          <span id="mic-permission-badge" style="display: none;">🔒</span>
+          Mic
+          <span id="mic-permission-badge" style="display: none;">Lock</span>
         </button>
         <textarea
           id="input"
@@ -1914,7 +1963,7 @@
         <button id="stop-btn">Stop</button>
       </div>
       <div id="input-hint">
-        Enter to send &nbsp;·&nbsp; Shift+Enter for new line &nbsp;·&nbsp; /scan
+        Enter to send &nbsp;?&nbsp; Shift+Enter for new line &nbsp;?&nbsp; /scan
         /fast /heavy
       </div>
     </div>
@@ -1933,6 +1982,8 @@
       var btnDeep = document.getElementById("btn-deep");
       var btnThink = document.getElementById("btn-think");
       var btnClear = document.getElementById("btn-clear");
+      var btnNewChat = document.getElementById("btn-new-chat");
+      var sessionSelect = document.getElementById("session-select");
       var btnTts = document.getElementById("btn-tts");
       var inputHint = document.getElementById("input-hint");
       var providerSelect = document.getElementById("provider-select");
@@ -1991,11 +2042,11 @@
       }
 
       var builtInProviderMeta = {
-        ollama: { id: "ollama", label: "🖥 Ollama (local)", requiresKey: false, models: [] },
-        groq: { id: "groq", label: "⚡ Groq (cloud)", requiresKey: true, apiKeyLink: "https://console.groq.com/keys", models: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"] },
-        openrouter: { id: "openrouter", label: "🌐 OpenRouter", requiresKey: true, apiKeyLink: "https://openrouter.ai/keys", models: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"] },
-        anthropic: { id: "anthropic", label: "🤖 Anthropic (Claude)", requiresKey: true, apiKeyLink: "https://console.anthropic.com/settings/keys", models: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"] },
-        nvidia: { id: "nvidia", label: "🚀 NVIDIA NIM", requiresKey: true, apiKeyLink: "https://build.nvidia.com/explore/discover", models: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"] }
+        ollama: { id: "ollama", label: "Ollama (local)", requiresKey: false, models: [] },
+        groq: { id: "groq", label: "Groq (cloud)", requiresKey: true, apiKeyLink: "https://console.groq.com/keys", models: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"] },
+        openrouter: { id: "openrouter", label: "OpenRouter", requiresKey: true, apiKeyLink: "https://openrouter.ai/keys", models: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"] },
+        anthropic: { id: "anthropic", label: "Anthropic (Claude)", requiresKey: true, apiKeyLink: "https://console.anthropic.com/settings/keys", models: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"] },
+        nvidia: { id: "nvidia", label: "NVIDIA NIM", requiresKey: true, apiKeyLink: "https://build.nvidia.com/explore/discover", models: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"] }
       };
       var customProviderMeta = {};
       var currentKeyPresence = {
@@ -2020,7 +2071,7 @@
         Object.keys(customProviderMeta).forEach(function(providerId) {
           var opt = document.createElement("option");
           opt.value = providerId;
-          opt.textContent = "✨ " + (customProviderMeta[providerId].name || providerId.replace(/^custom:/, ""));
+          opt.textContent = "Custom: " + (customProviderMeta[providerId].name || providerId.replace(/^custom:/, ""));
           providerSelect.appendChild(opt);
         });
         if (selectedProvider) providerSelect.value = selectedProvider;
@@ -2070,8 +2121,7 @@
         if (models && models.length) {
           populateModels(models);
         } else if (meta && meta.models && meta.models.length) {
-          if (provider === "nvidia" && hasKey) showNoModels("Loading models...");
-          else if (hasKey || !needsKey) populateModels(meta.models);
+          if (hasKey || !needsKey) populateModels(meta.models);
           else showNoModels("Save an API key to see models");
         } else if (provider === "ollama") {
           showNoModels("Loading models...");
@@ -2107,8 +2157,7 @@
         showKeySaved();
         currentKeyPresence[p] = true;
         var meta = getProviderMeta(p);
-        if (p === "nvidia") showNoModels("Loading models...");
-        else if (meta && meta.models && meta.models.length) populateModels(meta.models);
+        if (meta && meta.models && meta.models.length) populateModels(meta.models);
         addRow("API key saved for " + p + ".", "status");
       };
 
@@ -2157,6 +2206,8 @@
       };
       var currentMessage = null;
       var chatMode = "fast";
+      var currentSessionId = "";
+      var suppressSessionEvents = false;
       var activityEmptyMessage = "No activity yet. Start a task to see the agent workflow.";
 
       function resetActivity() {
@@ -2184,13 +2235,13 @@
       }
 
       function activityIcon(kind) {
-        if (kind === "success") return "✓";
+        if (kind === "success") return "OK";
         if (kind === "error") return "!";
         if (kind === "warn") return "!";
         if (kind === "command") return ">";
         if (kind === "edit") return "~";
         if (kind === "scan") return "#";
-        return "·";
+        return "?";
       }
 
       function addActivity(text, kind) {
@@ -2231,13 +2282,38 @@
         vscode.postMessage({ type: "openChatCommand" });
       };
 
-      // ── Helpers ──────────────────────────────────────────────
+      // Helpers
 
       function escapeHtml(t) {
         return t
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function unescapeHtml(t) {
+        var textarea = document.createElement('textarea');
+        textarea.innerHTML = t;
+        return textarea.value;
+      }
+
+      function parseMarkdown(text) {
+        text = unescapeHtml(text);
+        text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        text = text.replace(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g, '<em>$1</em>');
+        text = text.replace(/(?<!_)_(?!_)([^_]+)_(?!_)/g, '<em>$1</em>');
+        text = text.replace(/`([^`]+)`/g, '<code style="background: rgba(88, 166, 255, 0.12); padding: 2px 6px; border-radius: 4px; font-family: Fira Code, monospace; font-size: 0.9em; color: #9ecbff;">$1</code>');
+        text = text.replace(/~~([^~]+)~~/g, '<del style="opacity: 0.7;">$1</del>');
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: var(--accent); text-decoration: underline;">$1</a>');
+        text = text.replace(/^### (.+)$/gm, '<h3 style="font-size: 1.1em; font-weight: 600; margin: 12px 0 6px 0; color: var(--text);">$1</h3>');
+        text = text.replace(/^## (.+)$/gm, '<h2 style="font-size: 1.2em; font-weight: 600; margin: 14px 0 8px 0; color: var(--text);">$1</h2>');
+        text = text.replace(/^# (.+)$/gm, '<h1 style="font-size: 1.3em; font-weight: 700; margin: 16px 0 10px 0; color: var(--text);">$1</h1>');
+        text = text.replace(/^[\-\*] (.+)$/gm, '<li style="margin-left: 20px; list-style-type: disc;">$1</li>');
+        text = text.replace(/^> (.+)$/gm, '<blockquote style="border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--muted); font-style: italic;">$1</blockquote>');
+        return text;
       }
 
       function copyText(text, btn) {
@@ -2625,7 +2701,37 @@
         wrap.appendChild(errorMsg);
       }
 
-      function renderContent(text) {
+      function extractAssistantSections(text) {
+        var normalized = String(text || "").replace(/\r\n/g, "\n").trim();
+        if (!normalized) return null;
+
+        var match = normalized.match(/^(?:(?:#{1,6}\s*)|\*\*)?Thinking(?:\*\*)?\s*:?\s*\n([\s\S]*?)\n(?:(?:#{1,6}\s*)|\*\*)?Answer(?:\*\*)?\s*:?\s*\n([\s\S]*)$/i);
+        if (!match) return null;
+
+        return {
+          thinking: (match[1] || "").trim(),
+          answer: (match[2] || "").trim()
+        };
+      }
+
+      function renderSection(title, body, className) {
+        var section = document.createElement("div");
+        section.className = "assistant-section " + className;
+
+        var heading = document.createElement("div");
+        heading.className = "assistant-section-title";
+        heading.textContent = title;
+
+        var content = document.createElement("div");
+        content.className = "assistant-section-body";
+        content.appendChild(renderRichContent(body));
+
+        section.appendChild(heading);
+        section.appendChild(content);
+        return section;
+      }
+
+      function renderRichContent(text) {
         var container = document.createElement("div");
         var segments = [];
         var remaining = text;
@@ -2730,7 +2836,9 @@
             }
             var sp = document.createElement("span");
             sp.style.whiteSpace = "pre-wrap";
-            sp.innerHTML = escapeHtml(line)
+            var processedLine = escapeHtml(line);
+            processedLine = parseMarkdown(processedLine);
+            processedLine = processedLine
               .replace(
                 /(error[^\n]*?line\s*\d+)/gi,
                 "<span style='color:#fca5a5;background:#450a0a;padding:1px 4px;border-radius:3px;'>$1</span>",
@@ -2740,12 +2848,28 @@
                 "<span style='color:#fbbf24;'>$1</span>",
               )
               .replace(/(\u2705|\u274c)/g, "<span>$1</span>");
+            sp.innerHTML = processedLine;
             container.appendChild(sp);
             if (i < lines.length - 1)
               container.appendChild(document.createElement("br"));
           }
         }
         return container;
+      }
+
+      function renderContent(text) {
+        var sections = extractAssistantSections(text);
+        if (!sections) {
+          return renderRichContent(text);
+        }
+
+        var wrap = document.createElement("div");
+        wrap.className = "assistant-sections";
+        if (sections.thinking) {
+          wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking"));
+        }
+        wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
+        return wrap;
       }
 
       function addRow(content, type) {
@@ -2811,6 +2935,59 @@
         return row;
       }
 
+      function populateSessions(sessions, selectedId) {
+        suppressSessionEvents = true;
+        sessionSelect.innerHTML = "";
+
+        if (!Array.isArray(sessions) || sessions.length === 0) {
+          var emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "New Chat 1";
+          sessionSelect.appendChild(emptyOpt);
+          currentSessionId = "";
+          suppressSessionEvents = false;
+          return;
+        }
+
+        sessions.forEach(function(session, index) {
+          var opt = document.createElement("option");
+          opt.value = session.id;
+          var label = session.title || ("Chat " + (index + 1));
+          if (session.compactedCount > 0) {
+            label += " ? compacted";
+          }
+          opt.textContent = label;
+          if (session.id === selectedId) {
+            opt.selected = true;
+          }
+          sessionSelect.appendChild(opt);
+        });
+
+        currentSessionId = selectedId || sessionSelect.value || "";
+        suppressSessionEvents = false;
+      }
+
+      function restoreConversation(history) {
+        chat.innerHTML = "";
+        currentMessage = null;
+
+        if (!Array.isArray(history) || history.length === 0) {
+          addRow("Ready. Select a model above, pick an action chip, or just ask.", "status");
+          return;
+        }
+
+        history.forEach(function(entry) {
+          if (!entry || typeof entry.content !== "string") return;
+          if (entry.role === "user") {
+            addRow(entry.content, "user");
+          } else if (entry.role === "assistant") {
+            addRow(entry.content, "ai");
+          }
+        });
+
+        chat.scrollTop = chat.scrollHeight;
+      }
+
       function setInputState(busy) {
         sendBtn.style.display = busy ? "none" : "inline-block";
         stopBtn.style.display = busy ? "inline-block" : "none";
@@ -2833,7 +3010,7 @@
           : "Show reasoning summary";
       }
 
-      // ── Send ─────────────────────────────────────────────────
+      // Send
 
       function sendMessage(text) {
         try {
@@ -2876,7 +3053,7 @@
         }
       }
 
-      // ── Events ───────────────────────────────────────────────
+      // Events
 
       sendBtn.onclick = function () {
         sendMessage();
@@ -2914,6 +3091,16 @@
         resetActivity();
         addRow("Conversation cleared.", "status");
       };
+      btnNewChat.onclick = function () {
+        vscode.postMessage({ type: "createSession" });
+      };
+      sessionSelect.onchange = function () {
+        if (suppressSessionEvents) return;
+        var nextSessionId = sessionSelect.value;
+        if (!nextSessionId || nextSessionId === currentSessionId) return;
+        currentSessionId = nextSessionId;
+        vscode.postMessage({ type: "switchSession", sessionId: nextSessionId });
+      };
 
       modelSelect.onchange = function () {
         vscode.postMessage({ type: "setModel", model: modelSelect.value });
@@ -2930,7 +3117,7 @@
         var libraryChip = document.createElement("div");
         libraryChip.className = "action-chip";
         libraryChip.dataset.action = "libraries";
-        libraryChip.textContent = "📚 Check libraries";
+        libraryChip.textContent = "Check libraries";
         var scanChip = actionsDropdownMenu.querySelector('[data-action="scan"]');
         if (scanChip) {
           actionsDropdownMenu.insertBefore(libraryChip, scanChip);
@@ -2943,7 +3130,7 @@
         e.stopPropagation();
         var isOpen = actionsDropdownMenu.classList.toggle("open");
         actionsDropdownBtn.classList.toggle("open", isOpen);
-        dropdownArrow.textContent = isOpen ? "▲" : "▼";
+        dropdownArrow.textContent = isOpen ? "^" : "v";
       };
 
       // Close dropdown when clicking outside
@@ -2951,7 +3138,7 @@
         if (!actionsDropdownBtn.contains(e.target) && !actionsDropdownMenu.contains(e.target)) {
           actionsDropdownMenu.classList.remove("open");
           actionsDropdownBtn.classList.remove("open");
-          dropdownArrow.textContent = "▼";
+          dropdownArrow.textContent = "v";
         }
       });
 
@@ -2964,7 +3151,7 @@
           // Close dropdown after selection
           actionsDropdownMenu.classList.remove("open");
           actionsDropdownBtn.classList.remove("open");
-          dropdownArrow.textContent = "▼";
+          dropdownArrow.textContent = "v";
           // Syntax/scan chips run directly without the model
           if (action === "syntax") {
             vscode.postMessage({ type: "syntaxScan", activeOnly: true });
@@ -3015,7 +3202,7 @@
         }
       });
 
-      // ── Messages from extension ───────────────────────────────
+      // Messages from extension
 
       window.addEventListener("message", function (event) {
         var msg = event.data;
@@ -3126,6 +3313,9 @@
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
           addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
+        } else if (msg.type === "sessionState") {
+          populateSessions(msg.sessions, msg.currentSessionId);
+          restoreConversation(msg.history);
         } else if (msg.type === "setCurrentProvider") {
           if (msg.providers && msg.providers.length) {
             customProviderMeta = {};
@@ -3280,9 +3470,9 @@
       // Update search placeholder based on engine
       searchEngine.onchange = function() {
         if (searchEngine.value === "youtube") {
-          searchInput.placeholder = "▶️ Search YouTube videos...";
+          searchInput.placeholder = "Search YouTube videos...";
         } else {
-          searchInput.placeholder = "🌐 Search the web...";
+          searchInput.placeholder = "Search the web...";
         }
       };
 
@@ -3351,22 +3541,22 @@
         var msg = event.data;
         if (msg.type === "searchComplete") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "Search";
           hideProgress();
           addActivity("Search completed", "success");
         } else if (msg.type === "searchError") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "Search";
           hideProgress();
           addActivity("Search failed: " + msg.error, "error");
         } else if (msg.type === "youtubeComplete") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "Search";
           hideProgress();
           addActivity("YouTube search completed", "success");
         } else if (msg.type === "youtubeError") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "🔍 Search";
+          searchBtn.textContent = "Search";
           hideProgress();
           addActivity("YouTube search failed: " + msg.error, "error");
         }
@@ -3425,12 +3615,12 @@
         btnTts.classList.toggle('active', ttsEnabled);
         
         if (ttsEnabled) {
-          btnTts.textContent = '🔊 TTS';
-          addRow('✅ Text-to-speech enabled. AI responses will be read aloud.', 'status');
+          btnTts.textContent = 'TTS On';
+          addRow('Text-to-speech enabled. AI responses will be read aloud.', 'status');
           addActivity('TTS enabled', 'success');
         } else {
-          btnTts.textContent = '🔇 TTS';
-          addRow('🔇 Text-to-speech disabled.', 'status');
+          btnTts.textContent = 'Mute';
+          addRow('Text-to-speech disabled.', 'status');
           addActivity('TTS disabled', 'info');
           // Stop any ongoing speech
           if (currentUtterance) {
@@ -3521,7 +3711,7 @@
           isRecording = true;
           micBtn.classList.add('recording');
           micBtn.title = 'Recording... Click to stop';
-          addRow('✅ Microphone access granted! Speak now...', 'status');
+          addRow('Microphone access granted! Speak now...', 'status');
           addActivity('Voice recording started', 'success');
         };
 
@@ -3571,15 +3761,15 @@
         
         if (state === 'granted') {
           micPermissionBadge.classList.add('granted');
-          micPermissionBadge.textContent = '🔓';
+          micPermissionBadge.textContent = 'Mic';
           micPermissionBadge.title = 'Microphone access granted';
         } else if (state === 'denied') {
           micPermissionBadge.classList.add('denied');
-          micPermissionBadge.textContent = '🔒';
+          micPermissionBadge.textContent = 'Lock';
           micPermissionBadge.title = 'Microphone access denied - Click lock icon in address bar';
         } else if (state === 'prompt') {
           micPermissionBadge.classList.add('prompt');
-          micPermissionBadge.textContent = '❓';
+          micPermissionBadge.textContent = '?';
           micPermissionBadge.title = 'Click to request microphone access';
         }
       }
@@ -3597,10 +3787,10 @@
             result.onchange = function() {
               updateMicPermissionBadge(result.state);
               if (result.state === 'granted') {
-                addRow('✅ Microphone access granted!', 'status');
+                addRow('Microphone access granted!', 'status');
                 addActivity('Microphone permission granted', 'success');
               } else if (result.state === 'denied') {
-                addRow('🔒 Microphone access denied. Click the lock icon (🔒) in your browser address bar to allow access.', 'status');
+                addRow('Microphone access denied. Click the lock icon in your browser address bar to allow access.', 'status');
                 addActivity('Microphone permission denied', 'error');
               }
             };
@@ -3626,7 +3816,7 @@
 
         // Request microphone permission first using getUserMedia
         updateMicPermissionBadge('prompt');
-        addRow('🎤 Requesting microphone access... Please allow when prompted.', 'status');
+        addRow('Requesting microphone access... Please allow when prompted.', 'status');
         addActivity('Requesting microphone permission', 'info');
 
         navigator.mediaDevices.getUserMedia({ audio: true })
@@ -3658,21 +3848,21 @@
             console.error('[STT] Microphone permission denied:', error);
             updateMicPermissionBadge('denied');
             
-            var errorMsg = '🎤 Microphone access denied.';
+            var errorMsg = 'Microphone access denied.';
             
             if (error.name === 'NotFoundError') {
-              errorMsg = '❌ No microphone found. Please connect a microphone and try again.';
+              errorMsg = 'No microphone found. Please connect a microphone and try again.';
             } else if (error.name === 'NotAllowedError') {
-              errorMsg = '🔒 Microphone access denied.\n\n' +
+              errorMsg = 'Microphone access denied.\n\n' +
                         'To allow microphone access:\n' +
-                        '1. Look for the 🔒 lock icon in your browser\'s address bar (top-left corner)\n' +
+                        '1. Look for the lock icon in your browser\'s address bar (top-left corner)\n' +
                         '2. Click it and find "Microphone" in the dropdown\n' +
                         '3. Change it to "Allow"\n' +
                         '4. Reload this page (F5)\n' +
-                        '5. Click the 🎤 button again\n\n' +
+                        '5. Click the microphone button again\n\n' +
                         'The lock icon is in the address bar where you see: vscode-webview://...';
             } else if (error.name === 'NotReadableError') {
-              errorMsg = '⚠️ Microphone is in use by another application. Close other apps using the microphone and try again.';
+              errorMsg = 'Microphone is in use by another application. Close other apps using the microphone and try again.';
             }
             
             addRow(errorMsg, 'status');
