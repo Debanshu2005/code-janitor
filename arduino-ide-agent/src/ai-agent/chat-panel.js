@@ -1865,11 +1865,16 @@ ${mermaidCode}
   _summarizePlannedActions(actions, insideActions, outsideFiles) {
     const fileSummaries = [];
     for (const { action, result } of insideActions) {
+      if (action.type === "patch") {
+        fileSummaries.push(`patch ${action.path}`);
+        continue;
+      }
       if (action.type !== "file" || !result?.success) continue;
       fileSummaries.push(`${result.created ? "add" : "edit"} ${action.path}`);
     }
     for (const { action } of outsideFiles) {
       if (action.type === "file") fileSummaries.push(`edit ${action.path}`);
+      if (action.type === "patch") fileSummaries.push(`patch ${action.path}`);
       if (action.type === "mkdir") fileSummaries.push(`mkdir ${action.path}`);
     }
 
@@ -1883,6 +1888,69 @@ ${mermaidCode}
       parts.push(`Commands: ${cmdCount}`);
     }
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
+  }
+
+  _resolveActionFilePath(workspaceFolder, filePath) {
+    const targetPath = String(filePath || "").trim();
+    if (!targetPath) {
+      return "";
+    }
+    if (!workspaceFolder) {
+      return path.resolve(targetPath);
+    }
+    return path.isAbsolute(targetPath)
+      ? path.resolve(targetPath)
+      : path.resolve(workspaceFolder, targetPath);
+  }
+
+  _buildPatchedContent(currentContent, searchContent, replaceContent) {
+    const source = String(currentContent || "");
+    const search = String(searchContent || "");
+    const replace = String(replaceContent || "");
+
+    if (!search) {
+      return { matched: false, reason: "empty_search" };
+    }
+
+    if (source.includes(search)) {
+      return {
+        matched: true,
+        content: source.replace(search, replace)
+      };
+    }
+
+    const normalizeLineEndings = (text) => text.replace(/\r\n/g, "\n");
+    const currentUnix = normalizeLineEndings(source);
+    const searchUnix = normalizeLineEndings(search);
+    const replaceUnix = normalizeLineEndings(replace);
+    const prefersCrlf = source.includes("\r\n");
+
+    if (currentUnix.includes(searchUnix)) {
+      let content = currentUnix.replace(searchUnix, replaceUnix);
+      if (prefersCrlf) {
+        content = content.replace(/\n/g, "\r\n");
+      }
+      return { matched: true, content };
+    }
+
+    const normalizeWhitespace = (text) => text.replace(/\s+/g, " ").trim();
+    const normalizedCurrent = normalizeWhitespace(source);
+    const normalizedSearch = normalizeWhitespace(search);
+
+    if (!normalizedSearch || !normalizedCurrent.includes(normalizedSearch)) {
+      return { matched: false, reason: "search_not_found" };
+    }
+
+    const whitespaceAwarePattern = new RegExp(
+      search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
+    );
+    const content = source.replace(whitespaceAwarePattern, () => replace);
+
+    if (content === source) {
+      return { matched: false, reason: "search_not_found" };
+    }
+
+    return { matched: true, content };
   }
 
   _readWorkspaceScripts(workspaceFolder) {
@@ -2512,14 +2580,17 @@ ${trimmedText}`;
         if (response.actions && response.actions.length > 0) {
           const hasFileAction = response.actions.some(
             (action) =>
-              action.type === "file" &&
+              (action.type === "file" &&
               typeof action.content === "string" &&
-              action.content.trim().length > 0
+              action.content.trim().length > 0) ||
+              (action.type === "patch" &&
+              typeof action.search === "string" &&
+              typeof action.replace === "string")
           );
           if (isEditLikeIntent && !hasFileAction) {
             this.panel.webview.postMessage({
               type: "status",
-              text: "Blocked execution: edit requests must include at least one FILE action."
+              text: "Blocked execution: edit requests must include at least one PATCH or FILE action."
             });
             this.panel.webview.postMessage({
               type: "error",
@@ -2559,6 +2630,64 @@ ${trimmedText}`;
                       : `\u2705 Opened draft ${result.path}`
                     : result.error
                 });
+              } else if (action.type === "patch") {
+                const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+                const activeFileName = activeEditor?.document?.fileName || "";
+                const activeNormalized = activeFileName
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetNormalized = String(action.path || "")
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetBaseName = path.basename(targetNormalized);
+                const canPatchOpenFile =
+                  !!activeEditor &&
+                  !!activeEditor.document &&
+                  (wantsActiveFileEdit ||
+                    !targetNormalized ||
+                    activeNormalized === targetNormalized ||
+                    activeNormalized.endsWith(`/${targetNormalized}`) ||
+                    path.basename(activeNormalized) === targetBaseName);
+
+                if (!canPatchOpenFile) {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text: `Cannot patch ${action.path}: open the target file or use a workspace so PATCH actions can be applied.`
+                  });
+                  continue;
+                }
+
+                const patchResult = this._buildPatchedContent(
+                  activeEditor.document.getText(),
+                  action.search,
+                  action.replace
+                );
+                if (!patchResult.matched) {
+                  this.panel.webview.postMessage({
+                    type: "error",
+                    text:
+                      patchResult.reason === "empty_search"
+                        ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                        : `Cannot patch ${action.path}: SEARCH content not found in the open file.`
+                  });
+                  continue;
+                }
+
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: `Applying patch to open file: ${path.basename(activeFileName || action.path)}`
+                });
+                const result = await this._applyToEditor(
+                  activeEditor,
+                  patchResult.content
+                );
+                this.panel.webview.postMessage({
+                  type: result.success ? "applied" : "error",
+                  filePath: result.success ? result.path : undefined,
+                  text: result.success
+                    ? `\u2705 Patched open file ${result.relativePath || result.path}`
+                    : result.error
+                });
               } else if (action.type === "mkdir") {
                 this.panel.webview.postMessage({
                   type: "status",
@@ -2586,11 +2715,26 @@ ${trimmedText}`;
           const insideActions = [];
           const fileActionPaths = new Set(
             response.actions
-              .filter((a) => a.type === "file" && a.path)
+              .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
               .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
           );
           for (const action of response.actions) {
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
+              );
+              const relativePath = workspaceFolder
+                ? path.relative(workspaceFolder, fullPath)
+                : action.path;
+              const isOutside = relativePath.startsWith("..") || path.isAbsolute(relativePath);
+
+              if (isOutside) {
+                outsideFiles.push({ action, path: fullPath });
+              } else {
+                insideActions.push({ action, result: null });
+              }
+            } else if (action.type === "file") {
               const probe = await this.agent.applyChanges(
                 action.path,
                 action.content,
@@ -2662,7 +2806,76 @@ ${trimmedText}`;
             if (stopFurtherActions) {
               break;
             }
-            if (action.type === "file") {
+            if (action.type === "patch") {
+              if (outside && !allowOutside) {
+                this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+
+              this.panel.webview.postMessage({ type: "status", text: `Applying patch to: ${action.path}` });
+
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
+              );
+              let currentContent = "";
+              try {
+                currentContent = await fs.promises.readFile(fullPath, "utf8");
+              } catch (err) {
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text: `Cannot patch ${action.path}: file not found or unreadable`
+                });
+                continue;
+              }
+
+              const patchResult = this._buildPatchedContent(
+                currentContent,
+                action.search,
+                action.replace
+              );
+              if (!patchResult.matched) {
+                const lines = currentContent.split('\n');
+                const preview = lines.slice(0, 10).join('\n');
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text:
+                    patchResult.reason === "empty_search"
+                      ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                      : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${(action.search || "").substring(0, 200)}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
+                });
+                continue;
+              }
+
+              const result = await this.agent.applyChanges(
+                action.path,
+                patchResult.content,
+                outside,
+                writeOptions
+              );
+
+              this.panel.webview.postMessage({
+                type: result.success ? "applied" : "error",
+                filePath: result.success ? result.path : undefined,
+                text: result.success
+                  ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
+                  : result.error
+              });
+              if (result.success && !outside) {
+                changedFiles.push(result.relativePath || action.path);
+                await this._revealWorkspaceFile(result.path);
+              }
+              if (result.success && result.syntaxCheckCmd) {
+                const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
+                const ok = checkResult.success && !(checkResult.output || "").trim();
+                this.panel.webview.postMessage({
+                  type: "status",
+                  text: ok
+                    ? `\u2705 No syntax errors in ${result.relativePath}`
+                    : `\u274c Syntax issues in ${result.relativePath}:\n${checkResult.error || checkResult.output || ""}`
+                });
+              }
+            } else if (action.type === "file") {
               if (outside && !allowOutside) {
                 this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;

@@ -17,6 +17,8 @@ const {
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
+const MAX_EDIT_TARGET_SNIPPET = 6_000;
+const MAX_FAST_EDIT_ACTIVE_FILE_CHARS = 4_000;
 const MAX_RELEVANT_FILES = 3;
 const MAX_OPEN_TAB_SNIPPETS = 1;
 const MAX_HISTORY_ENTRIES = 3;
@@ -1688,9 +1690,12 @@ class AIAgent {
     let prompt;
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...");
+      const intent = earlyIntent;
       const activeFileContext = this._getActiveFileContext(
         effectiveWorkspace,
-        1_200
+        intent === "edit" || intent === "debug" || intent === "refactor"
+          ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS
+          : 1_200
       );
       const editorState = this._getEditorState(effectiveWorkspace);
       let fastContext = "";
@@ -1715,7 +1720,6 @@ class AIAgent {
         );
       }
       const history = this._buildPromptHistoryContext(false);
-      const intent = earlyIntent;
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
@@ -1738,7 +1742,7 @@ class AIAgent {
       const activeCtx = isCreateIntent ? "" : activeFileContext;
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nOutput the complete updated file using FILE: path then a code block."
+          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context and use a larger unique anchor when needed. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
       const fastKnowledgeGraph = knowledgeGraphContext;
       prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
@@ -1786,7 +1790,9 @@ ${resolvedMessage}`;
       const openTabSnippetContext = isScopedActiveFileEdit
         ? this._getTargetSnippetContext(
             editableTargets.paths,
-            effectiveWorkspace
+            effectiveWorkspace,
+            MAX_RELEVANT_FILES,
+            MAX_EDIT_TARGET_SNIPPET
           )
         : this._getOpenTabSnippetContext(
             editorState.allOpenTabs,
@@ -1914,9 +1920,15 @@ ${resolvedMessage}`;
       );
       let assistantText = finalText;
       let firstRetryText = "";
+      const shouldAllowClarification = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      );
 
       if (
         requiresFileActions &&
+        !shouldAllowClarification &&
         !this._hasRequiredActions(
           finalIntent,
           userMessage,
@@ -1985,9 +1997,16 @@ ${resolvedMessage}`;
         assistantText = firstRetryText;
       }
 
+      const shouldAllowClarificationAfterRetry = this._isClarificationResponse(
+        assistantText,
+        finalIntent,
+        userMessage
+      );
+
       if (
         requiresFileActions &&
-        !this._hasFileActions(parsedResponse.actions) &&
+        !shouldAllowClarificationAfterRetry &&
+        !this._hasEditActions(parsedResponse.actions) &&
         !abortSignal?.aborted
       ) {
         reportStatus?.("Retrying with FILE-only format for safe edits...");
@@ -2050,7 +2069,11 @@ ${resolvedMessage}`;
         parsedResponse = this._parseResponse(assistantText);
       }
 
-      if (requiresFileActions && !this._hasFileActions(parsedResponse.actions)) {
+      if (
+        requiresFileActions &&
+        !this._isClarificationResponse(assistantText, finalIntent, userMessage) &&
+        !this._hasEditActions(parsedResponse.actions)
+      ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change.";
         this._appendConversationEntry("assistant", assistantText || noEditsMessage);
@@ -2386,7 +2409,8 @@ ${resolvedMessage}`;
   _getTargetSnippetContext(
     targetPaths,
     workspaceFolder,
-    maxSnippets = MAX_RELEVANT_FILES
+    maxSnippets = MAX_RELEVANT_FILES,
+    maxChars = MAX_FILE_SNIPPET
   ) {
     if (!Array.isArray(targetPaths) || targetPaths.length === 0) {
       return "";
@@ -2412,7 +2436,7 @@ ${resolvedMessage}`;
           "Editable target content",
           openDocument,
           workspaceFolder,
-          MAX_FILE_SNIPPET
+          maxChars
         );
       } else {
         const fileData = this.codebaseContext.get(targetPath);
@@ -2422,7 +2446,7 @@ ${resolvedMessage}`;
 
         snippet = `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
           0,
-          MAX_FILE_SNIPPET
+          maxChars
         )}\n\`\`\``;
       }
 
@@ -2606,11 +2630,11 @@ ${resolvedMessage}`;
 
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
     const thinkingInstruction = showThinking
-      ? "\n\nIMPORTANT: Before the final answer, include a short visible reasoning summary titled \"Thinking\" with 3-6 concise bullets that explain your approach, tradeoffs, or checks. Keep it brief and useful. Then provide the final answer under a heading titled \"Answer\". Do not expose hidden internal chain-of-thought or long private reasoning."
+      ? "\n\nIMPORTANT: Structure your reply in exactly two top-level sections when possible: a heading titled \"Thinking\" with 3-6 concise bullets summarizing approach, tradeoffs, or checks, followed by a heading titled \"Answer\" for the final response. Keep the Thinking section brief and useful. Do not expose hidden internal chain-of-thought or long private reasoning."
       : "";
     const base =
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)";
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" + thinkingInstruction;
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      thinkingInstruction;
     const compactRules = [
       "Operational rules (fast):",
       "- Be concise and correct.",
@@ -2638,6 +2662,7 @@ ${resolvedMessage}`;
       "- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.",
       "- When the user asks for a flowchart, sequence diagram, class diagram, state diagram, ER diagram, gantt chart, or architecture visualization, respond with a valid fenced ```mermaid block first, then add a short explanation after it.",
       "- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.",
+      "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
       "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
@@ -2873,28 +2898,62 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
 
-For SMALL, TARGETED changes (single function, few lines), use PATCH format:
+**CRITICAL: Choose the right edit format:**
+
+**Use PATCH by default for PRECISE edits to existing files:**
+- Single function or block modification
+- Localized bug fix
+- Small-to-medium targeted refactor in one area
+- Adding/removing an import or dependency line
+- Updating config values, JSON entries, markup blocks, or a contained section
+
+PATCH format:
 PATCH: <exact file path>
 SEARCH:
 \`\`\`
-(exact code to find - must match EXACTLY including whitespace)
+(exact code to find - copy it EXACTLY from the provided file context)
 \`\`\`
 REPLACE:
 \`\`\`
 (new code to replace with)
 \`\`\`
 
-For LARGE changes (multiple functions, structural changes, new files), use FILE format:
+PATCH guidance:
+- Prefer a unique SEARCH anchor, usually 3-12 surrounding lines.
+- It is okay for a PATCH to replace a larger block when needed; do not artificially keep it under 20 lines.
+- If the edit touches one localized region, PATCH is usually still the right choice even when the replacement is 40-80 lines.
+- Preserve surrounding formatting and unrelated logic.
+
+**Use FILE for BROAD rewrites:**
+- Creating new files
+- Multiple functions changed
+- Structural reorganization
+- Changes across multiple sections
+- Whole-file rewrites
+- Cases where an exact PATCH would be brittle or ambiguous
+- User asks for complete rewrite
+
+FILE format:
 FILE: <exact file path>
 \`\`\`
 (COMPLETE file content - EVERY line from start to finish)
 \`\`\`
 
-Prefer PATCH for focused edits. Use FILE only when:
-- Creating new files
-- Making changes across multiple sections
-- Restructuring file organization
-- User explicitly asks for complete rewrite
+**Example PATCH usage:**
+User: "Fix the typo in the greeting function"
+PATCH: src/app.js
+SEARCH:
+\`\`\`
+function greet(name) {
+  return \`Hello, \${nmae}!\`;
+}
+\`\`\`
+REPLACE:
+\`\`\`
+function greet(name) {
+  return \`Hello, \${name}!\`;
+}
+\`\`\`
 
 You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
 MKDIR: folder/subfolder
@@ -2927,10 +2986,13 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
   }
 
   _shouldForceStructuredEdit(intent, userMessage) {
-    if (intent === "create" || intent === "edit") return true;
+    // Only force structured edits when user explicitly asks to change files
+    if (intent === "create") return true;
+    if (intent === "edit" && this._isEditRequest(userMessage)) return true;
     if (
       (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage)
+      this._isEditRequest(userMessage) &&
+      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
     ) {
       return true;
     }
@@ -2942,7 +3004,9 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
 Return ONLY executable actions now.
 
 Rules:
-- If the user asked you to change code/files, include at least one FILE: action with complete file content.
+- If the user asked you to change code/files, include at least one PATCH: or FILE: action.
+- Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
+- Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
@@ -2977,6 +3041,64 @@ ${(rawResponse || "").slice(0, 4000)}
 \`\`\``;
   }
 
+  _isClarificationResponse(responseText, intent, userMessage) {
+    if (!this._shouldForceStructuredEdit(intent, userMessage)) {
+      return false;
+    }
+
+    const text = String(responseText || "").trim();
+    if (!text) {
+      return false;
+    }
+
+    if (this._hasMeaningfulActions(this._parseResponse(text).actions)) {
+      return false;
+    }
+
+    const lower = text.toLowerCase();
+    const asksQuestion = text.includes("?");
+    const clarificationPatterns = [
+      /\b(can you|could you|would you|please)\s+(clarify|share|provide|confirm|specify)\b/i,
+      /\bwhich\s+(file|files|path|paths|part|function|component|version)\b/i,
+      /\bwhat\s+(exactly|should|do you want|file|path|part)\b/i,
+      /\bdo you want me to\b/i,
+      /\bshould i\b/i,
+      /\bi need\b.*\b(file|path|details|context|clarification|requirement|requirements)\b/i,
+      /\bmissing\b.*\b(file|path|detail|details|context|requirement|requirements)\b/i,
+      /\bplease provide\b.*\b(file|path|details|context|requirement|requirements)\b/i,
+      /\bnot enough\b.*\b(context|information|detail|details)\b/i
+    ];
+
+    const soundsLikeClarification = clarificationPatterns.some((pattern) =>
+      pattern.test(text)
+    );
+
+    const refusalPatterns = [
+      /\bi cannot\b/i,
+      /\bi can'?t\b/i,
+      /\bas an ai\b/i,
+      /\bi'm unable\b/i,
+      /\bi do not have access\b/i
+    ];
+    const looksLikeRefusal = refusalPatterns.some((pattern) =>
+      pattern.test(lower)
+    );
+
+    return soundsLikeClarification && asksQuestion && !looksLikeRefusal;
+  }
+
+  _hasPatchActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || action.type !== "patch") return false;
+      return (
+        typeof action.search === "string" &&
+        action.search.length > 0 &&
+        typeof action.replace === "string"
+      );
+    });
+  }
+
   _hasFileActions(actions) {
     if (!Array.isArray(actions) || actions.length === 0) return false;
     return actions.some((action) => {
@@ -2985,13 +3107,17 @@ ${(rawResponse || "").slice(0, 4000)}
     });
   }
 
+  _hasEditActions(actions) {
+    return this._hasPatchActions(actions) || this._hasFileActions(actions);
+  }
+
   _hasRequiredActions(intent, userMessage, actions) {
     if (!this._hasMeaningfulActions(actions)) {
       return false;
     }
 
     if (this._shouldForceStructuredEdit(intent, userMessage)) {
-      return this._hasFileActions(actions);
+      return this._hasEditActions(actions);
     }
 
     return true;
@@ -3004,6 +3130,13 @@ ${(rawResponse || "").slice(0, 4000)}
 
     return actions.some((action) => {
       if (!action) return false;
+      if (action.type === "patch") {
+        return (
+          typeof action.search === "string" &&
+          action.search.length > 0 &&
+          typeof action.replace === "string"
+        );
+      }
       if (action.type === "file") {
         return (
           typeof action.content === "string" && action.content.trim().length > 0
@@ -3584,7 +3717,10 @@ ${(rawResponse || "").slice(0, 4000)}
         this.showThinking
       );
     const isCreateIntent = intent === "create";
-    const MAX_PROMPT_CHARS = 12_000;
+    const MAX_PROMPT_CHARS =
+      intent === "edit" || intent === "debug" || intent === "refactor"
+        ? 18_000
+        : 12_000;
 
     let context = "";
     if (!isCreateIntent) {
@@ -3680,7 +3816,7 @@ ${userMessage}`;
     };
 
     // Match PATCH: actions for targeted edits
-    const patchRegex = /PATCH:\s*([^\n`]+)\nSEARCH:\s*\n```[\w]*\n?([\s\S]*?)```\s*\nREPLACE:\s*\n```[\w]*\n?([\s\S]*?)```/g;
+    const patchRegex = /PATCH:\s*([^\r\n`]+)\r?\nSEARCH:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```\s*\r?\nREPLACE:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     let match;
     while ((match = patchRegex.exec(response)) !== null) {
       const pathInfo = normalizeActionPath(match[1]);
@@ -3707,7 +3843,7 @@ ${userMessage}`;
     }
 
     // Match FILE: with flexible code block format
-    const fileRegex = /FILE:\s*([^\n`]+)\n```[\w]*\n?([\s\S]*?)```/g;
+    const fileRegex = /FILE:\s*([^\r\n`]+)\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     while ((match = fileRegex.exec(response)) !== null) {
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
@@ -3734,7 +3870,7 @@ ${userMessage}`;
     // Fallback: also try matching FILE: followed by content without code fences
     if (actions.length === 0) {
       const looseFIleRegex =
-        /FILE:\s*([^\n`]+)\n([\s\S]*?)(?=\n(?:FILE|File|MKDIR|CMD):|$)/g;
+        /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|MKDIR|CMD):|$)/g;
       while ((match = looseFIleRegex.exec(response)) !== null) {
         const pathInfo = normalizeActionPath(match[1]);
         const normalizedPath = pathInfo.path;
@@ -3874,7 +4010,7 @@ ${userMessage}`;
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
-      /\bformat\b/
+      /^format(?:\s|$)/
     ];
 
     if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
@@ -3901,6 +4037,8 @@ ${userMessage}`;
       "dir",
       "cat ",
       "type ",
+      "get-content ",
+      "gc ",
       "head ",
       "tail ",
       "echo ",
@@ -3910,6 +4048,10 @@ ${userMessage}`;
       "find ",
       "which ",
       "where ",
+      "get-childitem ",
+      "gci ",
+      "select-string ",
+      "sls ",
       "npm install",
       "npm i",
       "npm run",
@@ -3956,6 +4098,8 @@ ${userMessage}`;
       "python -m pylint",
       "python -m pytest",
       "python -m unittest",
+      "pip list",
+      "pip3 list",
       "python ",
       "python3 -m py_compile",
       "python3 -m flake8",

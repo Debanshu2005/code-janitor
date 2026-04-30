@@ -734,6 +734,40 @@
         border: 1px solid var(--border);
         box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
       }
+      .assistant-sections {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .assistant-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .assistant-section.thinking {
+        padding: 10px 12px;
+        border: 1px solid rgba(88, 166, 255, 0.28);
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 0.04));
+      }
+      .assistant-section.answer {
+        padding-top: 2px;
+      }
+      .assistant-section-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .assistant-section.thinking .assistant-section-title {
+        color: #9ecbff;
+      }
+      .assistant-section-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
       .bubble.user {
         background: rgba(24, 34, 48, 0.9);
         border: 1px solid var(--border);
@@ -2667,7 +2701,37 @@
         wrap.appendChild(errorMsg);
       }
 
-      function renderContent(text) {
+      function extractAssistantSections(text) {
+        var normalized = String(text || "").replace(/\r\n/g, "\n").trim();
+        if (!normalized) return null;
+
+        var match = normalized.match(/^(?:(?:#{1,6}\s*)|\*\*)?Thinking(?:\*\*)?\s*:?\s*\n([\s\S]*?)\n(?:(?:#{1,6}\s*)|\*\*)?Answer(?:\*\*)?\s*:?\s*\n([\s\S]*)$/i);
+        if (!match) return null;
+
+        return {
+          thinking: (match[1] || "").trim(),
+          answer: (match[2] || "").trim()
+        };
+      }
+
+      function renderSection(title, body, className) {
+        var section = document.createElement("div");
+        section.className = "assistant-section " + className;
+
+        var heading = document.createElement("div");
+        heading.className = "assistant-section-title";
+        heading.textContent = title;
+
+        var content = document.createElement("div");
+        content.className = "assistant-section-body";
+        content.appendChild(renderRichContent(body));
+
+        section.appendChild(heading);
+        section.appendChild(content);
+        return section;
+      }
+
+      function renderRichContent(text) {
         var container = document.createElement("div");
         var segments = [];
         var remaining = text;
@@ -2791,6 +2855,21 @@
           }
         }
         return container;
+      }
+
+      function renderContent(text) {
+        var sections = extractAssistantSections(text);
+        if (!sections) {
+          return renderRichContent(text);
+        }
+
+        var wrap = document.createElement("div");
+        wrap.className = "assistant-sections";
+        if (sections.thinking) {
+          wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking"));
+        }
+        wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
+        return wrap;
       }
 
       function addRow(content, type) {
