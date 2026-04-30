@@ -1705,6 +1705,84 @@ ${document.getText()}
     );
   }
 
+  _isMermaidRequest(message) {
+    const text = message || "";
+    return /\b(mermaid|flowchart|sequence diagram|class diagram|er diagram|gantt|state diagram|diagram)\b/i.test(text) &&
+      /\b(generate|create|make|draw|show|render|build|produce|give me)\b/i.test(text);
+  }
+
+  _showMermaidPreview(title, mermaidCode) {
+    const panel = vscode.window.createWebviewPanel(
+      "codeJanitorMermaid",
+      `Diagram: ${title}`,
+      vscode.ViewColumn.Beside,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    const escaped = mermaidCode
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { margin: 0; background: #1e1e1e; color: #d4d4d4; font-family: "Segoe UI", sans-serif; }
+    #toolbar { padding: 8px 14px; background: #252526; border-bottom: 1px solid #3c3c3c; display: flex; align-items: center; gap: 10px; }
+    #toolbar span { font-size: 12px; color: #9d9d9d; }
+    button { padding: 4px 12px; background: #0e639c; color: #fff; border: none; border-radius: 3px; font-size: 11px; cursor: pointer; }
+    button:hover { background: #1177bb; }
+    #diagram { padding: 24px; display: flex; justify-content: center; min-height: calc(100vh - 42px); }
+    .mermaid { background: #fff; border-radius: 8px; padding: 24px; max-width: 100%; }
+    #error { display: none; padding: 16px; background: #5a1d1d; color: #f48771; border-radius: 6px; margin: 16px; font-size: 12px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <span>${title}</span>
+    <button onclick="copyCode()">Copy Code</button>
+    <button onclick="downloadSvg()">Download SVG</button>
+  </div>
+  <div id="error"></div>
+  <div id="diagram"><div class="mermaid">${escaped}</div></div>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+    window.addEventListener("DOMContentLoaded", async () => {
+      try {
+        await mermaid.run({ nodes: document.querySelectorAll(".mermaid") });
+      } catch (e) {
+        const err = document.getElementById("error");
+        err.style.display = "block";
+        err.textContent = "Render error: " + e.message;
+      }
+    });
+    window.copyCode = () => navigator.clipboard.writeText(${JSON.stringify(mermaidCode)});
+    window.downloadSvg = () => {
+      const svg = document.querySelector(".mermaid svg");
+      if (!svg) return;
+      const blob = new Blob([svg.outerHTML], { type: "image/svg+xml" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "diagram.svg";
+      a.click();
+    };
+  </script>
+</body>
+</html>`;
+    return panel;
+  }
+
+  _extractMermaidCode(text) {
+    // Extract from ```mermaid ... ``` block
+    const fenced = text.match(/```mermaid\s*\n([\s\S]*?)```/);
+    if (fenced) return fenced[1].trim();
+    // Extract from ``` ... ``` if it starts with a mermaid keyword
+    const generic = text.match(/```[\w]*\s*\n((?:graph|flowchart|sequenceDiagram|classDiagram|erDiagram|gantt|stateDiagram|pie|gitGraph)[\s\S]*?)```/);
+    if (generic) return generic[1].trim();
+    return null;
+  }
+
   _isSyntaxQuestion(message) {
     const text = message || "";
     return (
@@ -2361,6 +2439,34 @@ ${trimmedText}`;
           return;
         }
 
+        if (this._isMermaidRequest(trimmedText)) {
+          this._postMessage({ type: "thinking" });
+          this._postMessage({ type: "status", text: "Generating diagram..." });
+          const runtimeConfig = await this._getEffectiveAiConfig();
+          const activeEditor = this._getCurrentFileEditor();
+          const fileContext = activeEditor
+            ? `\n\nActive file: ${path.basename(activeEditor.document.fileName)}\n\`\`\`\n${activeEditor.document.getText().slice(0, 4000)}\n\`\`\``
+            : "";
+          const mermaidPrompt = `${trimmedText}${fileContext}\n\nReturn ONLY a mermaid code block. No explanations outside the code block.`;
+          const mermaidResponse = await this.agent.chat(
+            mermaidPrompt,
+            workspaceFolder,
+            (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
+            this.abortController?.signal,
+            { mode: "fast", runtimeConfig, onStatus: (text) => { this._postMessage({ type: "status", text }); } }
+          );
+          this._postMessage({ type: "done" });
+          if (!mermaidResponse.error) {
+            const code = this._extractMermaidCode(mermaidResponse.text || "");
+            if (code) {
+              const diagramTitle = path.basename(activeEditor?.document?.fileName || "diagram");
+              this._showMermaidPreview(diagramTitle, code);
+              this._postMessage({ type: "status", text: "✅ Diagram opened in preview panel." });
+            }
+          }
+          return;
+        }
+
         if (this._isSyntaxQuestion(trimmedText)) {
           const activeOnly = /\b(active|current|open|this)\s+(file|tab|editor)\b/i.test(trimmedText) ||
             !/\b(workspace|repo|repository|project|codebase|all files|entire project)\b/i.test(trimmedText);
@@ -2761,6 +2867,10 @@ ${trimmedText}`;
             } else if (action.type === "graphify") {
               console.log("[ChatPanel] Executing graphify action");
               
+              // Skip any file actions that came with this graphify response
+              // (AI sometimes tries to write GRAPH_REPORT.md which triggers doc guard)
+              stopFurtherActions = false;
+
               // Check if workspace is open
               if (!workspaceFolder) {
                 this._postMessage({
@@ -2786,6 +2896,8 @@ ${trimmedText}`;
                   text: `Failed to open Graphify: ${err.message}\n\nStack: ${err.stack}`
                 });
               }
+              // Skip remaining actions — graphify is self-contained
+              break;
             } else if (action.type === "lint") {
               this._postMessage({ type: "status", text: "Running Code Janitor lint on the active file..." });
               try {
