@@ -63,4 +63,16 @@ describe("Arduino AIAgent structured edit parsing", () => {
       replace: "new line\r\n"
     })
   })
+
+  test("prefers source files over generated copies when matching path hints", () => {
+    const agent = new AIAgent()
+    agent.codebaseContext = new Map([
+      ["src/ai-agent/chat-panel.html", {}],
+      [".tmp-vsix-100/extension/src/ai-agent/chat-panel.html", {}]
+    ])
+
+    expect(agent._matchPathsFromHints(["src/ai-agent/chat-panel.html"])).toEqual([
+      "src/ai-agent/chat-panel.html"
+    ])
+  })
 })

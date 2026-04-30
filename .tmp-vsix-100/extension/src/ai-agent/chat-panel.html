@@ -44,6 +44,39 @@ T<!DOCTYPE html>
       #header {
         padding: 10px 14px;
         background: rgba(15, 20, 27, 0.94);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      #undo-button {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 4px 8px;
+        cursor: pointer;
+        transition: background 0.1s;
+        font-size: 12px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      #undo-button:hover {
+        background: var(--panel-3);
+      }
+
+      #undo-button:active {
+        background: var(--panel);
+      }
+
+      #undo-button svg {
+        width: 16px;
+        height: 16px;
+        margin-right: 4px;
+      }
         border-bottom: 1px solid var(--border);
         display: flex;
         align-items: center;

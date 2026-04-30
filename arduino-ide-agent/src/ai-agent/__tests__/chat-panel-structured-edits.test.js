@@ -47,4 +47,20 @@ describe("Arduino ChatPanel structured edit helpers", () => {
 
     expect(summary).toContain("patch src/example.ino")
   })
+
+  test("rejects ambiguous PATCH searches that match multiple locations", () => {
+    const panel = Object.create(ChatPanel.prototype)
+
+    const result = panel._buildPatchedContent(
+      "const value = 1;\nconst value = 1;\n",
+      "const value = 1;\n",
+      "const value = 2;\n"
+    )
+
+    expect(result).toMatchObject({
+      matched: false,
+      reason: "ambiguous_search",
+      matchCount: 2
+    })
+  })
 })

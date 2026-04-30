@@ -50,6 +50,22 @@ describe("ChatPanel structured edit helpers", () => {
     expect(result.content).toContain("return name.trim();");
   });
 
+  test("rejects ambiguous PATCH searches that match multiple locations", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    const result = panel._buildPatchedContent(
+      "const value = 1;\nconst value = 1;\n",
+      "const value = 1;\n",
+      "const value = 2;\n"
+    );
+
+    expect(result).toMatchObject({
+      matched: false,
+      reason: "ambiguous_search",
+      matchCount: 2
+    });
+  });
+
   test("planned action summary includes patch actions", () => {
     const panel = Object.create(ChatPanel.prototype);
 

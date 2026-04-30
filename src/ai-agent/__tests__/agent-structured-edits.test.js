@@ -85,6 +85,18 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("prefers source files over generated copies when matching path hints", () => {
+    const agent = new AIAgent();
+    agent.codebaseContext = new Map([
+      ["src/ai-agent/chat-panel.html", {}],
+      [".tmp-vsix-100/extension/src/ai-agent/chat-panel.html", {}]
+    ]);
+
+    expect(agent._matchPathsFromHints(["src/ai-agent/chat-panel.html"])).toEqual([
+      "src/ai-agent/chat-panel.html"
+    ]);
+  });
+
   test("allows internal list commands with --format flags but still blocks chained commands", () => {
     const agent = new AIAgent();
 

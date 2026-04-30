@@ -1742,7 +1742,7 @@ class AIAgent {
       const activeCtx = isCreateIntent ? "" : activeFileContext;
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context and use a larger unique anchor when needed. Use FILE only when the change spans broad sections or PATCH would be brittle."
+          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
       const fastKnowledgeGraph = knowledgeGraphContext;
       prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
@@ -2920,9 +2920,12 @@ REPLACE:
 
 PATCH guidance:
 - Prefer a unique SEARCH anchor, usually 3-12 surrounding lines.
+- Make SEARCH the smallest exact block that is still unique in the target file.
+- If the same SEARCH appears multiple times, expand it until only one match remains.
 - It is okay for a PATCH to replace a larger block when needed; do not artificially keep it under 20 lines.
 - If the edit touches one localized region, PATCH is usually still the right choice even when the replacement is 40-80 lines.
 - Preserve surrounding formatting and unrelated logic.
+- Prefer the editable source file over generated or packaged copies when both exist.
 
 **Use FILE for BROAD rewrites:**
 - Creating new files
@@ -3016,6 +3019,8 @@ Rules:
 - Do not describe what to click in VS Code.
 - Use exact file paths.
 - If multiple files are needed, output multiple action blocks.
+- For PATCH actions, copy SEARCH exactly from the provided file context and make it unique within that file.
+- Prefer source files over generated copies such as \`.tmp-vsix-*\`, \`dist/\`, \`build/\`, or \`out/\` unless the user explicitly asks for those artifacts.
 
 Previous invalid reply:
 \`\`\`
@@ -3295,12 +3300,40 @@ ${(rawResponse || "").slice(0, 4000)}
     );
   }
 
+  _isGeneratedArtifactPath(filePath) {
+    const normalizedPath = String(filePath || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+    return (
+      normalizedPath.includes("/dist/") ||
+      normalizedPath.includes("/build/") ||
+      normalizedPath.includes("/out/") ||
+      normalizedPath.startsWith("dist/") ||
+      normalizedPath.startsWith("build/") ||
+      normalizedPath.startsWith("out/") ||
+      normalizedPath.includes("/.tmp-vsix-") ||
+      normalizedPath.startsWith(".tmp-vsix-")
+    );
+  }
+
+  _preferSourcePathMatches(paths) {
+    if (!Array.isArray(paths) || paths.length <= 1) {
+      return Array.isArray(paths) ? paths : [];
+    }
+
+    const sourceLike = paths.filter(
+      (candidate) => !this._isGeneratedArtifactPath(candidate)
+    );
+    return sourceLike.length > 0 ? sourceLike : paths;
+  }
+
   _matchPathsFromHints(pathHints) {
     const matches = new Set();
 
     for (const hint of pathHints) {
       const normalizedHint = hint.replace(/\\/g, "/").toLowerCase();
       const hintedBaseName = path.basename(normalizedHint);
+      const hintMatches = [];
 
       for (const relativePath of this.codebaseContext.keys()) {
         const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();
@@ -3311,8 +3344,12 @@ ${(rawResponse || "").slice(0, 4000)}
           normalizedPath.endsWith(`/${normalizedHint}`) ||
           baseName === hintedBaseName
         ) {
-          matches.add(relativePath.replace(/\\/g, "/"));
+          hintMatches.push(relativePath.replace(/\\/g, "/"));
         }
+      }
+
+      for (const candidate of this._preferSourcePathMatches(hintMatches)) {
+        matches.add(candidate);
       }
     }
 

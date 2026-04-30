@@ -1907,12 +1907,30 @@ ${mermaidCode}
     const source = String(currentContent || "");
     const search = String(searchContent || "");
     const replace = String(replaceContent || "");
+    const countOccurrences = (haystack, needle) => {
+      if (!needle) return 0;
+      let count = 0;
+      let index = 0;
+      while ((index = haystack.indexOf(needle, index)) !== -1) {
+        count += 1;
+        index += Math.max(needle.length, 1);
+      }
+      return count;
+    };
 
     if (!search) {
       return { matched: false, reason: "empty_search" };
     }
 
     if (source.includes(search)) {
+      const exactMatchCount = countOccurrences(source, search);
+      if (exactMatchCount !== 1) {
+        return {
+          matched: false,
+          reason: "ambiguous_search",
+          matchCount: exactMatchCount
+        };
+      }
       return {
         matched: true,
         content: source.replace(search, replace)
@@ -1926,6 +1944,14 @@ ${mermaidCode}
     const prefersCrlf = source.includes("\r\n");
 
     if (currentUnix.includes(searchUnix)) {
+      const normalizedMatchCount = countOccurrences(currentUnix, searchUnix);
+      if (normalizedMatchCount !== 1) {
+        return {
+          matched: false,
+          reason: "ambiguous_search",
+          matchCount: normalizedMatchCount
+        };
+      }
       let content = currentUnix.replace(searchUnix, replaceUnix);
       if (prefersCrlf) {
         content = content.replace(/\n/g, "\r\n");
@@ -1944,6 +1970,20 @@ ${mermaidCode}
     const whitespaceAwarePattern = new RegExp(
       search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
     );
+    const whitespaceAwareMatches =
+      source.match(
+        new RegExp(
+          search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"),
+          "g"
+        )
+      ) || [];
+    if (whitespaceAwareMatches.length !== 1) {
+      return {
+        matched: false,
+        reason: "ambiguous_search",
+        matchCount: whitespaceAwareMatches.length
+      };
+    }
     const content = source.replace(whitespaceAwarePattern, () => replace);
 
     if (content === source) {
@@ -2382,7 +2422,7 @@ ${trimmedText}`;
         const trimmedText = (message.text || "").trim();
         const intent = this.agent._detectIntent(trimmedText);
         const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
-        const hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
+        let hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
         const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
         const hasExplicitDestructiveWriteIntent =
           /\b(delete|remove|clear|empty|truncate|wipe|blank\s*out)\b/i.test(trimmedText);
@@ -2461,75 +2501,93 @@ ${trimmedText}`;
           return;
         }
 
-        this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-        if (workspaceFolder && (this.chatMode === "heavy" || this.chatMode === "deep" || intent === "scan")) {
-          const forcePrep = intent === "scan";
-          this.panel.webview.postMessage({ type: "status", text: "Studying workspace before responding..." });
-          const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
+        const directStructuredResponse = this.agent._parseResponse(trimmedText);
+        const hasDirectStructuredActions =
+          Array.isArray(directStructuredResponse.actions) &&
+          directStructuredResponse.actions.length > 0;
+        if (
+          hasDirectStructuredActions &&
+          directStructuredResponse.actions.some((action) => action.type === "cmd")
+        ) {
+          hasExplicitCommandRequest = true;
+        }
+
+        let response = directStructuredResponse;
+        let streamedText = "";
+        if (hasDirectStructuredActions) {
           this.panel.webview.postMessage({
             type: "status",
-            text: prep.cacheHit
-              ? `Reused cached workspace context: ${prep.indexedFiles} indexed file(s).`
-              : `Studied workspace: indexed ${prep.indexedFiles} file(s).`
+            text: "Executing structured actions from chat input..."
           });
-          if (prep.activeFile) {
+        } else {
+          this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
+          if (workspaceFolder && (this.chatMode === "heavy" || this.chatMode === "deep" || intent === "scan")) {
+            const forcePrep = intent === "scan";
+            this.panel.webview.postMessage({ type: "status", text: "Studying workspace before responding..." });
+            const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
             this.panel.webview.postMessage({
               type: "status",
-              text: `Active file in focus: ${prep.activeFile}`
+              text: prep.cacheHit
+                ? `Reused cached workspace context: ${prep.indexedFiles} indexed file(s).`
+                : `Studied workspace: indexed ${prep.indexedFiles} file(s).`
             });
-          }
-          if (prep.relevantFiles.length > 0) {
-            this.panel.webview.postMessage({
-              type: "status",
-              text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
-            });
-          }
-        }
-        this.panel.webview.postMessage({ type: "thinking" });
-        this.abortController = new AbortController();
-
-        let response;
-        let streamedText = "";
-        try {
-          // Verify config before making request
-          const currentConfig = this.agent.getConfig();
-          console.log(`[CodeJanitor] Chat request - Provider: ${currentConfig.provider}, Model: ${currentConfig.model}`);
-          console.log(`[CodeJanitor] API Keys present - Groq: ${!!currentConfig.groqApiKey}, OpenRouter: ${!!currentConfig.openrouterApiKey}, Anthropic: ${!!currentConfig.anthropicApiKey}, NVIDIA: ${!!currentConfig.nvidiaApiKey}`);
-          
-          // Check if provider needs API key and if it's present
-          if (currentConfig.provider === "groq" && !currentConfig.groqApiKey) {
-            throw new Error("Groq API key is missing. Please save your API key in the chat panel.");
-          }
-          if (currentConfig.provider === "openrouter" && !currentConfig.openrouterApiKey) {
-            throw new Error("OpenRouter API key is missing. Please save your API key in the chat panel.");
-          }
-          if (currentConfig.provider === "anthropic" && !currentConfig.anthropicApiKey) {
-            throw new Error("Anthropic API key is missing. Please save your API key in the chat panel.");
-          }
-          if (currentConfig.provider === "nvidia" && !currentConfig.nvidiaApiKey) {
-            throw new Error("NVIDIA API key is missing. Please save your API key in the chat panel.");
-          }
-          
-          response = await this.agent.chat(
-            trimmedText,
-            workspaceFolder,
-            (chunk) => {
-              streamedText += chunk || "";
-              this.panel.webview.postMessage({ type: "stream", text: chunk });
-            },
-            this.abortController.signal,
-            {
-              mode: this.chatMode,
-              onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
+            if (prep.activeFile) {
+              this.panel.webview.postMessage({
+                type: "status",
+                text: `Active file in focus: ${prep.activeFile}`
+              });
             }
-          );
-        } catch (err) {
-          this.panel.webview.postMessage({ type: "error", text: `AI error: ${err.message}` });
-          this.panel.webview.postMessage({ type: "done" });
-          this._postSessionState();
-          return;
-        } finally {
-          this.abortController = null;
+            if (prep.relevantFiles.length > 0) {
+              this.panel.webview.postMessage({
+                type: "status",
+                text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
+              });
+            }
+          }
+          this.panel.webview.postMessage({ type: "thinking" });
+          this.abortController = new AbortController();
+
+          try {
+            // Verify config before making request
+            const currentConfig = this.agent.getConfig();
+            console.log(`[CodeJanitor] Chat request - Provider: ${currentConfig.provider}, Model: ${currentConfig.model}`);
+            console.log(`[CodeJanitor] API Keys present - Groq: ${!!currentConfig.groqApiKey}, OpenRouter: ${!!currentConfig.openrouterApiKey}, Anthropic: ${!!currentConfig.anthropicApiKey}, NVIDIA: ${!!currentConfig.nvidiaApiKey}`);
+            
+            // Check if provider needs API key and if it's present
+            if (currentConfig.provider === "groq" && !currentConfig.groqApiKey) {
+              throw new Error("Groq API key is missing. Please save your API key in the chat panel.");
+            }
+            if (currentConfig.provider === "openrouter" && !currentConfig.openrouterApiKey) {
+              throw new Error("OpenRouter API key is missing. Please save your API key in the chat panel.");
+            }
+            if (currentConfig.provider === "anthropic" && !currentConfig.anthropicApiKey) {
+              throw new Error("Anthropic API key is missing. Please save your API key in the chat panel.");
+            }
+            if (currentConfig.provider === "nvidia" && !currentConfig.nvidiaApiKey) {
+              throw new Error("NVIDIA API key is missing. Please save your API key in the chat panel.");
+            }
+            
+            response = await this.agent.chat(
+              trimmedText,
+              workspaceFolder,
+              (chunk) => {
+                streamedText += chunk || "";
+                this.panel.webview.postMessage({ type: "stream", text: chunk });
+              },
+              this.abortController.signal,
+              {
+                mode: this.chatMode,
+                onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
+              }
+            );
+          } catch (err) {
+            this.panel.webview.postMessage({ type: "error", text: `AI error: ${err.message}` });
+            this.panel.webview.postMessage({ type: "done" });
+            this._postSessionState();
+            return;
+          } finally {
+            this.abortController = null;
+          }
         }
 
         if (response.error) {
@@ -2663,13 +2721,15 @@ ${trimmedText}`;
                   action.replace
                 );
                 if (!patchResult.matched) {
-                  this.panel.webview.postMessage({
-                    type: "error",
-                    text:
-                      patchResult.reason === "empty_search"
-                        ? `Cannot patch ${action.path}: SEARCH block is empty.`
-                        : `Cannot patch ${action.path}: SEARCH content not found in the open file.`
-                  });
+                this.panel.webview.postMessage({
+                  type: "error",
+                  text:
+                    patchResult.reason === "empty_search"
+                      ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                      : patchResult.reason === "ambiguous_search"
+                        ? `Cannot patch ${action.path}: SEARCH matched ${patchResult.matchCount || "multiple"} locations. Make the SEARCH block more specific so it matches exactly once.`
+                      : `Cannot patch ${action.path}: SEARCH content not found in the open file.`
+                });
                   continue;
                 }
 
@@ -2842,6 +2902,8 @@ ${trimmedText}`;
                   text:
                     patchResult.reason === "empty_search"
                       ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                      : patchResult.reason === "ambiguous_search"
+                        ? `Cannot patch ${action.path}: SEARCH matched ${patchResult.matchCount || "multiple"} locations. Make the SEARCH block more specific so it matches exactly once.`
                       : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${(action.search || "").substring(0, 200)}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
                 });
                 continue;

@@ -1771,6 +1771,8 @@ Rules:
 - Prefer exactly one PATCH action for ${action.path}.
 - Copy SEARCH text exactly from the current file content below.
 - Use a larger unique SEARCH anchor, usually 3-12 surrounding lines and up to about 80 replacement lines when needed.
+- If the previous SEARCH was too small or matched multiple locations, expand it until it is unique in the file.
+- Prefer the editable source file over generated copies when both exist.
 - If an exact PATCH would still be brittle, return exactly one FILE action for ${action.path} with the complete updated file content.
 - Do not output explanations, CMD, or MKDIR.
 
@@ -1940,12 +1942,30 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     const source = String(currentContent || "");
     const search = String(searchContent || "");
     const replace = String(replaceContent || "");
+    const countOccurrences = (haystack, needle) => {
+      if (!needle) return 0;
+      let count = 0;
+      let index = 0;
+      while ((index = haystack.indexOf(needle, index)) !== -1) {
+        count += 1;
+        index += Math.max(needle.length, 1);
+      }
+      return count;
+    };
 
     if (!search) {
       return { matched: false, reason: "empty_search" };
     }
 
     if (source.includes(search)) {
+      const exactMatchCount = countOccurrences(source, search);
+      if (exactMatchCount !== 1) {
+        return {
+          matched: false,
+          reason: "ambiguous_search",
+          matchCount: exactMatchCount
+        };
+      }
       return {
         matched: true,
         content: source.replace(search, replace)
@@ -1959,6 +1979,14 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     const prefersCrlf = source.includes("\r\n");
 
     if (currentUnix.includes(searchUnix)) {
+      const normalizedMatchCount = countOccurrences(currentUnix, searchUnix);
+      if (normalizedMatchCount !== 1) {
+        return {
+          matched: false,
+          reason: "ambiguous_search",
+          matchCount: normalizedMatchCount
+        };
+      }
       let content = currentUnix.replace(searchUnix, replaceUnix);
       if (prefersCrlf) {
         content = content.replace(/\n/g, "\r\n");
@@ -1977,6 +2005,20 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     const whitespaceAwarePattern = new RegExp(
       search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
     );
+    const whitespaceAwareMatches =
+      source.match(
+        new RegExp(
+          search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"),
+          "g"
+        )
+      ) || [];
+    if (whitespaceAwareMatches.length !== 1) {
+      return {
+        matched: false,
+        reason: "ambiguous_search",
+        matchCount: whitespaceAwareMatches.length
+      };
+    }
     const content = source.replace(whitespaceAwarePattern, () => replace);
 
     if (content === source) {
@@ -2773,7 +2815,7 @@ ${trimmedText}`;
           const trimmedText = (message.text || "").trim();
         const intent = this.agent._detectIntent(trimmedText);
         const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
-        const hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
+        let hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
         const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
         const hasExplicitDestructiveWriteIntent =
           /\b(delete|remove|clear|empty|truncate|wipe|blank\s*out)\b/i.test(trimmedText);
@@ -2905,109 +2947,127 @@ ${trimmedText}`;
           return;
         }
 
-        this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-        if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText)) {
-          const forcePrep =
-            this.chatMode === "heavy" ||
-            this.chatMode === "deep" ||
-            intent === "scan";
-          this._postMessage({ type: "status", text: "Studying workspace before responding..." });
-          const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
+        const directStructuredResponse = this.agent._parseResponse(trimmedText);
+        const hasDirectStructuredActions =
+          Array.isArray(directStructuredResponse.actions) &&
+          directStructuredResponse.actions.length > 0;
+        if (
+          hasDirectStructuredActions &&
+          directStructuredResponse.actions.some((action) => action.type === "cmd")
+        ) {
+          hasExplicitCommandRequest = true;
+        }
+
+        let response = directStructuredResponse;
+        if (hasDirectStructuredActions) {
           this._postMessage({
             type: "status",
-            text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
+            text: "Executing structured actions from chat input..."
           });
-          if (prep.activeFile) {
+        } else {
+          this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
+          if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText)) {
+            const forcePrep =
+              this.chatMode === "heavy" ||
+              this.chatMode === "deep" ||
+              intent === "scan";
+            this._postMessage({ type: "status", text: "Studying workspace before responding..." });
+            const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
             this._postMessage({
               type: "status",
-              text: `Active file in focus: ${prep.activeFile}`
+              text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
             });
-          }
-          if (prep.relevantFiles.length > 0) {
-            this._postMessage({
-              type: "status",
-              text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
-            });
-          }
-          if (["edit", "debug", "refactor"].includes(intent)) {
-            const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
-            if (gitStatus.success) {
+            if (prep.activeFile) {
               this._postMessage({
                 type: "status",
-                text: this._summarizeGitStatus(gitStatus.output)
+                text: `Active file in focus: ${prep.activeFile}`
               });
             }
-          }
-        }
-        this._postMessage({ type: "thinking" });
-        this.abortController = new AbortController();
-
-        // Add timeout warning for slow models
-        const config = await this._getEffectiveAiConfig();
-        const timeoutMs = config.timeout || 300000;
-        
-        // Warn immediately for known slow models
-        if (config.model === "minimaxai/minimax-m2.7") {
-          this._postMessage({ 
-            type: "status", 
-            text: "Warning: MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
-          });
-        }
-        
-        const warningTimer = setTimeout(() => {
-          if (this.abortController && !this.abortController.signal.aborted) {
-            this._postMessage({ 
-              type: "status", 
-              text: `Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
-            });
-          }
-        }, 30000); // Warn after 30 seconds
-
-        let response;
-        const startTime = Date.now();
-        try {
-          console.log("[ChatPanel] Starting agent.chat with config:", {
-            provider: config.provider,
-            model: config.model,
-            timeout: timeoutMs,
-            mode: this.chatMode
-          });
-          response = await this.agent.chat(
-            trimmedText,
-            workspaceFolder,
-            (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
-            this.abortController.signal,
-            {
-              mode: this.chatMode,
-              runtimeConfig: config,
-              onStatus: (text) => {
-                if (this._shouldSuppressInternalStatus(text)) {
-                  return;
-                }
-                this._postMessage({ type: "status", text });
+            if (prep.relevantFiles.length > 0) {
+              this._postMessage({
+                type: "status",
+                text: `Relevant files: ${prep.relevantFiles.slice(0, 5).join(", ")}${prep.relevantFiles.length > 5 ? ` +${prep.relevantFiles.length - 5} more` : ""}`
+              });
+            }
+            if (["edit", "debug", "refactor"].includes(intent)) {
+              const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
+              if (gitStatus.success) {
+                this._postMessage({
+                  type: "status",
+                  text: this._summarizeGitStatus(gitStatus.output)
+                });
               }
             }
-          );
+          }
+          this._postMessage({ type: "thinking" });
+          this.abortController = new AbortController();
+
+          // Add timeout warning for slow models
+          const config = await this._getEffectiveAiConfig();
+          const timeoutMs = config.timeout || 300000;
           
-          // Record performance
-          const duration = Date.now() - startTime;
-          this.performanceMonitor.recordResponse(
-            config.provider,
-            config.model,
-            duration,
-            !response.error
-          );
-        } catch (chatError) {
-          console.error("[ChatPanel] Error in agent.chat:", chatError);
-          const errorMsg = chatError.name === "AbortError" 
-            ? "Generation stopped or timed out. Try a faster model or increase timeout in settings."
-            : `AI error: ${chatError.message}`;
-          this._postMessage({ type: "error", text: errorMsg });
-          this._postMessage({ type: "done" });
-          return;
-        } finally {
-          clearTimeout(warningTimer);
-          this.abortController = null;
+          // Warn immediately for known slow models
+          if (config.model === "minimaxai/minimax-m2.7") {
+            this._postMessage({ 
+              type: "status", 
+              text: "Warning: MiniMax M2.7 can be slow. Consider switching to meta/llama-3.1-8b-instruct for faster responses." 
+            });
+          }
+          
+          const warningTimer = setTimeout(() => {
+            if (this.abortController && !this.abortController.signal.aborted) {
+              this._postMessage({ 
+                type: "status", 
+                text: `Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
+              });
+            }
+          }, 30000); // Warn after 30 seconds
+
+          const startTime = Date.now();
+          try {
+            console.log("[ChatPanel] Starting agent.chat with config:", {
+              provider: config.provider,
+              model: config.model,
+              timeout: timeoutMs,
+              mode: this.chatMode
+            });
+            response = await this.agent.chat(
+              trimmedText,
+              workspaceFolder,
+              (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
+              this.abortController.signal,
+              {
+                mode: this.chatMode,
+                runtimeConfig: config,
+                onStatus: (text) => {
+                  if (this._shouldSuppressInternalStatus(text)) {
+                    return;
+                  }
+                  this._postMessage({ type: "status", text });
+                }
+              }
+            );
+            
+            // Record performance
+            const duration = Date.now() - startTime;
+            this.performanceMonitor.recordResponse(
+              config.provider,
+              config.model,
+              duration,
+              !response.error
+            );
+          } catch (chatError) {
+            console.error("[ChatPanel] Error in agent.chat:", chatError);
+            const errorMsg = chatError.name === "AbortError" 
+              ? "Generation stopped or timed out. Try a faster model or increase timeout in settings."
+              : `AI error: ${chatError.message}`;
+            this._postMessage({ type: "error", text: errorMsg });
+            this._postMessage({ type: "done" });
+            return;
+          } finally {
+            clearTimeout(warningTimer);
+            this.abortController = null;
+          }
         }
 
         if (response.error) {
@@ -3134,6 +3194,8 @@ ${trimmedText}`;
                     text:
                       patchResult.reason === "empty_search"
                         ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                        : patchResult.reason === "ambiguous_search"
+                          ? `Cannot patch ${action.path}: SEARCH matched ${patchResult.matchCount || "multiple"} locations. Make the SEARCH block more specific so it matches exactly once.`
                         : `Cannot patch ${action.path}: SEARCH content not found in the open file.`
                   });
                   continue;
@@ -3379,6 +3441,8 @@ ${trimmedText}`;
                   text:
                     patchResult.reason === "empty_search"
                       ? `Cannot patch ${action.path}: SEARCH block is empty.`
+                      : patchResult.reason === "ambiguous_search"
+                        ? `Cannot patch ${action.path}: SEARCH matched ${patchResult.matchCount || "multiple"} locations. Make the SEARCH block more specific so it matches exactly once.`
                       : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${searchContent.substring(0, 200)}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
                 });
                 continue;

@@ -1759,7 +1759,7 @@ class AIAgent {
       const sketchCtx = isCreateIntent ? "" : arduinoSketchContext
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nOutput the complete updated file using FILE: path then a code block."
+          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : ""
       prompt = `${systemInstruction}${editHint}${knowledgeGraphContext ? `\n\n${knowledgeGraphContext}` : ""}${sketchCtx ? `\n\n${sketchCtx}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
 
@@ -2872,7 +2872,7 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
 
-Use PATCH for small, targeted edits:
+Use PATCH by default for small, targeted edits:
 PATCH: <exact file path>
 SEARCH:
 \`\`\`
@@ -2882,6 +2882,12 @@ REPLACE:
 \`\`\`
 (new code to replace with)
 \`\`\`
+
+PATCH rules:
+- Copy SEARCH exactly from the provided file context.
+- Make SEARCH the smallest exact block that is still unique in the target file.
+- If SEARCH appears multiple times, expand it until only one match remains.
+- Prefer the editable source file over generated or packaged copies when both exist.
 
 Use FILE for large rewrites, new files, or multi-section changes:
 FILE: <exact file path>
@@ -2934,6 +2940,8 @@ Rules:
 - Do not describe what to click in VS Code.
 - Use exact file paths.
 - If multiple files are needed, output multiple action blocks.
+- For PATCH actions, copy SEARCH exactly from the provided file context and make it unique within that file.
+- Prefer source files over generated copies such as \`.tmp-vsix-*\`, \`dist/\`, \`build/\`, or \`out/\` unless the user explicitly asks for those artifacts.
 
 Previous invalid reply:
 \`\`\`
@@ -3203,12 +3211,40 @@ ${(rawResponse || "").slice(0, 4000)}
     )
   }
 
+  _isGeneratedArtifactPath(filePath) {
+    const normalizedPath = String(filePath || "")
+      .replace(/\\/g, "/")
+      .toLowerCase()
+    return (
+      normalizedPath.includes("/dist/") ||
+      normalizedPath.includes("/build/") ||
+      normalizedPath.includes("/out/") ||
+      normalizedPath.startsWith("dist/") ||
+      normalizedPath.startsWith("build/") ||
+      normalizedPath.startsWith("out/") ||
+      normalizedPath.includes("/.tmp-vsix-") ||
+      normalizedPath.startsWith(".tmp-vsix-")
+    )
+  }
+
+  _preferSourcePathMatches(paths) {
+    if (!Array.isArray(paths) || paths.length <= 1) {
+      return Array.isArray(paths) ? paths : []
+    }
+
+    const sourceLike = paths.filter(
+      (candidate) => !this._isGeneratedArtifactPath(candidate)
+    )
+    return sourceLike.length > 0 ? sourceLike : paths
+  }
+
   _matchPathsFromHints(pathHints) {
     const matches = new Set()
 
     for (const hint of pathHints) {
       const normalizedHint = hint.replace(/\\/g, "/").toLowerCase()
       const hintedBaseName = path.basename(normalizedHint)
+      const hintMatches = []
 
       for (const relativePath of this.codebaseContext.keys()) {
         const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase()
@@ -3219,8 +3255,12 @@ ${(rawResponse || "").slice(0, 4000)}
           normalizedPath.endsWith(`/${normalizedHint}`) ||
           baseName === hintedBaseName
         ) {
-          matches.add(relativePath.replace(/\\/g, "/"))
+          hintMatches.push(relativePath.replace(/\\/g, "/"))
         }
+      }
+
+      for (const candidate of this._preferSourcePathMatches(hintMatches)) {
+        matches.add(candidate)
       }
     }
 
