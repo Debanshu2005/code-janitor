@@ -6,6 +6,7 @@ const path = require("path");
 const AIAgent = require("./agent");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
+const { computeMinimalReplacement } = require("../utils/minimal-diff");
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -32,6 +33,8 @@ class ChatPanel {
     );
     this._confirmResolve = null;
     this._boundWebviews = new WeakSet();
+    this._undoStack = [];
+    this._undoIdCounter = 0;
 
     this.agent.setActiveEditor(this.lastActiveEditor);
     this.agent.showThinking = this.showThinking;
@@ -60,6 +63,112 @@ class ChatPanel {
 
   _shouldSuppressInternalStatus(text) {
     return /replied with prose/i.test(text || "");
+  }
+
+  // Push a recently-applied edit onto the undo stack and return an id the
+  // webview can use to trigger a revert. Returns null if there is nothing
+  // worth undoing (no real change, or no before-snapshot available).
+  _registerEditForUndo({ filePath, before, after, label }) {
+    if (typeof before !== "string" || typeof after !== "string") return null;
+    if (before === after) return null;
+    const id = `undo-${++this._undoIdCounter}-${Date.now()}`;
+    this._undoStack.push({
+      id,
+      filePath: String(filePath || ""),
+      before,
+      after,
+      label: label || "edit",
+      ts: Date.now()
+    });
+    // Bound the stack so a long session does not retain unbounded buffers
+    if (this._undoStack.length > 50) this._undoStack.shift();
+    return id;
+  }
+
+  _findEditorForFile(filePath) {
+    if (!filePath) return null;
+    const target = String(filePath).replace(/\\/g, "/").toLowerCase();
+    for (const editor of vscode.window.visibleTextEditors || []) {
+      const docPath = editor?.document?.uri?.fsPath || editor?.document?.fileName || "";
+      const norm = String(docPath).replace(/\\/g, "/").toLowerCase();
+      if (norm === target) return editor;
+    }
+    return null;
+  }
+
+  // Revert the matching entry (by id) or the most recent edit (when id is
+  // omitted). On success, the entry is removed from the stack. On failure,
+  // it is restored so the user can retry.
+  async _undoEdit(id) {
+    if (this._undoStack.length === 0) {
+      this._postMessage({
+        type: "status",
+        text: "Nothing to undo."
+      });
+      return { success: false, error: "empty_stack" };
+    }
+
+    let idx = -1;
+    if (id) {
+      idx = this._undoStack.findIndex((e) => e.id === id);
+      if (idx < 0) {
+        this._postMessage({
+          type: "status",
+          text: "That edit has already been undone."
+        });
+        return { success: false, error: "not_found" };
+      }
+    } else {
+      idx = this._undoStack.length - 1;
+    }
+
+    const entry = this._undoStack.splice(idx, 1)[0];
+    const baseName = entry.filePath ? path.basename(entry.filePath) : "file";
+
+    let result;
+    const editor = this._findEditorForFile(entry.filePath);
+    if (editor) {
+      result = await this._applyToEditor(editor, entry.before);
+    } else {
+      result = await this.agent.applyChanges(
+        entry.filePath,
+        entry.before,
+        true,
+        { allowEmpty: true, allowDocTruncate: true }
+      );
+    }
+
+    if (result && result.success) {
+      this._postMessage({
+        type: "editUndone",
+        id: entry.id
+      });
+      this._postMessage({
+        type: "applied",
+        filePath: result.path || entry.filePath,
+        text: `↶ Undid edit to ${baseName}`
+      });
+      return { success: true };
+    }
+
+    // Restore the entry so the user can retry the undo.
+    this._undoStack.splice(idx, 0, entry);
+    this._postMessage({
+      type: "error",
+      text: `Undo failed for ${baseName}: ${result?.error || "unknown error"}`
+    });
+    return { success: false, error: result?.error || "unknown" };
+  }
+
+  // Detect a user typing a free-form undo request such as "undo that",
+  // "revert the last edit", "undo last change". /undo handled separately.
+  _isUndoRequest(text) {
+    const t = String(text || "").trim().toLowerCase();
+    if (!t) return false;
+    if (/^undo\b/.test(t)) return true;
+    if (/^(revert|rollback|roll back|take back|take that back)\b/.test(t)) return true;
+    if (/\b(undo|revert|rollback|roll back)\b.*\b(that|last|previous|recent|edit|change|fix|patch|rectif)/.test(t)) return true;
+    return false;
   }
 
   async show() {
@@ -909,23 +1018,30 @@ class ChatPanel {
       return;
     }
 
-    // Apply the fix
-    const applied = await activeEditor.edit((editBuilder) => {
-      const fullRange = new vscode.Range(
-        activeEditor.document.positionAt(0),
-        activeEditor.document.positionAt(activeEditor.document.getText().length)
-      );
-      editBuilder.replace(fullRange, fileAction.content);
-    });
-
-    if (!applied) {
+    // Apply the fix surgically and register it on the undo stack so the user
+    // can revert via the chat Undo button, /undo, or Ctrl+Z.
+    const applyResult = await this._applyToEditor(activeEditor, fileAction.content);
+    if (!applyResult.success) {
       this._postMessage({
         type: "error",
-        text: "Failed to apply the fix to the editor."
+        text: applyResult.error || "Failed to apply the fix to the editor."
       });
       this._postMessage({ type: "done" });
       return;
     }
+
+    const undoId = this._registerEditForUndo({
+      filePath: applyResult.path,
+      before: applyResult.previousContent,
+      after: applyResult.newContent,
+      label: "syntax-fix"
+    });
+    this._postMessage({
+      type: "applied",
+      filePath: applyResult.path,
+      undoId,
+      text: `✅ Fixed syntax in ${applyResult.relativePath || path.basename(applyResult.path)}`
+    });
 
     await activeEditor.document.save();
 
@@ -1489,13 +1605,31 @@ class ChatPanel {
     }
 
     const document = editor.document;
-    const fullRange = new vscode.Range(
-      document.positionAt(0),
-      document.positionAt(document.getText().length)
-    );
+    const currentText = document.getText();
 
+    if (currentText === content) {
+      return {
+        success: true,
+        path: document.fileName,
+        relativePath: path.basename(document.fileName)
+      };
+    }
+
+    const diff = computeMinimalReplacement(currentText, content);
     const applied = await editor.edit((editBuilder) => {
-      editBuilder.replace(fullRange, content);
+      if (diff) {
+        const range = new vscode.Range(
+          document.positionAt(diff.startOffset),
+          document.positionAt(diff.endOffset)
+        );
+        editBuilder.replace(range, diff.replacement);
+      } else {
+        const fullRange = new vscode.Range(
+          document.positionAt(0),
+          document.positionAt(currentText.length)
+        );
+        editBuilder.replace(fullRange, content);
+      }
     });
 
     if (!applied) {
@@ -1505,7 +1639,9 @@ class ChatPanel {
     return {
       success: true,
       path: document.fileName,
-      relativePath: path.basename(document.fileName)
+      relativePath: path.basename(document.fileName),
+      previousContent: currentText,
+      newContent: content
     };
   }
 
@@ -1957,6 +2093,15 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       return { matched: false, reason: "empty_search" };
     }
 
+    // Splice without going through String.prototype.replace, which would
+    // interpret $&, $1, $`, $', $$ inside the replacement when the search
+    // arg is a string. Real source code can legitimately contain those
+    // sequences, so we slice on the matched index instead.
+    const literalSplice = (haystack, needle, repl) => {
+      const idx = haystack.indexOf(needle);
+      return haystack.slice(0, idx) + repl + haystack.slice(idx + needle.length);
+    };
+
     if (source.includes(search)) {
       const exactMatchCount = countOccurrences(source, search);
       if (exactMatchCount !== 1) {
@@ -1968,7 +2113,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       }
       return {
         matched: true,
-        content: source.replace(search, replace)
+        content: literalSplice(source, search, replace)
       };
     }
 
@@ -1987,7 +2132,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
           matchCount: normalizedMatchCount
         };
       }
-      let content = currentUnix.replace(searchUnix, replaceUnix);
+      let content = literalSplice(currentUnix, searchUnix, replaceUnix);
       if (prefersCrlf) {
         content = content.replace(/\n/g, "\r\n");
       }
@@ -2824,6 +2969,11 @@ ${trimmedText}`;
           allowDocTruncate: hasExplicitDestructiveWriteIntent
         };
 
+        if (/^\/undo\b/i.test(trimmedText) || this._isUndoRequest(trimmedText)) {
+          await this._undoEdit();
+          this._postMessage({ type: "done" });
+          return;
+        }
         if (/^\/ollama$/i.test(trimmedText)) {
           await this._updateAiConfig("provider", "ollama");
           await this._updateAiConfig("model", "qwen2.5-coder:1.5b");
@@ -3147,9 +3297,18 @@ ${trimmedText}`;
                 const result = shouldApplyToOpenFile
                   ? await this._applyToEditor(activeEditor, action.content)
                   : await this._openDraftFile(action.path, action.content);
+                const undoId = result.success && shouldApplyToOpenFile
+                  ? this._registerEditForUndo({
+                      filePath: result.path || action.path,
+                      before: result.previousContent,
+                      after: result.newContent,
+                      label: "edit"
+                    })
+                  : null;
                 this._postMessage({
                   type: result.success ? "applied" : "error",
                   filePath: result.success ? result.path : undefined,
+                  undoId,
                   text: result.success
                     ? shouldApplyToOpenFile
                       ? `\u2705 Updated open file ${result.relativePath || result.path}`
@@ -3209,9 +3368,18 @@ ${trimmedText}`;
                   activeEditor,
                   patchResult.content
                 );
+                const undoId = result.success
+                  ? this._registerEditForUndo({
+                      filePath: result.path || action.path,
+                      before: result.previousContent,
+                      after: result.newContent,
+                      label: "patch"
+                    })
+                  : null;
                 this._postMessage({
                   type: result.success ? "applied" : "error",
                   filePath: result.success ? result.path : undefined,
+                  undoId,
                   text: result.success
                     ? `\u2705 Patched open file ${result.relativePath || result.path}`
                     : result.error
@@ -3417,11 +3585,20 @@ ${trimmedText}`;
                   : null;
 
                 if (recoveryResult) {
+                  const recoveryUndoId = recoveryResult.success
+                    ? this._registerEditForUndo({
+                        filePath: recoveryResult.path || action.path,
+                        before: recoveryResult.previousContent,
+                        after: recoveryResult.newContent,
+                        label: "patch"
+                      })
+                    : null;
                   this._postMessage({
                     type: recoveryResult.success ? "applied" : "error",
                     filePath: recoveryResult.success
                       ? recoveryResult.path
                       : undefined,
+                    undoId: recoveryUndoId,
                     text: recoveryResult.success
                       ? `\u2705 Recovered edit ${recoveryResult.relativePath || action.path}\n${recoveryResult.changeSummary || ""}`
                       : recoveryResult.error
@@ -3455,10 +3632,20 @@ ${trimmedText}`;
                 outside,
                 writeOptions
               );
-              
+
+              const patchUndoId = result.success
+                ? this._registerEditForUndo({
+                    filePath: result.path || action.path,
+                    before: result.previousContent,
+                    after: result.newContent,
+                    label: "patch"
+                  })
+                : null;
+
               this._postMessage({
                 type: result.success ? "applied" : "error",
                 filePath: result.success ? result.path : undefined,
+                undoId: patchUndoId,
                 text: result.success
                   ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
@@ -3516,9 +3703,20 @@ ${trimmedText}`;
               }
               const operation = result.created ? "Adding file" : "Editing file";
               this._postMessage({ type: "status", text: `${operation}: ${action.path}` });
+              // Newly-created files cannot be undone via stack (no prior state);
+              // the user can delete the file themselves if needed.
+              const fileUndoId = result.success && !result.created
+                ? this._registerEditForUndo({
+                    filePath: result.path || action.path,
+                    before: result.previousContent,
+                    after: result.newContent,
+                    label: "edit"
+                  })
+                : null;
               this._postMessage({
                 type: result.success ? "applied" : "error",
                 filePath: result.success ? result.path : undefined,
+                undoId: fileUndoId,
                 text: result.success
                   ? result.created
                     ? `\u2705 Added ${result.relativePath || action.path}\n${result.changeSummary || ""}`
@@ -3844,6 +4042,8 @@ ${trimmedText}`;
           this.abortController = null;
           this._postMessage({ type: "done" });
         }
+      } else if (message.type === "undoEdit") {
+        await this._undoEdit(message.id);
       } else if (message.type === "apply") {
         const result = await this.agent.applyChanges(message.filePath, message.content);
         this._postMessage({

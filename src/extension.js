@@ -12,6 +12,7 @@ const GraphifyPanel = require("./graphify/graphify-panel");
 const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const AIAgent = require("./ai-agent/agent");
 const path = require("path");
+const { computeMinimalReplacement } = require("./utils/minimal-diff");
 
 const FRONTEND_DIAGNOSTIC_SOURCE = "Code Janitor Frontend";
 const FRONTEND_VALIDATION_EXTENSIONS = [
@@ -87,8 +88,23 @@ function getFullDocumentRange(document) {
 }
 
 async function replaceDocumentText(document, nextCode, save = false) {
+  const currentCode = document.getText();
+  if (currentCode === nextCode) {
+    if (save) await document.save();
+    return;
+  }
+
+  const diff = computeMinimalReplacement(currentCode, nextCode);
   const edit = new vscode.WorkspaceEdit();
-  edit.replace(document.uri, getFullDocumentRange(document), nextCode);
+  if (diff) {
+    const range = new vscode.Range(
+      document.positionAt(diff.startOffset),
+      document.positionAt(diff.endOffset)
+    );
+    edit.replace(document.uri, range, diff.replacement);
+  } else {
+    edit.replace(document.uri, getFullDocumentRange(document), nextCode);
+  }
   await vscode.workspace.applyEdit(edit);
 
   if (save) {
