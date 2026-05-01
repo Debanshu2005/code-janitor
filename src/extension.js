@@ -944,6 +944,28 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   context.subscriptions.push(chatDisposable);
   console.log("[OK] AI Chat command registered.");
 
+  // Bug Fix Scan Command (Alt+B)
+  const bugFixScanDisposable = vscode.commands.registerCommand(
+    "codeJanitor.bugFixScan",
+    async () => {
+      try {
+        const editor = vscode.window.activeTextEditor;
+        if (!chatPanelInstance) {
+          chatPanelInstance = new ChatPanel(context);
+        }
+        await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
+        await new Promise(resolve => setTimeout(resolve, 150));
+        await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
+        await chatPanelInstance.runBugScan(editor);
+      } catch (error) {
+        console.error("[Extension] Error in bugFixScan command:", error);
+        vscode.window.showErrorMessage(`Bug Fix scan failed: ${error.message}`);
+      }
+    }
+  );
+  context.subscriptions.push(bugFixScanDisposable);
+  console.log("[OK] Bug Fix Scan command registered.");
+
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);
   const graphifyDisposable = vscode.commands.registerCommand(

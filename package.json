@@ -244,6 +244,11 @@
         "command": "codeJanitor.quickFixAllWithAI",
         "title": "Quick Fix All with AI",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.bugFixScan",
+        "title": "Scan Active File for Bugs",
+        "category": "Code Janitor"
       }
     ],
     "menus": {
@@ -268,6 +273,9 @@
         },
         {
           "command": "codeJanitor.showPerformance"
+        },
+        {
+          "command": "codeJanitor.bugFixScan"
         }
       ]
     },
@@ -302,6 +310,11 @@
         "command": "codeJanitor.openGraphify",
         "key": "ctrl+alt+g",
         "mac": "cmd+alt+g"
+      },
+      {
+        "command": "codeJanitor.bugFixScan",
+        "key": "alt+b",
+        "mac": "alt+b"
       }
     ]
   },

@@ -65,6 +65,83 @@ class ChatPanel {
     return /replied with prose/i.test(text || "");
   }
 
+  async runBugScan(editor) {
+    await this.show();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    if (!editor || !editor.document) {
+      if (this.panel?.webview) {
+        this.panel.webview.postMessage({
+          type: "stream",
+          text: "⚠️ No active file detected. Open a file and try again."
+        });
+        this.panel.webview.postMessage({ type: "done" });
+      } else {
+        vscode.window.showInformationMessage(
+          "Code Janitor: No active file detected. Open a file and try again."
+        );
+      }
+      return;
+    }
+
+    this.chatMode = "bugfix";
+    this.lastActiveEditor = editor;
+
+    const filePath = editor.document.fileName;
+    const fileName = path.basename(filePath);
+    const ext = path.extname(fileName).slice(1) || "";
+    const fullText = editor.document.getText();
+    const truncated = fullText.length > 30000;
+    const bodyText = truncated ? fullText.slice(0, 30000) : fullText;
+
+    const triggerMessage = [
+      "Alt+B bug scan triggered. Run the bug fix loop on the file below (active file only).",
+      `File: ${fileName}`,
+      truncated ? "(File truncated to first 30000 characters.)" : "",
+      "",
+      "```" + ext,
+      bodyText,
+      "```"
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (this.panel?.webview) {
+      this.panel.webview.postMessage({ type: "prefillAndSend", message: triggerMessage });
+    }
+  }
+
+  async _appendAuditRefusalLog(workspaceFolder, userMessage, modelResponse) {
+    if (!workspaceFolder) {
+      this._postMessage({
+        type: "status",
+        text: "Audit refusal not logged: no workspace folder is open."
+      });
+      return;
+    }
+    try {
+      const logPath = path.join(workspaceFolder, ".janitor-audit-log");
+      const entry = [
+        `--- ${new Date().toISOString()} ---`,
+        `User request: ${(userMessage || "").slice(0, 500)}`,
+        "",
+        modelResponse.trim(),
+        "",
+        ""
+      ].join("\n");
+      await fs.appendFile(logPath, entry, "utf8");
+      this._postMessage({
+        type: "status",
+        text: "Audit refusal logged to .janitor-audit-log"
+      });
+    } catch (err) {
+      this._postMessage({
+        type: "status",
+        text: `Audit refusal log write failed: ${err.message}`
+      });
+    }
+  }
+
   // Push a recently-applied edit onto the undo stack and return an id the
   // webview can use to trigger a revert. Returns null if there is nothing
   // worth undoing (no real change, or no before-snapshot available).
@@ -3000,6 +3077,24 @@ ${trimmedText}`;
           this._postMessage({ type: "done" });
           return;
         }
+        if (/^\/audit$/i.test(trimmedText)) {
+          this.chatMode = "audit";
+          this._postMessage({
+            type: "status",
+            text: "Mode switched to Security Auditor (read-only). File edits and shell commands are disabled until you switch back with /fast, /heavy, or /deep."
+          });
+          this._postMessage({ type: "done" });
+          return;
+        }
+        if (/^\/bugfix$/i.test(trimmedText)) {
+          this.chatMode = "bugfix";
+          this._postMessage({
+            type: "status",
+            text: "Mode switched to Bug Fixer. Press Alt+B to scan the active file, or just chat — every message runs the scan loop."
+          });
+          this._postMessage({ type: "done" });
+          return;
+        }
         if (/^\/think$/i.test(trimmedText)) {
           await this._setThinkingMode(!this.showThinking);
           this._postMessage({
@@ -3045,6 +3140,14 @@ ${trimmedText}`;
         }
 
         if (this._isSyntaxFixRequest(trimmedText)) {
+          if (this.chatMode === "audit") {
+            this._postMessage({
+              type: "stream",
+              text: "Audit mode is read-only. Switch back with /fast, /heavy, or /deep before requesting fixes."
+            });
+            this._postMessage({ type: "done" });
+            return;
+          }
           await this._runActiveSyntaxFix(workspaceFolder);
           return;
         }
@@ -3098,6 +3201,17 @@ ${trimmedText}`;
         }
 
         const directStructuredResponse = this.agent._parseResponse(trimmedText);
+        if (this.chatMode === "audit" && Array.isArray(directStructuredResponse.actions)) {
+          const blockedTypes = new Set(["file", "patch", "cmd", "mkdir"]);
+          const stripped = directStructuredResponse.actions.filter((a) => !blockedTypes.has(a?.type));
+          if (stripped.length !== directStructuredResponse.actions.length) {
+            this._postMessage({
+              type: "status",
+              text: "Audit mode: ignoring pasted FILE/PATCH/CMD/MKDIR blocks. The pasted code will be audited instead of executed."
+            });
+          }
+          directStructuredResponse.actions = stripped;
+        }
         const hasDirectStructuredActions =
           Array.isArray(directStructuredResponse.actions) &&
           directStructuredResponse.actions.length > 0;
@@ -3228,6 +3342,24 @@ ${trimmedText}`;
 
         this._postMessage({ type: "done" });
         this._postSessionState();
+
+        if (this.chatMode === "audit") {
+          if (Array.isArray(response.actions) && response.actions.length > 0) {
+            const blockedTypes = new Set(["file", "patch", "cmd", "mkdir"]);
+            const stripped = response.actions.filter((a) => !blockedTypes.has(a?.type));
+            const removed = response.actions.length - stripped.length;
+            if (removed > 0) {
+              this._postMessage({
+                type: "status",
+                text: `Audit mode is read-only — blocked ${removed} file/command action(s) from the model output.`
+              });
+            }
+            response.actions = stripped;
+          }
+          if (typeof response.text === "string" && /⛔\s*AUDIT HALTED/.test(response.text)) {
+            await this._appendAuditRefusalLog(workspaceFolder, trimmedText, response.text);
+          }
+        }
 
         if (response.warnings && response.warnings.length > 0) {
           for (const warning of response.warnings) {
@@ -4142,7 +4274,11 @@ ${trimmedText}`;
             ? "deep"
             : message.value === "heavy"
               ? "heavy"
-              : "fast";
+              : message.value === "audit"
+                ? "audit"
+                : message.value === "bugfix"
+                  ? "bugfix"
+                  : "fast";
       } else if (message.type === "toggleThinking") {
         await this._setThinkingMode(!this.showThinking);
         this._postMessage({
