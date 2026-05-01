@@ -130,6 +130,14 @@ describe("ChatPanel structured edit helpers", () => {
   test("recovers a failed patch by requesting a broader patch and applying it", async () => {
     const panel = Object.create(ChatPanel.prototype);
     panel.chatMode = "fast";
+    const runtimeConfig = {
+      provider: "custom:test",
+      model: "gpt-like",
+      customProvider: {
+        apiKey: "secret",
+        chatCompletionsUrl: "https://example.test/v1/chat/completions"
+      }
+    };
     panel.agent = {
       chat: jest.fn().mockResolvedValue({
         text: "PATCH: package.json",
@@ -163,14 +171,16 @@ describe("ChatPanel structured edit helpers", () => {
       },
       '{\n  "version": "1.16.5"\n}\n',
       false,
-      {}
+      {},
+      runtimeConfig
     );
 
     expect(panel.agent.chat).toHaveBeenCalledTimes(1);
     expect(panel.agent.chat.mock.calls[0][0]).toContain("Prefer exactly one PATCH action");
     expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
       mode: "heavy",
-      intentOverride: "edit"
+      intentOverride: "edit",
+      runtimeConfig
     });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",
@@ -184,6 +194,14 @@ describe("ChatPanel structured edit helpers", () => {
   test("falls back to FILE when patch retries are still unreliable", async () => {
     const panel = Object.create(ChatPanel.prototype);
     panel.chatMode = "heavy";
+    const runtimeConfig = {
+      provider: "custom:test",
+      model: "gpt-like",
+      customProvider: {
+        apiKey: "secret",
+        chatCompletionsUrl: "https://example.test/v1/chat/completions"
+      }
+    };
     panel.agent = {
       chat: jest
         .fn()
@@ -229,18 +247,21 @@ describe("ChatPanel structured edit helpers", () => {
       },
       '{\n  "version": "1.16.5"\n}\n',
       false,
-      {}
+      {},
+      runtimeConfig
     );
 
     expect(panel.agent.chat).toHaveBeenCalledTimes(2);
     expect(panel.agent.chat.mock.calls[1][0]).toContain("Return exactly one FILE action");
     expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
       mode: "heavy",
-      intentOverride: "edit"
+      intentOverride: "edit",
+      runtimeConfig
     });
     expect(panel.agent.chat.mock.calls[1][4]).toMatchObject({
       mode: "heavy",
-      intentOverride: "edit"
+      intentOverride: "edit",
+      runtimeConfig
     });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",

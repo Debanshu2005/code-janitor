@@ -2049,11 +2049,12 @@ ${originalRequest}
 ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}`;
   }
 
-  async _requestEditRecovery(prompt, workspaceFolder, label) {
+  async _requestEditRecovery(prompt, workspaceFolder, label, runtimeConfig = null) {
     const recoveryMode = this.chatMode === "fast" ? "heavy" : this.chatMode;
     return this.agent.chat(prompt, workspaceFolder, null, null, {
       mode: recoveryMode,
       intentOverride: "edit",
+      runtimeConfig,
       onStatus: (text) => {
         if (this._shouldSuppressInternalStatus(text)) {
           return;
@@ -2072,7 +2073,8 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     action,
     currentContent,
     outside,
-    writeOptions
+    writeOptions,
+    runtimeConfig = null
   ) {
     this._postMessage({
       type: "status",
@@ -2082,7 +2084,8 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     const retryResponse = await this._requestEditRecovery(
       this._buildPatchRecoveryPrompt(originalRequest, action, currentContent),
       workspaceFolder,
-      "Patch retry"
+      "Patch retry",
+      runtimeConfig
     );
 
     if (retryResponse.error) {
@@ -2149,7 +2152,8 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
         retryResponse.text
       ),
       workspaceFolder,
-      "File fallback"
+      "File fallback",
+      runtimeConfig
     );
 
     if (fileFallbackResponse.error) {
@@ -3821,7 +3825,8 @@ ${trimmedText}`;
                       action,
                       currentContent,
                       outside,
-                      writeOptions
+                      writeOptions,
+                      config
                     )
                   : null;
 
