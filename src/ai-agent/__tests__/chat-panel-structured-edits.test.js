@@ -78,6 +78,55 @@ describe("ChatPanel structured edit helpers", () => {
     expect(summary).toContain("patch src/app.js");
   });
 
+  test("queued bugfix mode override is one-shot and falls back to chat mode", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.chatMode = "fast";
+    panel._queuedModeOverride = null;
+
+    panel._queueModeOverride("bugfix");
+
+    expect(panel._getRequestMode()).toBe("bugfix");
+    expect(panel._consumeQueuedModeOverride()).toBe("bugfix");
+    expect(panel._getRequestMode()).toBe("fast");
+  });
+
+  test("bugfix mode skips workspace preparation", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(panel._shouldPrepareWorkspaceContext("debug", "scan the active file", "bugfix")).toBe(false);
+    expect(panel._shouldPrepareWorkspaceContext("scan", "scan the workspace", "heavy")).toBe(true);
+  });
+
+  test("detects explicit tool-oriented command requests", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(panel._hasExplicitCommandRequest("use rg to find the config")).toBe(true);
+    expect(panel._hasExplicitCommandRequest("run npm test")).toBe(true);
+    expect(panel._hasExplicitCommandRequest("fix this bug")).toBe(false);
+  });
+
+  test("suppresses generated commands only when edits are also being applied implicitly", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._shouldSuppressGeneratedCommand(true, false, [
+        { type: "patch", path: "src/app.js" },
+        { type: "cmd", command: "npm test" }
+      ])
+    ).toBe(true);
+    expect(
+      panel._shouldSuppressGeneratedCommand(true, false, [
+        { type: "cmd", command: "npm test" }
+      ])
+    ).toBe(false);
+    expect(
+      panel._shouldSuppressGeneratedCommand(true, true, [
+        { type: "patch", path: "src/app.js" },
+        { type: "cmd", command: "npm test" }
+      ])
+    ).toBe(false);
+  });
+
   test("recovers a failed patch by requesting a broader patch and applying it", async () => {
     const panel = Object.create(ChatPanel.prototype);
     panel.chatMode = "fast";

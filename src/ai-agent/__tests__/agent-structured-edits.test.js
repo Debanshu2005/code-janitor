@@ -61,6 +61,60 @@ describe("AIAgent structured edit parsing", () => {
     });
   });
 
+  test("ignores action-like tokens inside PATCH replacement content", () => {
+    const agent = new AIAgent();
+    const response = [
+      "PATCH: docs/runbook.md",
+      "SEARCH:",
+      "```md",
+      "Run the old workflow.",
+      "```",
+      "REPLACE:",
+      "```md",
+      "CMD: npm test",
+      "MKDIR: docs/examples",
+      "```",
+      "CMD: npm run lint"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "patch",
+        path: "docs/runbook.md",
+        search: "Run the old workflow.\n",
+        replace: "CMD: npm test\nMKDIR: docs/examples\n"
+      },
+      {
+        type: "cmd",
+        command: "npm run lint"
+      }
+    ]);
+  });
+
+  test("ignores command-like lines inside FILE content", () => {
+    const agent = new AIAgent();
+    const response = [
+      "FILE: docs/runbook.md",
+      "```md",
+      "CMD: npm test",
+      "FETCH: https://example.com",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "file",
+        path: "docs/runbook.md",
+        language: "text",
+        content: "CMD: npm test\nFETCH: https://example.com\n"
+      }
+    ]);
+  });
+
   test("allows clarifying questions for edit requests without treating them as invalid prose", () => {
     const agent = new AIAgent();
     const response =
@@ -123,6 +177,27 @@ describe("AIAgent structured edit parsing", () => {
     });
   });
 
+  test("extracts file-like hints from quoted and stem-only references", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._extractPathHints('find "chat-panel" and inspect `COMMIT_EDITMSG` alongside graph-loader')
+    ).toEqual(
+      expect.arrayContaining(["chat-panel", "commit_editmsg", "graph-loader"])
+    );
+  });
+
+  test("uses PowerShell command execution on Windows", () => {
+    const agent = new AIAgent();
+
+    expect(agent._shouldUsePowerShellForCommand("Get-Content package.json")).toBe(
+      process.platform === "win32"
+    );
+    expect(agent._shouldUsePowerShellForCommand("npm test")).toBe(
+      process.platform === "win32"
+    );
+  });
+
   test("thinking mode instructions request visible Thinking and Answer sections", () => {
     const agent = new AIAgent();
 
@@ -131,6 +206,16 @@ describe("AIAgent structured edit parsing", () => {
     expect(instruction).toContain('heading titled "Thinking"');
     expect(instruction).toContain('heading titled "Answer"');
     expect(instruction).toContain("Do not expose hidden internal chain-of-thought");
+  });
+
+  test("fast mode keeps the silent preamble focused on security halt logic", () => {
+    const agent = new AIAgent();
+
+    const instruction = agent._buildSystemInstruction("general", "", "fast", false);
+
+    expect(instruction).toContain("%%AUDIT_HALTED%%");
+    expect(instruction).not.toContain("%%BUG_FOUND%%");
+    expect(instruction).not.toContain("%%SHOW_FIX_BUTTON%%");
   });
 
   test("buffers split streamed lines before parsing tokens", async () => {

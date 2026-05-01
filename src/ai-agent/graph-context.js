@@ -20,6 +20,12 @@ function getGraphNodePath(node) {
   return normalizePathLike(node && node.path);
 }
 
+function getBaseStem(value) {
+  return path.posix
+    .basename(normalizePathLike(value))
+    .replace(/\.[a-z0-9]+$/i, "");
+}
+
 function matchGraphPathsFromHints(graphData, pathHints = []) {
   if (!isValidGraphData(graphData) || !Array.isArray(pathHints)) {
     return [];
@@ -32,12 +38,14 @@ function matchGraphPathsFromHints(graphData, pathHints = []) {
     if (!normalizedHint) continue;
 
     const hintedBaseName = path.posix.basename(normalizedHint);
+    const hintedBaseStem = getBaseStem(normalizedHint);
 
     for (const node of graphData.nodes) {
       const nodePath = getGraphNodePath(node);
       if (!nodePath) continue;
 
       const nodeBaseName = path.posix.basename(nodePath);
+      const nodeBaseStem = getBaseStem(nodePath);
       let score = 0;
 
       if (nodePath === normalizedHint) {
@@ -46,6 +54,8 @@ function matchGraphPathsFromHints(graphData, pathHints = []) {
         score = 110;
       } else if (nodeBaseName === hintedBaseName) {
         score = 90;
+      } else if (hintedBaseStem && nodeBaseStem === hintedBaseStem) {
+        score = 80;
       } else if (
         nodePath.includes(normalizedHint) ||
         normalizedHint.includes(nodeBaseName)

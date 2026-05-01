@@ -526,14 +526,15 @@ async function restorePersistedApiKeys(context) {
     )
       .trim()
       .replace(/^['"`]|['"`]$/g, "");
-    if (!secretValue) continue;
 
-    if (configValue && configValue === secretValue) {
-      continue;
+    if (!secretValue && configValue) {
+      await context.secrets.store(getApiSecretKey(provider), configValue);
     }
 
-    const target = getConfigTargetForKey(configKey);
-    await cfg.update(configKey, secretValue, target);
+    if (configValue) {
+      const target = getConfigTargetForKey(configKey);
+      await cfg.update(configKey, "", target);
+    }
   }
 }
 

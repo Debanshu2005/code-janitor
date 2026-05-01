@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src __CSP_SOURCE__ https: data:; media-src https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src https:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-__CSP_NONCE__'; img-src __CSP_SOURCE__ https: data:; media-src https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src https:;" />
     <style>
       *,
       *::before,
@@ -2164,7 +2164,7 @@
       </div>
     </div>
 
-    <script>
+    <script nonce="__CSP_NONCE__">
       var vscode = acquireVsCodeApi();
       var chat = document.getElementById("chat");
       var input = document.getElementById("input");
@@ -2519,15 +2519,38 @@
         return textarea.value;
       }
 
+      function sanitizeExternalUrl(url) {
+        var raw = String(url || "").trim();
+        if (!/^https?:\/\//i.test(raw)) {
+          return "";
+        }
+
+        try {
+          var parsed = new URL(raw);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            return parsed.toString();
+          }
+        } catch (error) {
+          return "";
+        }
+
+        return "";
+      }
+
       function parseMarkdown(text) {
-        text = unescapeHtml(text);
         text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
         text = text.replace(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g, '<em>$1</em>');
         text = text.replace(/(?<!_)_(?!_)([^_]+)_(?!_)/g, '<em>$1</em>');
         text = text.replace(/`([^`]+)`/g, '<code style="background: rgba(88, 166, 255, 0.12); padding: 2px 6px; border-radius: 4px; font-family: Fira Code, monospace; font-size: 0.9em; color: #9ecbff;">$1</code>');
         text = text.replace(/~~([^~]+)~~/g, '<del style="opacity: 0.7;">$1</del>');
-        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: var(--accent); text-decoration: underline;">$1</a>');
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, label, url) {
+          var safeUrl = sanitizeExternalUrl(unescapeHtml(url));
+          if (!safeUrl) {
+            return label;
+          }
+          return '<a href="' + escapeHtml(safeUrl) + '" data-external-link="true" style="color: var(--accent); text-decoration: underline;">' + label + "</a>";
+        });
         text = text.replace(/^### (.+)$/gm, '<h3 style="font-size: 1.1em; font-weight: 600; margin: 12px 0 6px 0; color: var(--text);">$1</h3>');
         text = text.replace(/^## (.+)$/gm, '<h2 style="font-size: 1.2em; font-weight: 600; margin: 14px 0 8px 0; color: var(--text);">$1</h2>');
         text = text.replace(/^# (.+)$/gm, '<h1 style="font-size: 1.3em; font-weight: 700; margin: 16px 0 10px 0; color: var(--text);">$1</h1>');
@@ -2829,10 +2852,25 @@
       }
 
       function openExternalUrl(url) {
-        var externalUrl = String(url || "").trim();
+        var externalUrl = sanitizeExternalUrl(url);
         if (!externalUrl) return;
         vscode.postMessage({ type: "openExternal", url: externalUrl });
       }
+
+      chat.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!target || typeof target.closest !== "function") {
+          return;
+        }
+
+        var link = target.closest("a[data-external-link]");
+        if (!link) {
+          return;
+        }
+
+        event.preventDefault();
+        openExternalUrl(link.getAttribute("href"));
+      });
 
       function makeYouTubeEmbed(videoId) {
         console.log('[YouTube] Creating embed for video ID:', videoId);

@@ -3,6 +3,7 @@ const fs = require("fs").promises;
 const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const AIAgent = require("./agent");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
@@ -33,6 +34,7 @@ class ChatPanel {
     );
     this._confirmResolve = null;
     this._boundWebviews = new WeakSet();
+    this._queuedModeOverride = null;
     this._undoStack = [];
     this._undoIdCounter = 0;
 
@@ -65,6 +67,20 @@ class ChatPanel {
     return /replied with prose/i.test(text || "");
   }
 
+  _queueModeOverride(mode) {
+    this._queuedModeOverride = mode || null;
+  }
+
+  _getRequestMode() {
+    return this._queuedModeOverride || this.chatMode || "fast";
+  }
+
+  _consumeQueuedModeOverride() {
+    const queued = this._queuedModeOverride || null;
+    this._queuedModeOverride = null;
+    return queued;
+  }
+
   async runBugScan(editor) {
     // If the chat is already open in the sidebar, do NOT create a separate
     // webview panel — that would split the trigger to a panel the user
@@ -93,7 +109,7 @@ class ChatPanel {
       return;
     }
 
-    this.chatMode = "bugfix";
+    this._queueModeOverride("bugfix");
     this.lastActiveEditor = editor;
 
     const filePath = editor.document.fileName;
@@ -1161,12 +1177,14 @@ class ChatPanel {
       const htmlPath = this._getChatPanelHtmlPath();
       console.log("[ChatPanel] Loading HTML from:", htmlPath);
       const html = fsSync.readFileSync(htmlPath, "utf8");
+      const nonce = this._createNonce();
       const logoPath = this._getLogoAssetPath();
       const logoUri = logoPath && webview
         ? webview.asWebviewUri(vscode.Uri.file(logoPath)).toString()
         : "";
       const hydratedHtml = html
         .replace(/__CSP_SOURCE__/g, webview?.cspSource || "")
+        .replace(/__CSP_NONCE__/g, nonce)
         .replace(/__LOGO_URI__/g, logoUri);
       console.log("[ChatPanel] HTML loaded, length:", html.length);
       return hydratedHtml;
@@ -1256,6 +1274,26 @@ class ChatPanel {
     return candidates.find((candidate) => fsSync.existsSync(candidate)) || null;
   }
 
+  _createNonce() {
+    return crypto.randomBytes(16).toString("base64");
+  }
+
+  _sanitizeExternalUrl(value, { allowHttp = true, allowHttps = true } = {}) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (!/^https?:\/\//i.test(raw)) return "";
+
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol === "http:" && allowHttp) return parsed.toString();
+      if (parsed.protocol === "https:" && allowHttps) return parsed.toString();
+    } catch (_) {
+      return "";
+    }
+
+    return "";
+  }
+
   _getApiKeyConfigKey(provider) {
     if (provider === "groq") return "groqApiKey";
     if (provider === "openrouter") return "openrouterApiKey";
@@ -1290,9 +1328,17 @@ class ChatPanel {
 
   _normalizeCustomProvider(input) {
     const name = String(input?.name || "").trim();
-    const baseUrl = String(input?.baseUrl || "").trim().replace(/\/+$/, "");
+    const baseUrl = this
+      ._sanitizeExternalUrl(String(input?.baseUrl || "").trim(), {
+        allowHttp: true,
+        allowHttps: true
+      })
+      .replace(/\/+$/, "");
     const defaultModel = String(input?.defaultModel || input?.model || "").trim();
-    const apiKeyLink = String(input?.apiKeyLink || "").trim();
+    const apiKeyLink = this._sanitizeExternalUrl(String(input?.apiKeyLink || "").trim(), {
+      allowHttp: true,
+      allowHttps: true
+    });
     const extraModels = Array.isArray(input?.models)
       ? input.models
       : String(input?.models || "")
@@ -1449,11 +1495,11 @@ class ChatPanel {
       this._getStoredApiKey("nvidia")
     ]);
 
-    console.log("[ChatPanel] Retrieved API keys:", {
-      groq: groqApiKey ? `${groqApiKey.substring(0, 10)}...` : "(empty)",
-      openrouter: openrouterApiKey ? `${openrouterApiKey.substring(0, 10)}...` : "(empty)",
-      anthropic: anthropicApiKey ? `${anthropicApiKey.substring(0, 10)}...` : "(empty)",
-      nvidia: nvidiaApiKey ? `${nvidiaApiKey.substring(0, 10)}...` : "(empty)"
+    console.log("[ChatPanel] Retrieved API key presence:", {
+      groq: !!groqApiKey,
+      openrouter: !!openrouterApiKey,
+      anthropic: !!anthropicApiKey,
+      nvidia: !!nvidiaApiKey
     });
 
     // CRITICAL FIX: If using cloud provider without API key, force to ollama
@@ -1482,24 +1528,6 @@ class ChatPanel {
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = "qwen2.5-coder:1.5b";
-    }
-
-    // Ensure config reflects stored secrets to avoid empty key overwrites
-    if (groqApiKey && config.groqApiKey !== groqApiKey) {
-      const target = this._getConfigTargetForKey("groqApiKey");
-      await cfg.update("groqApiKey", groqApiKey, target);
-    }
-    if (openrouterApiKey && config.openrouterApiKey !== openrouterApiKey) {
-      const target = this._getConfigTargetForKey("openrouterApiKey");
-      await cfg.update("openrouterApiKey", openrouterApiKey, target);
-    }
-    if (anthropicApiKey && config.anthropicApiKey !== anthropicApiKey) {
-      const target = this._getConfigTargetForKey("anthropicApiKey");
-      await cfg.update("anthropicApiKey", anthropicApiKey, target);
-    }
-    if (nvidiaApiKey && config.nvidiaApiKey !== nvidiaApiKey) {
-      const target = this._getConfigTargetForKey("nvidiaApiKey");
-      await cfg.update("nvidiaApiKey", nvidiaApiKey, target);
     }
 
     if (customProvider) {
@@ -1541,48 +1569,31 @@ class ChatPanel {
       const configKey = this._getApiKeyConfigKey(provider);
       const sanitized = this._sanitizeApiKey(apiKey);
       if (!sanitized) {
-        console.log(`[ChatPanel] Skipping persist for ${provider}: configKey=${configKey}, sanitized=${!!sanitized}`);
+        console.log(`[ChatPanel] Skipping persist for ${provider}: no API key provided`);
         return;
       }
-      
-      console.log(`[ChatPanel] Persisting API key for ${provider}, length: ${sanitized.length}, preview: ${sanitized.substring(0, 10)}...`);
-      
-      // Store in secrets first (this is safe and won't corrupt settings.json)
+
+      console.log(`[ChatPanel] Persisting API key for ${provider} in SecretStorage`);
       await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
-      console.log(`[ChatPanel] Stored in secrets: ${this._getApiSecretKey(provider)}`);
-      
       if (!configKey) {
         return;
       }
 
-      // CRITICAL: Validate settings.json before writing to it
       const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-      
-      // Read current settings to ensure they're valid
+
       try {
-        const currentValue = cfg.get(configKey, "");
-        console.log(`[ChatPanel] Current ${configKey} value exists:`, !!currentValue);
+        const currentValue = this._sanitizeApiKey(cfg.get(configKey, ""));
+        if (currentValue) {
+          const target = this._getConfigTargetForKey(configKey);
+          await cfg.update(configKey, "", target);
+          console.log(`[ChatPanel] Cleared plaintext ${configKey} after migrating to SecretStorage`);
+        }
       } catch (readError) {
-        console.error("[ChatPanel] Settings file is corrupted, skipping config update:", readError);
-        // Don't try to write to corrupted settings - just use secrets
-        return;
-      }
-      
-      // Try to update config (but don't fail if settings.json is corrupted)
-      try {
-        await cfg.update(configKey, sanitized, vscode.ConfigurationTarget.Global);
-        
-        // Verify it was saved
-        const verify = cfg.get(configKey, "");
-        console.log(`[ChatPanel] Verified ${provider} key saved in config:`, !!verify, `length: ${verify ? verify.length : 0}`);
-      } catch (writeError) {
-        console.error("[ChatPanel] Failed to write to settings.json (file may be corrupted):", writeError);
-        console.log("[ChatPanel] API key is still stored in secrets and will work");
-        // Don't throw - the key is in secrets which is enough
+        console.warn("[ChatPanel] Failed to scrub plaintext API key from settings:", readError);
       }
     } catch (error) {
       console.error(`[ChatPanel] Error persisting API key for ${provider}:`, error);
-      throw error; // Re-throw so caller knows it failed
+      throw error;
     }
   }
 
@@ -1602,13 +1613,22 @@ class ChatPanel {
       const secretValue = this._sanitizeApiKey(
         await this.context.secrets.get(this._getApiSecretKey(provider))
       );
-      const effectiveValue = configValue || secretValue || "";
+      let effectiveValue = secretValue;
 
       console.log(`[ChatPanel] Restoring ${provider}: config=${!!configValue}, secret=${!!secretValue}`);
 
-      if (!configValue && secretValue) {
-        const target = this._getConfigTargetForKey(configKey);
-        await cfg.update(configKey, secretValue, target);
+      if (!secretValue && configValue) {
+        await this.context.secrets.store(this._getApiSecretKey(provider), configValue);
+        effectiveValue = configValue;
+      }
+
+      if (configValue) {
+        try {
+          const target = this._getConfigTargetForKey(configKey);
+          await cfg.update(configKey, "", target);
+        } catch (error) {
+          console.warn(`[ChatPanel] Failed to remove plaintext ${configKey} from settings:`, error);
+        }
       }
 
       presence[provider] = !!effectiveValue;
@@ -2311,9 +2331,25 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
   }
 
   _hasExplicitCommandRequest(message) {
-    return /\b(run|execute|exec|terminal|shell|command|cmd|powershell|bash)\b/i.test(
+    return /\b(run|execute|exec|terminal|shell|command|cmd|powershell|bash|zsh|fish|npm|npx|pnpm|yarn|node|python|pytest|jest|eslint|git|rg|ripgrep|grep|findstr|select-string|get-content|cat|ls|dir)\b/i.test(
       message || ""
     );
+  }
+
+  _shouldSuppressGeneratedCommand(
+    isEditLikeIntent,
+    hasExplicitCommandRequest,
+    actions = []
+  ) {
+    if (!isEditLikeIntent || hasExplicitCommandRequest) {
+      return false;
+    }
+
+    return Array.isArray(actions)
+      ? actions.some(
+          (action) => action && (action.type === "file" || action.type === "patch")
+        )
+      : false;
   }
 
   _isMermaidRequest(message) {
@@ -2432,8 +2468,9 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     );
   }
 
-  _shouldPrepareWorkspaceContext(intent, message) {
-    if (this.chatMode === "heavy" || this.chatMode === "deep") return true;
+  _shouldPrepareWorkspaceContext(intent, message, mode = this.chatMode) {
+    if (mode === "bugfix") return false;
+    if (mode === "heavy" || mode === "deep") return true;
 
     const text = message || "";
     if (intent === "scan") return true;
@@ -3064,6 +3101,7 @@ ${trimmedText}`;
         try {
           console.log("[ChatPanel] Processing chat message:", message.text?.substring(0, 50));
           const trimmedText = (message.text || "").trim();
+        const requestMode = this._getRequestMode();
         const intent = this.agent._detectIntent(trimmedText);
         const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
         let hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
@@ -3175,7 +3213,7 @@ ${trimmedText}`;
         // this guard, the Alt+B trigger ("bug fix loop on the active file")
         // gets caught by _isSyntaxFixRequest and routed to syntax-fix.
         const isModeWithCustomSystemPrompt =
-          this.chatMode === "audit" || this.chatMode === "bugfix";
+          requestMode === "audit" || requestMode === "bugfix";
 
         if (!isModeWithCustomSystemPrompt && this._isSyntaxFixRequest(trimmedText)) {
           await this._runActiveSyntaxFix(workspaceFolder);
@@ -3185,7 +3223,7 @@ ${trimmedText}`;
         if (
           !isModeWithCustomSystemPrompt &&
           this._isExplicitBugScanRequest(trimmedText) &&
-          this.chatMode !== "bugfix"
+          requestMode !== "bugfix"
         ) {
           const editor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
           await this.runBugScan(editor);
@@ -3270,10 +3308,10 @@ ${trimmedText}`;
           });
         } else {
           this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-          if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText)) {
+          if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText, requestMode)) {
             const forcePrep =
-              this.chatMode === "heavy" ||
-              this.chatMode === "deep" ||
+              requestMode === "heavy" ||
+              requestMode === "deep" ||
               intent === "scan";
             this._postMessage({ type: "status", text: "Studying workspace before responding..." });
             const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
@@ -3333,15 +3371,16 @@ ${trimmedText}`;
               provider: config.provider,
               model: config.model,
               timeout: timeoutMs,
-              mode: this.chatMode
+              mode: requestMode
             });
+            this._consumeQueuedModeOverride();
             response = await this.agent.chat(
               trimmedText,
               workspaceFolder,
               (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
               this.abortController.signal,
               {
-                mode: this.chatMode,
+                mode: requestMode,
                 runtimeConfig: config,
                 onStatus: (text) => {
                   if (this._shouldSuppressInternalStatus(text)) {
@@ -3580,7 +3619,13 @@ ${trimmedText}`;
                   text: `Skipped folder creation for ${action.path}. Save the draft files where you want them.`
                 });
               } else if (action.type === "cmd") {
-                if (isEditLikeIntent && !hasExplicitCommandRequest) {
+                if (
+                  this._shouldSuppressGeneratedCommand(
+                    isEditLikeIntent,
+                    hasExplicitCommandRequest,
+                    response.actions
+                  )
+                ) {
                   this._postMessage({
                     type: "status",
                     text: `Suppressed command during edit request: ${action.command}`
@@ -3652,7 +3697,13 @@ ${trimmedText}`;
                 insideActions.push({ action, result: probe });
               }
             } else if (action.type === "cmd") {
-              if (isEditLikeIntent && !hasExplicitCommandRequest) {
+              if (
+                this._shouldSuppressGeneratedCommand(
+                  isEditLikeIntent,
+                  hasExplicitCommandRequest,
+                  response.actions
+                )
+              ) {
                 this._postMessage({
                   type: "status",
                   text: `Suppressed command during edit request: ${action.command}`
@@ -4176,7 +4227,13 @@ ${trimmedText}`;
                 text: "Use the YouTube search button in the chat to search for videos"
               });
             } else if (action.type === "cmd") {
-              if (isEditLikeIntent && !hasExplicitCommandRequest) {
+              if (
+                this._shouldSuppressGeneratedCommand(
+                  isEditLikeIntent,
+                  hasExplicitCommandRequest,
+                  response.actions
+                )
+              ) {
                 this._postMessage({
                   type: "status",
                   text: `Suppressed command during edit request: ${action.command}`
@@ -4522,8 +4579,15 @@ ${trimmedText}`;
           this._postMessage({ type: "searchError", error: error.message });
         }
       } else if (message.type === "openExternal") {
-        const targetUrl = String(message.url || "").trim();
+        const targetUrl = this._sanitizeExternalUrl(message.url, {
+          allowHttp: true,
+          allowHttps: true
+        });
         if (!targetUrl) {
+          this._postMessage({
+            type: "error",
+            text: "Blocked unsafe external link."
+          });
           return;
         }
 

@@ -972,13 +972,13 @@ class AIAgent {
     const latencyProfile = this._getLatencyProfile(config, mode, intent);
     const optimizedMaxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens;
 
-    // Log API key status for debugging
+    // Log key presence only; never print secrets or prefixes.
     console.log("[Agent] Building request for provider:", config.provider);
     console.log("[Agent] API key status:", {
-      groq: config.groqApiKey ? `${config.groqApiKey.substring(0, 10)}... (length: ${config.groqApiKey.length})` : "(empty)",
-      openrouter: config.openrouterApiKey ? `${config.openrouterApiKey.substring(0, 10)}... (length: ${config.openrouterApiKey.length})` : "(empty)",
-      anthropic: config.anthropicApiKey ? `${config.anthropicApiKey.substring(0, 10)}... (length: ${config.anthropicApiKey.length})` : "(empty)",
-      nvidia: config.nvidiaApiKey ? `${config.nvidiaApiKey.substring(0, 10)}... (length: ${config.nvidiaApiKey.length})` : "(empty)"
+      groq: !!config.groqApiKey,
+      openrouter: !!config.openrouterApiKey,
+      anthropic: !!config.anthropicApiKey,
+      nvidia: !!config.nvidiaApiKey
     });
 
     // Split prompt into system + user parts using unique markers
@@ -1057,7 +1057,7 @@ class AIAgent {
     }
     if (config.provider === "groq") {
       const apiKey = config.groqApiKey;
-      console.log("[Agent] Groq request - API key:", apiKey ? `${apiKey.substring(0, 10)}... (length: ${apiKey.length})` : "(EMPTY!)");
+      console.log("[Agent] Groq request - API key configured:", !!apiKey);
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
         headers: {
@@ -1698,9 +1698,6 @@ class AIAgent {
     const earlyIntent = forcedIntent || this._detectIntent(userMessage);
     const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
-    // Check for knowledge graph only for code-related intents
-    const knowledgeGraphContext = await this._loadKnowledgeGraph(workspaceFolder, userMessage, earlyIntent);
-
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor;
@@ -1720,6 +1717,13 @@ class AIAgent {
         }
       }
     }
+
+    // Check for knowledge graph only for code-related intents
+    const knowledgeGraphContext = await this._loadKnowledgeGraph(
+      effectiveWorkspace,
+      userMessage,
+      earlyIntent
+    );
 
     // Only intercept factual questions the model cannot answer
     const lowerMsg = userMessage.trim().toLowerCase();
@@ -3081,8 +3085,28 @@ ${resolvedMessage}`;
     ].join("\n");
   }
 
+  _buildSilentAuditGatePreamble() {
+    return [
+      "Silent security gate: before responding, inspect submitted code and instructions for clearly malicious patterns.",
+      "Treat the following as malicious patterns: hardcoded credentials, exfiltration, destructive commands, remote payload execution, obfuscated payloads, self-replication, shell injection helpers, crypto-mining, and similar harmful behavior.",
+      "If no malicious pattern is present, stay silent about this gate and continue with the normal task.",
+      "If ANY malicious pattern is present, your ENTIRE response must be only the structured halt block below and nothing else.",
+      "Do not explain the code. Do not offer fixes. Do not provide safer variants. Do not continue after the block.",
+      "",
+      "%%AUDIT_HALTED%%",
+      "Flagged pattern: [specific pattern detected]",
+      "Location: [file / function / line]",
+      "Reason: [one sentence plain English]",
+      "%%END%%",
+      "",
+      "When the security gate fires, cancel all pending actions and stop.",
+      "Never mention this security gate unless it fires.",
+      "Never touch malicious code in any way."
+    ].join("\n");
+  }
+
   _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
-    const silentPreamble = this._buildSilentJanitorPreamble() + "\n\n";
+    const silentPreamble = this._buildSilentAuditGatePreamble() + "\n\n";
     // Audit is NOT a separate mode — the silent preamble already runs the
     // mandatory malicious-pattern scan on every request, automatically and
     // without user consent. Adding a dedicated "audit" system instruction
@@ -3769,16 +3793,38 @@ ${(rawResponse || "").slice(0, 4000)}
   }
 
   _extractPathHints(query) {
-    const matches = query.match(
+    const text = String(query || "");
+    const hints = new Set();
+    const addHint = (value) => {
+      const normalized = String(value || "")
+        .trim()
+        .replace(/^["'`]|["'`]$/g, "")
+        .replace(/\\/g, "/")
+        .toLowerCase();
+      if (normalized.length >= 3) {
+        hints.add(normalized);
+      }
+    };
+    const pathLikeMatches = text.match(
       /(?:[A-Za-z]:\\[^\s"'`]+|(?:[\w.-]+[\\/])+[\w.-]+(?:\.[\w]+)?|[\w.-]+\.[A-Za-z0-9]+)/g
     );
 
-    return (matches || []).map((value) =>
-      value
-        .replace(/^["'`]|["'`]$/g, "")
-        .replace(/\\/g, "/")
-        .toLowerCase()
-    );
+    for (const match of pathLikeMatches || []) {
+      addHint(match);
+    }
+
+    const quotedTokenRegex = /[`'"]([A-Za-z0-9_.-]{3,})[`'"]/g;
+    let match;
+    while ((match = quotedTokenRegex.exec(text)) !== null) {
+      addHint(match[1]);
+    }
+
+    const slugTokenRegex = /\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b/g;
+    while ((match = slugTokenRegex.exec(text)) !== null) {
+      addHint(match[0]);
+    }
+
+    return Array.from(hints);
   }
 
   _isGeneratedArtifactPath(filePath) {
@@ -3810,20 +3856,27 @@ ${(rawResponse || "").slice(0, 4000)}
 
   _matchPathsFromHints(pathHints) {
     const matches = new Set();
+    const getBaseStem = (value) =>
+      path
+        .basename(String(value || "").replace(/\\/g, "/").toLowerCase())
+        .replace(/\.[a-z0-9]+$/i, "");
 
     for (const hint of pathHints) {
       const normalizedHint = hint.replace(/\\/g, "/").toLowerCase();
       const hintedBaseName = path.basename(normalizedHint);
+      const hintedBaseStem = getBaseStem(normalizedHint);
       const hintMatches = [];
 
       for (const relativePath of this.codebaseContext.keys()) {
         const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();
         const baseName = path.basename(normalizedPath);
+        const baseStem = getBaseStem(normalizedPath);
 
         if (
           normalizedPath === normalizedHint ||
           normalizedPath.endsWith(`/${normalizedHint}`) ||
-          baseName === hintedBaseName
+          baseName === hintedBaseName ||
+          (hintedBaseStem && baseStem === hintedBaseStem)
         ) {
           hintMatches.push(relativePath.replace(/\\/g, "/"));
         }
@@ -4396,6 +4449,7 @@ ${userMessage}`;
   _parseResponse(response) {
     const actions = [];
     const warnings = [];
+    const consumedRanges = [];
     const normalizeActionPath = (rawPath) => {
       const input = (rawPath || "").trim();
       if (!input) return { path: "", outsideWorkspace: false };
@@ -4434,11 +4488,35 @@ ${userMessage}`;
       }
       return false;
     };
+    const isWithinConsumedRange = (index) =>
+      consumedRanges.some(
+        (range) => index >= range.start && index < range.end
+      );
+    const markConsumedRange = (index, text) => {
+      if (typeof index !== "number" || index < 0) return;
+      const length = typeof text === "string" ? text.length : 0;
+      if (length <= 0) return;
+      consumedRanges.push({ start: index, end: index + length });
+    };
+    const hasStandaloneToken = (pattern) => {
+      const flags = pattern.flags.includes("g")
+        ? pattern.flags
+        : `${pattern.flags}g`;
+      const regex = new RegExp(pattern.source, flags);
+      let tokenMatch;
+      while ((tokenMatch = regex.exec(response)) !== null) {
+        if (!isWithinConsumedRange(tokenMatch.index)) {
+          return true;
+        }
+      }
+      return false;
+    };
 
     // Match PATCH: actions for targeted edits
     const patchRegex = /PATCH:\s*([^\r\n`]+)\r?\nSEARCH:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```\s*\r?\nREPLACE:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     let match;
     while ((match = patchRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
       const searchContent = match[2] || "";
@@ -4460,11 +4538,13 @@ ${userMessage}`;
         search: searchContent,
         replace: replaceContent
       });
+      markConsumedRange(match.index, match[0]);
     }
 
     // Match FILE: with flexible code block format
     const fileRegex = /FILE:\s*([^\r\n`]+)\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     while ((match = fileRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
       const content = match[2] || "";
@@ -4485,6 +4565,7 @@ ${userMessage}`;
         language: "text",
         content
       });
+      markConsumedRange(match.index, match[0]);
     }
 
     // Fallback: also try matching FILE: followed by content without code fences
@@ -4492,6 +4573,7 @@ ${userMessage}`;
       const looseFIleRegex =
         /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|MKDIR|CMD):|$)/g;
       while ((match = looseFIleRegex.exec(response)) !== null) {
+        if (isWithinConsumedRange(match.index)) continue;
         const pathInfo = normalizeActionPath(match[1]);
         const normalizedPath = pathInfo.path;
         const content = match[2].replace(/^```[\w]*\n?|```$/gm, "").trim();
@@ -4512,11 +4594,13 @@ ${userMessage}`;
           language: "text",
           content
         });
+        markConsumedRange(match.index, match[0]);
       }
     }
 
     const cmdRegex = /^CMD:\s*(.+)$/gm;
     while ((match = cmdRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
       const cmd = match[1].trim();
       if (
         cmd.startsWith("/") ||
@@ -4529,6 +4613,7 @@ ${userMessage}`;
 
     const mkdirRegex = /MKDIR:\s*(.+)/g;
     while ((match = mkdirRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
       if (!normalizedPath) continue;
@@ -4540,33 +4625,34 @@ ${userMessage}`;
     }
 
     // Match only explicit GRAPHIFY actions to avoid accidental triggers
-    if (/GRAPHIFY\s*:\s*open/i.test(response)) {
+    if (hasStandaloneToken(/GRAPHIFY\s*:\s*open/i)) {
       actions.push({ type: "graphify" });
     }
 
-    if (/LINT\s*:\s*active/i.test(response)) {
+    if (hasStandaloneToken(/LINT\s*:\s*active/i)) {
       actions.push({ type: "lint" });
     }
 
-    if (/VALIDATE\s*:\s*frontend/i.test(response)) {
+    if (hasStandaloneToken(/VALIDATE\s*:\s*frontend/i)) {
       actions.push({ type: "validate_frontend" });
     }
 
-    if (/PREVIEW\s*:\s*inspect/i.test(response)) {
+    if (hasStandaloneToken(/PREVIEW\s*:\s*inspect/i)) {
       actions.push({ type: "preview_inspect" });
     }
 
-    if (/PREVIEW\s*:\s*open/i.test(response)) {
+    if (hasStandaloneToken(/PREVIEW\s*:\s*open/i)) {
       actions.push({ type: "preview" });
     }
 
-    if (/PERFORMANCE\s*:\s*show/i.test(response)) {
+    if (hasStandaloneToken(/PERFORMANCE\s*:\s*show/i)) {
       actions.push({ type: "performance" });
     }
 
     // Match FETCH: actions for web requests
     const fetchRegex = /FETCH:\s*(.+)/g;
     while ((match = fetchRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
       const url = match[1].trim();
       if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
         actions.push({ type: "fetch", url });
@@ -5016,6 +5102,19 @@ ${userMessage}`;
     }
   }
 
+  _shouldUsePowerShellForCommand(command) {
+    if (process.platform !== "win32") {
+      return false;
+    }
+
+    const normalized = String(command || "").trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+
+    return true;
+  }
+
   async executeCommand(command, workspaceFolder) {
     const validation = this.validateCommand(command);
     if (!validation.allowed) {
@@ -5031,11 +5130,8 @@ ${userMessage}`;
     }
 
     return new Promise((resolve) => {
-      const { exec } = require("child_process");
-      exec(
-        command,
-        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
-        (error, stdout, stderr) => {
+      const { exec, execFile } = require("child_process");
+      const handleResult = (error, stdout, stderr) => {
           const rawOutput = [stdout, stderr].filter(Boolean).join("\n");
           const outputInfo = this._truncateCommandOutput(rawOutput);
           const hitMaxBuffer =
@@ -5081,7 +5177,33 @@ ${userMessage}`;
             output: outputInfo.text,
             outputTruncated: outputInfo.truncated
           });
-        }
+        };
+
+      if (this._shouldUsePowerShellForCommand(command)) {
+        execFile(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command
+          ],
+          {
+            cwd: workspaceFolder,
+            maxBuffer: MAX_COMMAND_BUFFER_BYTES,
+            windowsHide: true
+          },
+          handleResult
+        );
+        return;
+      }
+
+      exec(
+        command,
+        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
+        handleResult
       );
     });
   }

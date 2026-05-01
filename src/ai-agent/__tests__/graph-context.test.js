@@ -48,6 +48,10 @@ describe("graph-context", () => {
     expect(
       matchGraphPathsFromHints(graphData, ["src/graphify/graph-loader.js"])
     ).toEqual(["src/graphify/graph-loader.js"]);
+
+    expect(matchGraphPathsFromHints(graphData, ["graph-loader"])).toEqual([
+      "src/graphify/graph-loader.js"
+    ]);
   });
 
   test("builds graph lookup context with dependency neighborhood", () => {
