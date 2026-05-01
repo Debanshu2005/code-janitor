@@ -40,6 +40,7 @@ Website: https://code-janitor-web.vercel.app/
 - `Alt+P` - Live Preview
 - `Alt+L` - Lint Code (ESLint)
 - `Alt+V` - Validate Frontend Dependencies
+- `Alt+B` - Beautify Code (advanced formatting)
 - `Ctrl+Alt+G` - Visualize Codebase Graph (Graphify)
 
 ### Commands
@@ -64,8 +65,23 @@ Website: https://code-janitor-web.vercel.app/
 
 ### AI Chat Features
 
+- **Smart Code Editing**: PATCH format for targeted edits (1-20 lines), FILE format for larger changes
+- **Pre-Edit Diagnostics**: Automatic file status checks before making changes
+  - Git status detection for uncommitted changes
+  - Syntax validation for code files
+  - File existence and readability checks
+- **Post-Edit Verification**: Automatic validation after code changes
+  - Syntax checking for Python, Java, JavaScript/TypeScript
+  - npm script execution (lint, typecheck, build, test)
+  - Comprehensive error reporting
+- **Security Features**:
+  - Malicious content detection and flagging
+  - End-to-end encryption for API communications
+  - Secure credential storage
+  - Command validation and sandboxing
+- **Expanded Command Support**: 13 git commands, package managers (yarn, pnpm, pip), build tools (tsc, mvn, gradle, cargo, go, dotnet), testing frameworks (pytest, unittest)
 - Syntax checking for JS, TS, Python, Java, C/C++, JSON, and HTML
-- Code generation and refactoring
+- Code generation and refactoring with production-grade quality
 - Bug fixing and debugging assistance
 - Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
 - **Web Search**: Search the web with DuckDuckGo (no API key required)
@@ -74,6 +90,7 @@ Website: https://code-janitor-web.vercel.app/
   - Videos embed and play inline
   - Powered by DuckDuckGo
 - **Self-Healing**: Automatically detects slow models and switches to faster alternatives
+- **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
 - **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
    - Track response times
    - Monitor model performance
@@ -93,9 +110,11 @@ This package is focused on AI chat, guided edits, and Arduino-specific features.
 ### Arduino IDE Features
 
 - **AI Chat Panel**: Dedicated Arduino chat panel with `Code Janitor Arduino: Open Arduino AI Chat`
+- **Smart Code Editing**: PATCH format for targeted edits, FILE format for complete rewrites
+- **Pre-Edit & Post-Edit Checks**: Automatic validation before and after code changes
 - **Multiple AI Providers**: Supports Ollama (local), Groq (fast, free), OpenRouter, Anthropic, and NVIDIA
 - **Workspace Scanning**: Scans workspace for relevant context before answering
-- **Structured Actions**: Generate `FILE`, `MKDIR`, and `CMD` actions with safety checks
+- **Structured Actions**: Generate `FILE`, `PATCH`, `MKDIR`, and `CMD` actions with safety checks
 - **Model Persistence**: Preserves the last selected model per provider
 - **Quick Actions**: Explain, review, fix, refactor, tests, and syntax scan
 - **Source Control**: Built-in Git integration to collaborate with co-workers
