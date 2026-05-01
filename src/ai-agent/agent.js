@@ -1266,6 +1266,95 @@ class AIAgent {
     return `${prefix} ${response.status}${shortDetails}`;
   }
 
+  async _readResponseText(response, parseChunk, options = {}) {
+    const streamCallback =
+      typeof options.streamCallback === "function"
+        ? options.streamCallback
+        : null;
+    const abortSignal = options.abortSignal || null;
+    const shouldStop =
+      typeof options.shouldStop === "function" ? options.shouldStop : null;
+
+    if (!response?.body || typeof response.body.getReader !== "function") {
+      const text = await response.text();
+      if (!text) return "";
+
+      let parsedText = "";
+      const lines = text.split(/\r?\n/).filter((line) => line.trim());
+      for (const line of lines) {
+        try {
+          const token = parseChunk(line);
+          if (token === null) continue;
+          parsedText += token;
+          if (streamCallback) streamCallback(token);
+        } catch {
+          // If parsing fails for a non-streaming host, keep the raw body.
+        }
+      }
+
+      return parsedText || text;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullResponse = "";
+    let pending = "";
+    let streamDone = false;
+
+    while (!streamDone) {
+      if (abortSignal?.aborted || shouldStop?.()) {
+        try {
+          reader.cancel();
+        } catch {}
+        break;
+      }
+
+      const { done, value } = await reader.read();
+      if (done) {
+        streamDone = true;
+        pending += decoder.decode();
+      } else {
+        pending += decoder.decode(value, { stream: true });
+      }
+
+      const lines = pending.split(/\r?\n/);
+      pending = streamDone ? "" : lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const token = parseChunk(line);
+          if (token === null) continue;
+          fullResponse += token;
+          if (streamCallback) streamCallback(token);
+          if (shouldStop?.()) {
+            try {
+              reader.cancel();
+            } catch {}
+            streamDone = true;
+            break;
+          }
+        } catch {
+          // Ignore malformed partial lines and keep reading.
+        }
+      }
+    }
+
+    if (pending.trim() && !shouldStop?.()) {
+      try {
+        const token = parseChunk(pending);
+        if (token !== null) {
+          fullResponse += token;
+          if (streamCallback) streamCallback(token);
+        }
+      } catch {
+        // Ignore trailing parse issues.
+      }
+    }
+
+    return fullResponse;
+  }
+
   async scanCodebase(workspaceFolder) {
     this.codebaseContext.clear();
     this.scanVersion += 1;
@@ -1575,6 +1664,10 @@ class AIAgent {
         : options.mode === "heavy"
           ? "heavy"
           : "fast";
+    const forcedIntent =
+      typeof options.intentOverride === "string" && options.intentOverride.trim()
+        ? options.intentOverride.trim().toLowerCase()
+        : null;
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null;
 
@@ -1598,7 +1691,7 @@ class AIAgent {
     const isTabQuestion = this._isTabQuestion(userMessage);
 
     // Detect intent early for knowledge graph decision
-    const earlyIntent = this._detectIntent(userMessage);
+    const earlyIntent = forcedIntent || this._detectIntent(userMessage);
     const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Check for knowledge graph only for code-related intents
@@ -1817,7 +1910,7 @@ ${resolvedMessage}`;
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
-      const reqIntent = earlyIntent;
+      const reqIntent = forcedIntent || earlyIntent;
       const shouldCheckRepetition = !this._shouldForceStructuredEdit(
         reqIntent,
         userMessage
@@ -1860,50 +1953,29 @@ ${resolvedMessage}`;
       }
 
       let fullResponse = "";
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let streamDone = false;
       let repetitionDetected = false;
-
-      while (!streamDone) {
-        if (abortSignal?.aborted) {
-          break;
-        }
-
-        const { done, value } = await reader.read();
-        if (done) {
-          streamDone = true;
-          continue;
-        }
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter((line) => line.trim());
-
-        for (const line of lines) {
-          try {
-            const token = reqOpts.parseChunk(line);
-            if (token === null) continue;
-            const nextResponse = fullResponse + token;
-            if (
-              shouldCheckRepetition &&
-              this._isRepeatingResponse(nextResponse, mode)
-            ) {
-              repetitionDetected = true;
-              streamDone = true;
-              if (!abortSignal?.aborted) {
-                try {
-                  reader.cancel();
-                } catch (_) {}
-              }
-              break;
-            }
-            fullResponse += token;
-            if (streamCallback) streamCallback(token);
-          } catch (parseError) {
-            // ignore partial chunks
+      fullResponse = await this._readResponseText(
+        response,
+        (line) => {
+          const token = reqOpts.parseChunk(line);
+          if (token === null) return null;
+          const nextResponse = fullResponse + token;
+          if (
+            shouldCheckRepetition &&
+            this._isRepeatingResponse(nextResponse, mode)
+          ) {
+            repetitionDetected = true;
+            return null;
           }
+          fullResponse = nextResponse;
+          return token;
+        },
+        {
+          streamCallback,
+          abortSignal,
+          shouldStop: () => repetitionDetected
         }
-      }
+      );
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
@@ -1913,7 +1985,7 @@ ${resolvedMessage}`;
       const cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
       
       let parsedResponse = this._parseResponse(cleanedText);
-      const finalIntent = this._detectIntent(userMessage);
+      const finalIntent = forcedIntent || this._detectIntent(userMessage);
       const requiresFileActions = this._shouldForceStructuredEdit(
         finalIntent,
         userMessage
@@ -1962,35 +2034,11 @@ ${resolvedMessage}`;
           );
         }
 
-        let retryText = "";
-        const retryReader = retryResponse.body.getReader();
-        const retryDecoder = new TextDecoder();
-        let retryDone = false;
-
-        while (!retryDone) {
-          if (abortSignal?.aborted) {
-            break;
-          }
-
-          const { done, value } = await retryReader.read();
-          if (done) {
-            retryDone = true;
-            continue;
-          }
-
-          const chunk = retryDecoder.decode(value);
-          const lines = chunk.split("\n").filter((line) => line.trim());
-
-          for (const line of lines) {
-            try {
-              const token = retryOpts.parseChunk(line);
-              if (token === null) continue;
-              retryText += token;
-            } catch (_) {
-              // ignore partial chunks
-            }
-          }
-        }
+        const retryText = await this._readResponseText(
+          retryResponse,
+          retryOpts.parseChunk,
+          { abortSignal }
+        );
 
         firstRetryText = retryText || finalText;
         parsedResponse = this._parseResponse(firstRetryText);
@@ -2035,35 +2083,11 @@ ${resolvedMessage}`;
           );
         }
 
-        let fileOnlyRetryText = "";
-        const fileOnlyReader = fileOnlyRetryResponse.body.getReader();
-        const fileOnlyDecoder = new TextDecoder();
-        let fileOnlyDone = false;
-
-        while (!fileOnlyDone) {
-          if (abortSignal?.aborted) {
-            break;
-          }
-
-          const { done, value } = await fileOnlyReader.read();
-          if (done) {
-            fileOnlyDone = true;
-            continue;
-          }
-
-          const chunk = fileOnlyDecoder.decode(value);
-          const lines = chunk.split("\n").filter((line) => line.trim());
-
-          for (const line of lines) {
-            try {
-              const token = fileOnlyRetryOpts.parseChunk(line);
-              if (token === null) continue;
-              fileOnlyRetryText += token;
-            } catch (_) {
-              // ignore partial chunks
-            }
-          }
-        }
+        const fileOnlyRetryText = await this._readResponseText(
+          fileOnlyRetryResponse,
+          fileOnlyRetryOpts.parseChunk,
+          { abortSignal }
+        );
 
         assistantText = fileOnlyRetryText || assistantText;
         parsedResponse = this._parseResponse(assistantText);
@@ -3551,13 +3575,21 @@ ${(rawResponse || "").slice(0, 4000)}
       mode === "heavy" || mode === "deep"
         ? REPETITION_WINDOW_HEAVY
         : REPETITION_WINDOW;
-    if (!text || text.length < window * 2) {
+    if (!text || text.length < window * 3) {
       return false;
     }
 
     const tail = text.slice(-window);
-    const previousText = text.slice(0, -window);
-    return previousText.includes(tail);
+    const normalizedTail = tail.trim();
+    if (
+      normalizedTail.length <
+      Math.max(48, Math.floor(window * 0.4))
+    ) {
+      return false;
+    }
+
+    const recentHistory = text.slice(0, -window).slice(-(window * 3));
+    return recentHistory.includes(tail);
   }
 
   _extractPathHints(query) {
@@ -3792,6 +3824,96 @@ ${(rawResponse || "").slice(0, 4000)}
     return null;
   }
 
+  _isJavaScriptHtmlScript(attrsText = "") {
+    const typeMatch = String(attrsText || "").match(
+      /\btype\s*=\s*["']([^"']+)["']/i
+    );
+    if (!typeMatch) {
+      return true;
+    }
+
+    const type = typeMatch[1].trim().toLowerCase();
+    if (!type) {
+      return true;
+    }
+
+    return (
+      type === "module" ||
+      type === "text/javascript" ||
+      type === "application/javascript" ||
+      type === "application/ecmascript" ||
+      type === "text/ecmascript" ||
+      type === "text/babel" ||
+      type.endsWith("javascript") ||
+      type.endsWith("ecmascript")
+    );
+  }
+
+  async _validateEmbeddedHtmlSyntax(content) {
+    let prettier = null;
+    try {
+      prettier = require("prettier");
+    } catch {
+      return null;
+    }
+
+    const validators = [
+      {
+        tag: "style",
+        parser: "css",
+        label: "CSS",
+        shouldValidate: () => true
+      },
+      {
+        tag: "script",
+        parser: "babel",
+        label: "JavaScript",
+        shouldValidate: (attrs) => this._isJavaScriptHtmlScript(attrs)
+      }
+    ];
+
+    for (const validator of validators) {
+      const blockRegex = new RegExp(
+        `<${validator.tag}\\b([^>]*)>([\\s\\S]*?)<\\/${validator.tag}>`,
+        "gi"
+      );
+      let match;
+
+      while ((match = blockRegex.exec(content)) !== null) {
+        const attrs = match[1] || "";
+        const block = match[2] || "";
+        if (!validator.shouldValidate(attrs) || !block.trim()) {
+          continue;
+        }
+
+        try {
+          await prettier.format(block, { parser: validator.parser });
+        } catch (error) {
+          const detail = String(error?.message || error || "")
+            .split("\n")
+            .find((line) => line.trim()) || "Unknown parse error";
+          return `HTML ${validator.label} syntax error in <${validator.tag}> block: ${detail}`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async _loadParse5() {
+    try {
+      const imported = await import("parse5");
+      return imported?.default || imported;
+    } catch (_) {
+      try {
+        const required = require("parse5");
+        return required?.default || required;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   async _runSyntaxCheck(relPath, workspaceFolder, fileContent = null) {
     const cmd = this._getSyntaxCheckCommand(relPath);
     const ext = path.extname(relPath).toLowerCase();
@@ -3799,10 +3921,22 @@ ${(rawResponse || "").slice(0, 4000)}
     // Special handling for HTML - use parse5
     if (ext === ".html") {
       try {
-        const parse5 = require("parse5");
+        const parse5 = await this._loadParse5();
         const fullPath = workspaceFolder ? path.join(workspaceFolder, relPath) : relPath;
         const content = fileContent || await require("fs").promises.readFile(fullPath, "utf8");
-        parse5.parse(content, { sourceCodeLocationInfo: true });
+        if (parse5?.parse) {
+          parse5.parse(content, { sourceCodeLocationInfo: true });
+        }
+        const embeddedSyntaxError = await this._validateEmbeddedHtmlSyntax(
+          content
+        );
+        if (embeddedSyntaxError) {
+          return {
+            success: false,
+            error: embeddedSyntaxError,
+            output: embeddedSyntaxError
+          };
+        }
 
         // parse5 is very forgiving and does not expose strict HTML "syntax errors"
         // in the way a compiler would. Successfully parsing here means the document
