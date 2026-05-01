@@ -66,16 +66,25 @@ class ChatPanel {
   }
 
   async runBugScan(editor) {
-    await this.show();
+    // If the chat is already open in the sidebar, do NOT create a separate
+    // webview panel — that would split the trigger to a panel the user
+    // isn't looking at. Only call show() (which creates a panel) when no
+    // sidebar view is bound yet.
+    if (!this.sidebarView?.webview) {
+      await this.show();
+    }
     await new Promise((resolve) => setTimeout(resolve, 200));
 
+    const targetWebview =
+      this.sidebarView?.webview || this.panel?.webview || null;
+
     if (!editor || !editor.document) {
-      if (this.panel?.webview) {
-        this.panel.webview.postMessage({
+      if (targetWebview) {
+        targetWebview.postMessage({
           type: "stream",
           text: "⚠️ No active file detected. Open a file and try again."
         });
-        this.panel.webview.postMessage({ type: "done" });
+        targetWebview.postMessage({ type: "done" });
       } else {
         vscode.window.showInformationMessage(
           "Code Janitor: No active file detected. Open a file and try again."
@@ -106,8 +115,12 @@ class ChatPanel {
       .filter(Boolean)
       .join("\n");
 
-    if (this.panel?.webview) {
-      this.panel.webview.postMessage({ type: "prefillAndSend", message: triggerMessage });
+    if (targetWebview) {
+      targetWebview.postMessage({ type: "prefillAndSend", message: triggerMessage });
+    } else {
+      vscode.window.showWarningMessage(
+        "Code Janitor: chat view is not ready. Open the Code Janitor sidebar and press Alt+B again."
+      );
     }
   }
 
@@ -2405,6 +2418,20 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     ) || /\bfix\b.*\b(current|active|open|this)\s+(file|tab|editor)\b/i.test(text);
   }
 
+  _isExplicitBugScanRequest(message) {
+    const text = (message || "").trim();
+    if (!text) return false;
+    if (/^\/bugfix$/i.test(text)) return false;
+    return (
+      /\b(check|scan|run|do)\b[^\n]*\bbugs?\b/i.test(text) ||
+      /\bbug\s+(check|scan)\b/i.test(text) ||
+      /\bany\s+bugs\??/i.test(text) ||
+      /\bfind\s+bugs?\b/i.test(text) ||
+      /\bfix\s+(?:the\s+|all\s+)?bugs?\b/i.test(text) ||
+      /^bugs?\??$/i.test(text)
+    );
+  }
+
   _shouldPrepareWorkspaceContext(intent, message) {
     if (this.chatMode === "heavy" || this.chatMode === "deep") return true;
 
@@ -3080,10 +3107,12 @@ ${trimmedText}`;
           return;
         }
         if (/^\/audit$/i.test(trimmedText)) {
-          this.chatMode = "audit";
+          // /audit is no longer a mode — the silent preamble runs the audit
+          // automatically on every request in every mode. Show a notice so
+          // users who type /audit out of habit understand it's already on.
           this._postMessage({
             type: "status",
-            text: "Mode switched to Security Auditor (read-only). File edits and shell commands are disabled until you switch back with /fast, /heavy, or /deep."
+            text: "Audit runs automatically on every message — no /audit mode needed. Malicious patterns trigger %%AUDIT_HALTED%% in any mode."
           });
           this._postMessage({ type: "done" });
           return;
@@ -3141,20 +3170,29 @@ ${trimmedText}`;
           return;
         }
 
-        if (this._isSyntaxFixRequest(trimmedText)) {
-          if (this.chatMode === "audit") {
-            this._postMessage({
-              type: "stream",
-              text: "Audit mode is read-only. Switch back with /fast, /heavy, or /deep before requesting fixes."
-            });
-            this._postMessage({ type: "done" });
-            return;
-          }
+        // In audit/bugfix modes, skip auto-routing interceptors so the
+        // mode-specific system instruction controls the response. Without
+        // this guard, the Alt+B trigger ("bug fix loop on the active file")
+        // gets caught by _isSyntaxFixRequest and routed to syntax-fix.
+        const isModeWithCustomSystemPrompt =
+          this.chatMode === "audit" || this.chatMode === "bugfix";
+
+        if (!isModeWithCustomSystemPrompt && this._isSyntaxFixRequest(trimmedText)) {
           await this._runActiveSyntaxFix(workspaceFolder);
           return;
         }
 
-        if (this._isMermaidRequest(trimmedText)) {
+        if (
+          !isModeWithCustomSystemPrompt &&
+          this._isExplicitBugScanRequest(trimmedText) &&
+          this.chatMode !== "bugfix"
+        ) {
+          const editor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
+          await this.runBugScan(editor);
+          return;
+        }
+
+        if (!isModeWithCustomSystemPrompt && this._isMermaidRequest(trimmedText)) {
           this._postMessage({ type: "thinking" });
           this._postMessage({ type: "status", text: "Generating diagram..." });
           const runtimeConfig = await this._getEffectiveAiConfig();
@@ -3182,7 +3220,7 @@ ${trimmedText}`;
           return;
         }
 
-        if (this._isSyntaxQuestion(trimmedText)) {
+        if (!isModeWithCustomSystemPrompt && this._isSyntaxQuestion(trimmedText)) {
           const activeOnly = /\b(active|current|open|this)\s+(file|tab|editor)\b/i.test(trimmedText) ||
             !/\b(workspace|repo|repository|project|codebase|all files|entire project)\b/i.test(trimmedText);
           const activeEditor = this._getCurrentFileEditor();
@@ -3197,7 +3235,7 @@ ${trimmedText}`;
           return;
         }
 
-        if (this._isLibraryAuditRequest(trimmedText)) {
+        if (!isModeWithCustomSystemPrompt && this._isLibraryAuditRequest(trimmedText)) {
           await this._runLibraryAudit(workspaceFolder);
           return;
         }
@@ -3361,6 +3399,24 @@ ${trimmedText}`;
           if (typeof response.text === "string" && /⛔\s*AUDIT HALTED/.test(response.text)) {
             await this._appendAuditRefusalLog(workspaceFolder, trimmedText, response.text);
           }
+        }
+
+        // Code Janitor Master Protocol: AUDIT_HALTED in ANY mode cancels all
+        // pending file/command actions and logs the refusal.
+        if (typeof response.text === "string" && /%%AUDIT_HALTED%%/.test(response.text)) {
+          if (Array.isArray(response.actions) && response.actions.length > 0) {
+            const blockedTypes = new Set(["file", "patch", "cmd", "mkdir"]);
+            const stripped = response.actions.filter((a) => !blockedTypes.has(a?.type));
+            const removed = response.actions.length - stripped.length;
+            if (removed > 0) {
+              this._postMessage({
+                type: "status",
+                text: `⛔ Audit halted — blocked ${removed} file/command action(s) from the model output.`
+              });
+            }
+            response.actions = stripped;
+          }
+          await this._appendAuditRefusalLog(workspaceFolder, trimmedText, response.text);
         }
 
         if (response.warnings && response.warnings.length > 0) {

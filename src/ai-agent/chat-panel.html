@@ -1145,6 +1145,138 @@
         font-size: 12px;
       }
 
+      /* Code Janitor structured cards (audit / bug-found / bug-fixed / bug-clear) */
+      .janitor-card {
+        margin: 12px 0;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .janitor-card.audit {
+        background: linear-gradient(180deg, rgba(127, 29, 29, 0.18), rgba(15, 20, 27, 0.98));
+        border-color: #b91c1c;
+        color: #fecaca;
+      }
+      .janitor-card.audit .janitor-title {
+        color: #fca5a5;
+        font-weight: 700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .janitor-card.audit .janitor-row {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 4px 12px;
+        margin: 4px 0;
+      }
+      .janitor-card.audit .janitor-key {
+        color: #fbbf24;
+        font-weight: 600;
+      }
+      .janitor-card.audit .janitor-footer {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(185, 28, 28, 0.4);
+        font-size: 11px;
+        color: #fca5a5;
+        opacity: 0.85;
+      }
+      .janitor-card.alert {
+        background: linear-gradient(180deg, rgba(120, 53, 15, 0.22), rgba(15, 20, 27, 0.98));
+        border-color: #d97706;
+      }
+      .janitor-card.alert .janitor-title {
+        color: #fbbf24;
+        font-weight: 700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .janitor-card.alert .janitor-meta {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 12px;
+      }
+      .janitor-card.alert .janitor-meta strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .janitor-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .janitor-btn {
+        padding: 6px 14px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        transition: filter 0.15s, transform 0.15s;
+      }
+      .janitor-btn:hover {
+        filter: brightness(1.1);
+        transform: translateY(-1px);
+      }
+      .janitor-btn.locate {
+        background: #2563eb;
+      }
+      .janitor-btn.fix {
+        background: #16a34a;
+      }
+      .janitor-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .janitor-card.fixed {
+        background: linear-gradient(180deg, rgba(20, 83, 45, 0.22), rgba(15, 20, 27, 0.98));
+        border-color: #16a34a;
+        color: #bbf7d0;
+      }
+      .janitor-card.fixed .janitor-title {
+        color: #86efac;
+        font-weight: 700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .janitor-card.fixed .janitor-fix-list {
+        margin: 6px 0 0 0;
+        padding-left: 18px;
+      }
+      .janitor-card.fixed .janitor-fix-list li {
+        margin: 4px 0;
+        color: var(--text);
+      }
+      .janitor-card.clear {
+        background: linear-gradient(180deg, rgba(20, 83, 45, 0.18), rgba(15, 20, 27, 0.98));
+        border-color: #16a34a;
+        color: #86efac;
+        font-weight: 600;
+        text-align: center;
+        padding: 12px 16px;
+      }
+      .janitor-card.clear .janitor-title {
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+
       /* Input area */
       #input-area {
         padding: 10px 14px;
@@ -2867,6 +2999,261 @@
         return section;
       }
 
+      // Parse Code Janitor structured tokens out of model output.
+      // Returns { cleanText, blocks } where blocks is an array of structured
+      // descriptors. Tokens not yet closed (mid-stream) are stripped from
+      // cleanText so they never flash in the visible bubble.
+      function parseJanitorTokens(rawText) {
+        var text = String(rawText || "");
+        var blocks = [];
+        var clean = "";
+        var i = 0;
+
+        // Tokens that are paired with %%END%%
+        var paired = {
+          "%%AUDIT_HALTED%%": "audit",
+          "%%BUG_FOUND%%": "bugFound",
+          "%%BUG_FIXED%%": "bugFixed"
+        };
+        // Standalone single-line tokens
+        var solo = {
+          "%%SHOW_FIX_BUTTON%%": "showFixButton",
+          "%%BUG_CLEAR%%": "bugClear"
+        };
+
+        while (i < text.length) {
+          var nextOpen = -1;
+          var matchedKey = null;
+          var matchedKind = null;
+          var matchedVariant = null;
+          // Find the earliest token occurrence
+          var keys = Object.keys(paired).concat(Object.keys(solo));
+          for (var k = 0; k < keys.length; k++) {
+            var idx = text.indexOf(keys[k], i);
+            if (idx !== -1 && (nextOpen === -1 || idx < nextOpen)) {
+              nextOpen = idx;
+              matchedKey = keys[k];
+              if (paired[keys[k]]) {
+                matchedKind = "paired";
+                matchedVariant = paired[keys[k]];
+              } else {
+                matchedKind = "solo";
+                matchedVariant = solo[keys[k]];
+              }
+            }
+          }
+          if (nextOpen === -1) {
+            clean += text.slice(i);
+            break;
+          }
+          // Append text before the token
+          clean += text.slice(i, nextOpen);
+          var afterOpen = nextOpen + matchedKey.length;
+          if (matchedKind === "solo") {
+            blocks.push({ type: matchedVariant });
+            i = afterOpen;
+            continue;
+          }
+          // Paired token — find %%END%%
+          var endIdx = text.indexOf("%%END%%", afterOpen);
+          if (endIdx === -1) {
+            // Stream is mid-token. Strip from here on; cards render on done.
+            i = text.length;
+            break;
+          }
+          var inner = text.slice(afterOpen, endIdx).trim();
+          blocks.push({ type: matchedVariant, body: inner });
+          i = endIdx + "%%END%%".length;
+          // Swallow a trailing newline so we don't leave a gap in cleanText
+          if (text.charAt(i) === "\n") i += 1;
+        }
+        return { cleanText: clean, blocks: blocks };
+      }
+
+      // Strip tokens (and any half-open token region) from a streaming text.
+      // Used to keep tokens out of the visible bubble while streaming.
+      function stripJanitorTokensForStream(rawText) {
+        return parseJanitorTokens(rawText).cleanText;
+      }
+
+      function renderJanitorBlock(block) {
+        if (block.type === "audit") {
+          return renderJanitorAuditCard(block.body || "");
+        }
+        if (block.type === "bugFound") {
+          return renderJanitorAlertCard(block.body || "");
+        }
+        if (block.type === "showFixButton") {
+          return renderJanitorFixButton();
+        }
+        if (block.type === "bugFixed") {
+          return renderJanitorFixedCard(block.body || "");
+        }
+        if (block.type === "bugClear") {
+          return renderJanitorClearCard();
+        }
+        return null;
+      }
+
+      function _janitorParseKeyedBody(body) {
+        var result = {};
+        var lines = String(body || "").split(/\r?\n/);
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) continue;
+          var m = line.match(/^([A-Za-z_][\w ]*)\s*:\s*(.+)$/);
+          if (m) {
+            result[m[1].trim().toLowerCase()] = m[2].trim();
+          }
+        }
+        return result;
+      }
+
+      function renderJanitorAuditCard(body) {
+        var card = document.createElement("div");
+        card.className = "janitor-card audit";
+        // Strip ASCII box-drawing rows so we render structured rows instead.
+        var cleaned = String(body || "")
+          .split(/\r?\n/)
+          .filter(function (l) {
+            return l.trim() && !/^[╔╗╚╝║─━═]+/.test(l.trim());
+          })
+          .map(function (l) {
+            return l.replace(/^║/, "").replace(/║\s*$/, "").trim();
+          })
+          .join("\n");
+
+        var title = document.createElement("div");
+        title.className = "janitor-title";
+        title.innerHTML = "🚨 <span>Code Janitor — Operation Halted</span>";
+        card.appendChild(title);
+
+        var fields = _janitorParseKeyedBody(cleaned);
+        var keys = ["flagged pattern", "location", "reason"];
+        for (var k = 0; k < keys.length; k++) {
+          var key = keys[k];
+          if (!fields[key]) continue;
+          var row = document.createElement("div");
+          row.className = "janitor-row";
+          var keyEl = document.createElement("span");
+          keyEl.className = "janitor-key";
+          keyEl.textContent = key.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+          var valEl = document.createElement("span");
+          valEl.textContent = fields[key];
+          row.appendChild(keyEl);
+          row.appendChild(valEl);
+          card.appendChild(row);
+        }
+        var footer = document.createElement("div");
+        footer.className = "janitor-footer";
+        footer.textContent = "All pending Actions Cancelled";
+        card.appendChild(footer);
+        return card;
+      }
+
+      function renderJanitorAlertCard(body) {
+        var card = document.createElement("div");
+        card.className = "janitor-card alert";
+        var fields = _janitorParseKeyedBody(body);
+        var count = fields["count"] || "?";
+        var filename = fields["filename"] || "the active file";
+
+        var title = document.createElement("div");
+        title.className = "janitor-title";
+        title.innerHTML = "🚨 <span>ALERT: BUG INFESTED</span>";
+        card.appendChild(title);
+
+        var meta = document.createElement("div");
+        meta.className = "janitor-meta";
+        meta.innerHTML = "<strong>" + escapeHtml(count) + "</strong> bug(s) detected in <strong>" + escapeHtml(filename) + "</strong>";
+        card.appendChild(meta);
+
+        var actions = document.createElement("div");
+        actions.className = "janitor-actions";
+        var locateBtn = document.createElement("button");
+        locateBtn.type = "button";
+        locateBtn.className = "janitor-btn locate";
+        locateBtn.textContent = "1. Locate Bug";
+        locateBtn.onclick = function () {
+          locateBtn.disabled = true;
+          fixBtn.disabled = true;
+          sendMessage("1");
+        };
+        var fixBtn = document.createElement("button");
+        fixBtn.type = "button";
+        fixBtn.className = "janitor-btn fix";
+        fixBtn.textContent = "2. Fix Bug";
+        fixBtn.onclick = function () {
+          locateBtn.disabled = true;
+          fixBtn.disabled = true;
+          sendMessage("2");
+        };
+        actions.appendChild(locateBtn);
+        actions.appendChild(fixBtn);
+        card.appendChild(actions);
+        return card;
+      }
+
+      function renderJanitorFixButton() {
+        var card = document.createElement("div");
+        card.className = "janitor-card alert";
+        var actions = document.createElement("div");
+        actions.className = "janitor-actions";
+        var fixBtn = document.createElement("button");
+        fixBtn.type = "button";
+        fixBtn.className = "janitor-btn fix";
+        fixBtn.textContent = "2. Fix Bug";
+        fixBtn.onclick = function () {
+          fixBtn.disabled = true;
+          sendMessage("2");
+        };
+        actions.appendChild(fixBtn);
+        card.appendChild(actions);
+        return card;
+      }
+
+      function renderJanitorFixedCard(body) {
+        var card = document.createElement("div");
+        card.className = "janitor-card fixed";
+        var title = document.createElement("div");
+        title.className = "janitor-title";
+        title.innerHTML = "✅ <span>No Bugs Found — Workplace Safe</span>";
+        card.appendChild(title);
+        // Body looks like:
+        //   fixes:
+        //   - foo() — null check
+        //   - bar() — off-by-one
+        var lines = String(body || "").split(/\r?\n/);
+        var fixes = [];
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) continue;
+          var m = line.match(/^[-*]\s+(.+)$/);
+          if (m) fixes.push(m[1]);
+        }
+        if (fixes.length > 0) {
+          var ul = document.createElement("ul");
+          ul.className = "janitor-fix-list";
+          for (var f = 0; f < fixes.length; f++) {
+            var li = document.createElement("li");
+            li.textContent = fixes[f];
+            ul.appendChild(li);
+          }
+          card.appendChild(ul);
+        }
+        return card;
+      }
+
+      function renderJanitorClearCard() {
+        var card = document.createElement("div");
+        card.className = "janitor-card clear";
+        var title = document.createElement("div");
+        title.className = "janitor-title";
+        title.innerHTML = "✅ <span>No Bugs Found — Workplace Safe</span>";
+        card.appendChild(title);
+        return card;
+      }
+
       function renderRichContent(text) {
         var container = document.createElement("div");
         var segments = [];
@@ -2994,17 +3381,42 @@
       }
 
       function renderContent(text) {
-        var sections = extractAssistantSections(text);
-        if (!sections) {
-          return renderRichContent(text);
+        // Strip Code Janitor structured tokens before normal rendering, then
+        // append rendered cards underneath the answer.
+        var parsed = parseJanitorTokens(text);
+        var hasBlocks = parsed.blocks.length > 0;
+        var hasAuditBlock = parsed.blocks.some(function (b) { return b.type === "audit"; });
+        var sourceText = parsed.cleanText;
+
+        // When the model halts via %%AUDIT_HALTED%%, it often echoes the
+        // preamble's instruction text ("STOP HERE...") above the card.
+        // Replace whatever the model leaked with a single concise refusal
+        // line so the user sees one clean message above the card.
+        if (hasAuditBlock) {
+          sourceText = "Code Janitor does not approve.";
         }
 
         var wrap = document.createElement("div");
-        wrap.className = "assistant-sections";
-        if (sections.thinking) {
-          wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking"));
+        var sections = extractAssistantSections(sourceText);
+        if (!sections) {
+          // No Thinking/Answer split — render the cleaned text as one block.
+          if (sourceText && sourceText.trim()) {
+            wrap.appendChild(renderRichContent(sourceText));
+          }
+        } else {
+          wrap.className = "assistant-sections";
+          if (sections.thinking) {
+            wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking"));
+          }
+          wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
         }
-        wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
+
+        if (hasBlocks) {
+          for (var b = 0; b < parsed.blocks.length; b++) {
+            var node = renderJanitorBlock(parsed.blocks[b]);
+            if (node) wrap.appendChild(node);
+          }
+        }
         return wrap;
       }
 
@@ -3380,7 +3792,9 @@
             bubble._streamNode.style.whiteSpace = "pre-wrap";
             bubble.appendChild(bubble._streamNode);
           }
-          bubble._streamNode.textContent = bubble._rawText;
+          // Hide Code Janitor structured tokens during streaming so they don't
+          // flash before being replaced by structured cards on `done`.
+          bubble._streamNode.textContent = stripJanitorTokensForStream(bubble._rawText);
           chat.scrollTop = chat.scrollHeight;
         } else if (msg.type === "done") {
           addActivity("Run finished.", "success");

@@ -914,57 +914,65 @@ async function activate(context) {
   console.log("[OK] Enhanced Live Preview command registered.");
 
   // 5. AI Chat Command
-  const chatDisposable = vscode.commands.registerCommand(
-    "codeJanitor.openChat",
-    async () => {
-      try {
-        console.log("[Extension] codeJanitor.openChat command triggered");
-        if (!chatPanelInstance) {
-          console.log("[Extension] Creating new ChatPanel instance");
-          chatPanelInstance = new ChatPanel(context);
-        }
-        if (chatPanelInstance.panel) {
-          console.log("[Extension] Closing legacy popup panel");
-          chatPanelInstance.panel.dispose();
-          chatPanelInstance.panel = null;
-        }
-        console.log("[Extension] Revealing sidebar chat view");
-        await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
-        await new Promise(resolve => setTimeout(resolve, 150));
-        await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
-        console.log("[Extension] Sidebar chat view focused successfully");
-      } catch (error) {
-        console.error("[Extension] CRITICAL ERROR in openChat command:", error);
-        console.error("[Extension] Error stack:", error.stack);
-        vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}
+  try {
+    const chatDisposable = vscode.commands.registerCommand(
+      "codeJanitor.openChat",
+      async () => {
+        try {
+          console.log("[Extension] codeJanitor.openChat command triggered");
+          if (!chatPanelInstance) {
+            console.log("[Extension] Creating new ChatPanel instance");
+            chatPanelInstance = new ChatPanel(context);
+          }
+          if (chatPanelInstance.panel) {
+            console.log("[Extension] Closing legacy popup panel");
+            chatPanelInstance.panel.dispose();
+            chatPanelInstance.panel = null;
+          }
+          console.log("[Extension] Revealing sidebar chat view");
+          await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
+          await new Promise(resolve => setTimeout(resolve, 150));
+          await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
+          console.log("[Extension] Sidebar chat view focused successfully");
+        } catch (error) {
+          console.error("[Extension] CRITICAL ERROR in openChat command:", error);
+          console.error("[Extension] Error stack:", error.stack);
+          vscode.window.showErrorMessage(`Failed to open AI Chat: ${error.message}
 Check Developer Console (Help -> Toggle Developer Tools) for details.`);
+        }
       }
-    }
-  );
-  context.subscriptions.push(chatDisposable);
-  console.log("[OK] AI Chat command registered.");
+    );
+    context.subscriptions.push(chatDisposable);
+    console.log("[OK] AI Chat command registered.");
+  } catch (regErr) {
+    console.error("[Extension] Failed to register codeJanitor.openChat — likely a duplicate Code Janitor install. Continuing activation.", regErr);
+  }
 
   // Bug Fix Scan Command (Alt+B)
-  const bugFixScanDisposable = vscode.commands.registerCommand(
-    "codeJanitor.bugFixScan",
-    async () => {
-      try {
-        const editor = vscode.window.activeTextEditor;
-        if (!chatPanelInstance) {
-          chatPanelInstance = new ChatPanel(context);
+  try {
+    const bugFixScanDisposable = vscode.commands.registerCommand(
+      "codeJanitor.bugFixScan",
+      async () => {
+        try {
+          const editor = vscode.window.activeTextEditor;
+          if (!chatPanelInstance) {
+            chatPanelInstance = new ChatPanel(context);
+          }
+          await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
+          await new Promise(resolve => setTimeout(resolve, 150));
+          await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
+          await chatPanelInstance.runBugScan(editor);
+        } catch (error) {
+          console.error("[Extension] Error in bugFixScan command:", error);
+          vscode.window.showErrorMessage(`Bug Fix scan failed: ${error.message}`);
         }
-        await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
-        await new Promise(resolve => setTimeout(resolve, 150));
-        await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
-        await chatPanelInstance.runBugScan(editor);
-      } catch (error) {
-        console.error("[Extension] Error in bugFixScan command:", error);
-        vscode.window.showErrorMessage(`Bug Fix scan failed: ${error.message}`);
       }
-    }
-  );
-  context.subscriptions.push(bugFixScanDisposable);
-  console.log("[OK] Bug Fix Scan command registered.");
+    );
+    context.subscriptions.push(bugFixScanDisposable);
+    console.log("[OK] Bug Fix Scan command registered.");
+  } catch (regErr) {
+    console.error("[Extension] Failed to register codeJanitor.bugFixScan — likely a duplicate Code Janitor install. Continuing activation.", regErr);
+  }
 
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);
