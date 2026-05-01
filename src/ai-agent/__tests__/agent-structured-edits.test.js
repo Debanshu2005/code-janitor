@@ -132,4 +132,54 @@ describe("AIAgent structured edit parsing", () => {
     expect(instruction).toContain('heading titled "Answer"');
     expect(instruction).toContain("Do not expose hidden internal chain-of-thought");
   });
+
+  test("buffers split streamed lines before parsing tokens", async () => {
+    const agent = new AIAgent();
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('data: {"choices":[{"delta":{"content":"Hel'),
+      encoder.encode('lo"}}]}\n\ndata: {"choices":[{"delta":{"content":" world"}}]}\n\n')
+    ];
+    let index = 0;
+
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (index >= chunks.length) {
+              return { done: true, value: undefined };
+            }
+            return { done: false, value: chunks[index++] };
+          },
+          cancel: jest.fn()
+        })
+      }
+    };
+
+    const text = await agent._readResponseText(
+      response,
+      (line) =>
+        line.startsWith("data: ")
+          ? JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
+          : null
+    );
+
+    expect(text).toBe("Hello world");
+  });
+
+  test("does not treat a far-earlier repeated block as stream repetition", () => {
+    const agent = new AIAgent();
+    const tail = "abcd".repeat(40);
+    const text = tail + "z".repeat(700) + tail;
+
+    expect(agent._isRepeatingResponse(text, "fast")).toBe(false);
+  });
+
+  test("detects repetition when the recent tail loops back near the end", () => {
+    const agent = new AIAgent();
+    const tail = "loop".repeat(40);
+    const text = "intro ".repeat(40) + tail + " spacer ".repeat(10) + tail;
+
+    expect(agent._isRepeatingResponse(text, "fast")).toBe(true);
+  });
 });

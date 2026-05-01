@@ -158,6 +158,37 @@
         flex-wrap: wrap;
       }
 
+      .undo-btn {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 11px;
+        cursor: pointer;
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 24px;
+        transition: background-color 0.15s ease, border-color 0.15s ease;
+      }
+      .undo-btn:hover {
+        background: rgba(88, 166, 255, 0.12);
+        border-color: var(--accent);
+      }
+      .undo-btn:active {
+        background: rgba(88, 166, 255, 0.2);
+      }
+      .undo-btn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .undo-btn svg {
+        width: 14px;
+        height: 14px;
+        margin-right: 4px;
+      }
+
       select,
       .pill-btn {
         background: var(--panel-2);

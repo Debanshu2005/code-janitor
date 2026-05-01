@@ -1807,6 +1807,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     const recoveryMode = this.chatMode === "fast" ? "heavy" : this.chatMode;
     return this.agent.chat(prompt, workspaceFolder, null, null, {
       mode: recoveryMode,
+      intentOverride: "edit",
       onStatus: (text) => {
         if (this._shouldSuppressInternalStatus(text)) {
           return;
@@ -2310,7 +2311,7 @@ ${trimmedText}`;
     }
 
     // Run syntax check only for code files
-    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java'].includes(ext)) {
+    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.html', '.htm'].includes(ext)) {
       const syntaxCheck = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
       if (syntaxCheck && !syntaxCheck.skipped && !syntaxCheck.success) {
         // Only report syntax errors, not successes
@@ -2338,6 +2339,7 @@ ${trimmedText}`;
       js: changedFiles.filter(file => /\.(js|jsx|ts|tsx)$/i.test(file)),
       py: changedFiles.filter(file => /\.py$/i.test(file)),
       java: changedFiles.filter(file => /\.java$/i.test(file)),
+      html: changedFiles.filter(file => /\.html?$/i.test(file)),
       c: changedFiles.filter(file => /\.(c|cpp|h|hpp)$/i.test(file))
     };
 

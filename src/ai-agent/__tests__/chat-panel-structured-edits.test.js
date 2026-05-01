@@ -119,7 +119,10 @@ describe("ChatPanel structured edit helpers", () => {
 
     expect(panel.agent.chat).toHaveBeenCalledTimes(1);
     expect(panel.agent.chat.mock.calls[0][0]).toContain("Prefer exactly one PATCH action");
-    expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({ mode: "heavy" });
+    expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
+      mode: "heavy",
+      intentOverride: "edit"
+    });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",
       '{\n  "version": "1.16.6"\n}\n',
@@ -182,6 +185,14 @@ describe("ChatPanel structured edit helpers", () => {
 
     expect(panel.agent.chat).toHaveBeenCalledTimes(2);
     expect(panel.agent.chat.mock.calls[1][0]).toContain("Return exactly one FILE action");
+    expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
+      mode: "heavy",
+      intentOverride: "edit"
+    });
+    expect(panel.agent.chat.mock.calls[1][4]).toMatchObject({
+      mode: "heavy",
+      intentOverride: "edit"
+    });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",
       '{\n  "version": "1.16.6"\n}\n',
