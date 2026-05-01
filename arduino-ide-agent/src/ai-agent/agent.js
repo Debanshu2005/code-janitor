@@ -4158,6 +4158,8 @@ ${userMessage}`
         path: fullPath,
         relativePath,
         created,
+        previousContent: created ? null : oldContent,
+        newContent,
         changeSummary: changeSummary.summary,
         changed: changeSummary.changed,
         syntaxCheckCmd: this._getSyntaxCheckCommand(

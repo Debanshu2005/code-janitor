@@ -2924,12 +2924,19 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 
 **CRITICAL: Choose the right edit format:**
 
-**Use PATCH by default for PRECISE edits to existing files:**
+**Default to PATCH for any modification of an existing file.** The user wants
+fixes applied IN PLACE — preserving surrounding code, comments, formatting, and
+unrelated logic. Do not regenerate code that is already correct. Even if you
+need several PATCH actions on the same file, that is preferred over one FILE
+rewrite.
+
+Use PATCH for:
 - Single function or block modification
 - Localized bug fix
 - Small-to-medium targeted refactor in one area
 - Adding/removing an import or dependency line
 - Updating config values, JSON entries, markup blocks, or a contained section
+- Multiple independent fixes in the same file (emit one PATCH per region)
 
 PATCH format:
 PATCH: <exact file path>
@@ -2951,14 +2958,15 @@ PATCH guidance:
 - Preserve surrounding formatting and unrelated logic.
 - Prefer the editable source file over generated or packaged copies when both exist.
 
-**Use FILE for BROAD rewrites:**
-- Creating new files
-- Multiple functions changed
-- Structural reorganization
-- Changes across multiple sections
-- Whole-file rewrites
-- Cases where an exact PATCH would be brittle or ambiguous
-- User asks for complete rewrite
+**Use FILE only when PATCH genuinely cannot work:**
+- Creating a new file (file does not yet exist on disk)
+- The user EXPLICITLY asks for a full rewrite of the file
+- Wholesale structural reorganization that touches almost every line
+- The file is small (under ~30 lines) AND most of it is changing
+
+Do NOT use FILE just because there are several edits. Emit several PATCH
+actions instead. Do NOT use FILE because it feels easier — the user has
+explicitly asked for in-place edits.
 
 FILE format:
 FILE: <exact file path>
@@ -4499,6 +4507,8 @@ ${userMessage}`;
         path: fullPath,
         relativePath,
         created,
+        previousContent: created ? null : oldContent,
+        newContent,
         changeSummary: changeSummary.summary,
         changed: changeSummary.changed,
         syntaxCheckCmd: this._getSyntaxCheckCommand(

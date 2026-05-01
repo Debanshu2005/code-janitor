@@ -879,6 +879,39 @@
         border-color: var(--accent);
         background: var(--panel-3);
       }
+      .status-action-btn.undo-btn {
+        background: var(--accent, #4f8cff);
+        color: #fff;
+        border-color: var(--accent, #4f8cff);
+        font-weight: 600;
+        padding: 6px 14px;
+        font-size: 12px;
+      }
+      .status-action-btn.undo-btn:hover {
+        filter: brightness(1.12);
+        background: var(--accent, #4f8cff);
+      }
+      .status-action-btn.undo-btn:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .undo-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        margin: 6px 0;
+        border: 1px solid var(--accent, #4f8cff);
+        border-radius: 10px;
+        background: rgba(79, 140, 255, 0.08);
+        font-size: 12px;
+      }
+      .undo-card-text {
+        flex: 1;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .status-text {
         white-space: pre-wrap;
       }
@@ -1995,7 +2028,7 @@
       </div>
       <div id="input-hint">
         Enter to send &nbsp;?&nbsp; Shift+Enter for new line &nbsp;?&nbsp; /scan
-        /fast /heavy
+        /fast /heavy /undo &nbsp;?&nbsp; Ctrl+Z to revert last edit
       </div>
     </div>
 
@@ -2035,6 +2068,30 @@
       var customProviderSave = document.getElementById("custom-provider-save");
       var customProviderCancel = document.getElementById("custom-provider-cancel");
       var customProviderClose = document.getElementById("custom-provider-close");
+
+      // Tracks the most recent edit's undoId so Ctrl+Z (or text "undo") in
+      // the chat panel can target it. Reset to null after each undo so
+      // Ctrl+Z does not double-undo a stale entry; the host will tell us
+      // about the next edit when it happens.
+      var latestUndoId = null;
+
+      // Ctrl+Z / Cmd+Z anywhere in the chat panel triggers an undo of the
+      // most recent applied edit. The textarea retains its native typing-undo
+      // behavior, but only when there is text the user has been editing —
+      // an empty textarea hands Ctrl+Z over to chat-undo.
+      document.addEventListener("keydown", function (e) {
+        var isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey &&
+          (e.key === "z" || e.key === "Z");
+        if (!isUndoKey) return;
+        var inInput = e.target === input;
+        if (inInput && input.value.length > 0) {
+          // Let the textarea undo what the user is typing.
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        vscode.postMessage({ type: "undoEdit", id: latestUndoId || undefined });
+      });
 
       function showKeySaved() {
         apiKeyInput.style.display = "none";
@@ -2536,21 +2593,69 @@
         return container;
       }
 
-      function makeAppliedStatusContent(text, filePath) {
+      function makeAppliedStatusContent(text, filePath, undoId) {
         var container = renderStatusContent(text);
-        if (filePath) {
+        if (filePath || undoId) {
           var actions = document.createElement("div");
           actions.className = "status-actions";
+          if (filePath) {
+            var openBtn = document.createElement("button");
+            openBtn.className = "status-action-btn";
+            openBtn.textContent = "Open file";
+            openBtn.onclick = function () {
+              vscode.postMessage({ type: "openFile", path: filePath });
+            };
+            actions.appendChild(openBtn);
+          }
+          if (undoId) {
+            var undoBtn = document.createElement("button");
+            undoBtn.className = "status-action-btn undo-btn";
+            undoBtn.textContent = "↶ Undo";
+            undoBtn.title = "Revert this edit (Ctrl+Z)";
+            undoBtn.dataset.undoId = undoId;
+            undoBtn.onclick = function () {
+              undoBtn.disabled = true;
+              undoBtn.textContent = "Undoing...";
+              vscode.postMessage({ type: "undoEdit", id: undoId });
+            };
+            actions.appendChild(undoBtn);
+          }
+          container.appendChild(actions);
+        }
+        return container;
+      }
+
+      // Build a prominent "rectified ✓ — Undo" card that renders directly in
+      // the chat stream beneath the AI's reply. The status pill stays for
+      // context, but this card carries the obvious affordance.
+      function makeUndoCard(text, filePath, undoId) {
+        var card = document.createElement("div");
+        card.className = "undo-card";
+        var msg = document.createElement("div");
+        msg.className = "undo-card-text";
+        msg.textContent = text || "Edit applied.";
+        card.appendChild(msg);
+        var btn = document.createElement("button");
+        btn.className = "status-action-btn undo-btn";
+        btn.textContent = "↶ Undo";
+        btn.title = "Revert this edit (Ctrl+Z)";
+        btn.dataset.undoId = undoId;
+        btn.onclick = function () {
+          btn.disabled = true;
+          btn.textContent = "Undoing...";
+          vscode.postMessage({ type: "undoEdit", id: undoId });
+        };
+        card.appendChild(btn);
+        if (filePath) {
           var openBtn = document.createElement("button");
           openBtn.className = "status-action-btn";
           openBtn.textContent = "Open file";
           openBtn.onclick = function () {
             vscode.postMessage({ type: "openFile", path: filePath });
           };
-          actions.appendChild(openBtn);
-          container.appendChild(actions);
+          card.appendChild(openBtn);
         }
-        return container;
+        return card;
       }
 
       function extractYouTubeId(url) {
@@ -3343,7 +3448,21 @@
           addRow("\u274c " + msg.text, "status");
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
-          addRow(makeAppliedStatusContent(msg.text, msg.filePath), "status");
+          addRow(makeAppliedStatusContent(msg.text, msg.filePath, msg.undoId), "status");
+          if (msg.undoId) {
+            addRow(makeUndoCard(msg.text, msg.filePath, msg.undoId), "status");
+            latestUndoId = msg.undoId;
+          }
+        } else if (msg.type === "editUndone") {
+          if (msg.id && latestUndoId === msg.id) {
+            latestUndoId = null;
+          }
+          // Disable any rendered Undo buttons that referenced this id
+          var staleButtons = document.querySelectorAll('.undo-btn[data-undo-id="' + msg.id + '"]');
+          for (var ub = 0; ub < staleButtons.length; ub++) {
+            staleButtons[ub].disabled = true;
+            staleButtons[ub].textContent = "Undone";
+          }
         } else if (msg.type === "sessionState") {
           populateSessions(msg.sessions, msg.currentSessionId);
           restoreConversation(msg.history);
