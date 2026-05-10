@@ -45,12 +45,12 @@
 
       /* Header */
       #header {
-        padding: 12px 14px 10px;
+        padding: 8px 12px;
         background: rgba(15, 20, 27, 0.94);
         border-bottom: 1px solid var(--border);
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 8px;
         flex-shrink: 0;
         backdrop-filter: blur(10px);
       }
@@ -58,25 +58,26 @@
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 14px;
+        gap: 10px;
         flex-wrap: wrap;
       }
       #header-left {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
         flex: 1 1 320px;
+        flex-wrap: wrap;
       }
       #header-logo {
-        width: 52px;
-        height: 52px;
+        width: 44px;
+        height: 44px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         padding: 0;
         border: 1px solid rgba(88, 166, 255, 0.32);
-        border-radius: 16px;
+        border-radius: 14px;
         background:
           radial-gradient(circle at 30% 30%, rgba(88, 166, 255, 0.22), transparent 60%),
           linear-gradient(180deg, rgba(24, 34, 48, 0.96), rgba(15, 20, 27, 0.96));
@@ -95,21 +96,21 @@
         outline-offset: 2px;
       }
       #header-logo img {
-        width: 40px;
-        height: 40px;
+        width: 34px;
+        height: 34px;
         display: block;
         object-fit: contain;
       }
       #header-brand {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 2px;
         min-width: 0;
       }
       #session-controls {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         flex-wrap: wrap;
         min-width: 0;
       }
@@ -117,7 +118,7 @@
         max-width: 220px;
       }
       #header-title {
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 600;
         color: var(--text);
         letter-spacing: 0.3px;
@@ -138,6 +139,11 @@
         border-radius: 999px;
         border: 1px solid var(--border);
         background: var(--panel-2);
+      }
+      #header-tools-toggle {
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 700;
       }
       #connectivity-status.online {
         color: var(--green);
@@ -173,6 +179,10 @@
         flex-wrap: wrap;
         flex: 1 1 460px;
         min-width: min(100%, 540px);
+      }
+      body.top-stack-collapsed #header-controls,
+      body.top-stack-collapsed #feature-ribbon-panel {
+        display: none;
       }
       .toolbar-cluster {
         display: flex;
@@ -525,14 +535,59 @@
         transition: width 0.2s ease;
       }
 
-      #feature-ribbon {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
+      #feature-ribbon-panel {
         padding: 10px 14px 12px;
         border-bottom: 1px solid var(--border);
         background:
           linear-gradient(180deg, rgba(12, 18, 26, 0.54), rgba(12, 18, 26, 0));
+        flex-shrink: 0;
+      }
+      #feature-ribbon-panel.collapsed {
+        padding-bottom: 10px;
+      }
+      #feature-ribbon-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      #feature-ribbon-copy {
+        min-width: 0;
+      }
+      #feature-ribbon-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      #feature-ribbon-summary {
+        margin-top: 3px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      #feature-ribbon-toggle {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s ease;
+      }
+      #feature-ribbon-toggle:hover {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      #feature-ribbon {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        padding-top: 10px;
+      }
+      #feature-ribbon-panel.collapsed #feature-ribbon {
+        display: none;
       }
       .feature-card {
         position: relative;
@@ -1983,6 +2038,10 @@
           grid-template-columns: 1fr;
           min-width: 100%;
         }
+        #feature-ribbon-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
         #feature-ribbon {
           grid-template-columns: 1fr;
         }
@@ -2245,6 +2304,7 @@
             <span class="connectivity-dot pulse"></span>
             <span>Checking...</span>
           </div>
+          <button class="pill-btn" id="header-tools-toggle" type="button" aria-expanded="false">Show advanced</button>
         </div>
         <div id="header-controls">
           <div class="toolbar-cluster">
@@ -2284,26 +2344,35 @@
       </div>
     </div>
 
-    <div id="feature-ribbon">
-      <div class="feature-card">
-        <span class="feature-kicker">Ship fixes</span>
-        <strong>Quick Fix, refactors, and test generation</strong>
-        <p>Use structured edits with undo support and syntax-aware follow-up checks.</p>
-      </div>
-      <div class="feature-card">
-        <span class="feature-kicker">See context</span>
-        <strong>Graphify, live preview inspect, and workspace scans</strong>
-        <p>Move from one-file guesses to project-aware answers and preview-guided repairs.</p>
-      </div>
-      <div class="feature-card health" id="auto-heal-card">
-        <div class="feature-card-head">
-          <span class="feature-kicker" id="auto-heal-badge">Auto-heal on</span>
-          <button class="toggle-switch" id="auto-heal-toggle" title="Toggle auto-heal" aria-pressed="true">
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-          </button>
+    <div id="feature-ribbon-panel" class="collapsed">
+      <div id="feature-ribbon-header">
+        <div id="feature-ribbon-copy">
+          <div id="feature-ribbon-title">Workspace Highlights</div>
+          <div id="feature-ribbon-summary">Show or hide the feature cards to give the response area more room.</div>
         </div>
-        <strong>Health watch</strong>
-        <p id="auto-heal-summary">Watching latency, failures, and edit safety across recent runs.</p>
+        <button id="feature-ribbon-toggle" type="button" aria-expanded="false">Show features</button>
+      </div>
+      <div id="feature-ribbon">
+        <div class="feature-card">
+          <span class="feature-kicker">Ship fixes</span>
+          <strong>Quick Fix, refactors, and test generation</strong>
+          <p>Use structured edits with undo support and syntax-aware follow-up checks.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-kicker">See context</span>
+          <strong>Graphify, live preview inspect, and workspace scans</strong>
+          <p>Move from one-file guesses to project-aware answers and preview-guided repairs.</p>
+        </div>
+        <div class="feature-card health" id="auto-heal-card">
+          <div class="feature-card-head">
+            <span class="feature-kicker" id="auto-heal-badge">Auto-heal on</span>
+            <button class="toggle-switch" id="auto-heal-toggle" title="Toggle auto-heal" aria-pressed="true">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </button>
+          </div>
+          <strong>Health watch</strong>
+          <p id="auto-heal-summary">Watching latency, failures, and edit safety across recent runs.</p>
+        </div>
       </div>
     </div>
 
@@ -2439,6 +2508,9 @@
       var stopBtn = document.getElementById("stop-btn");
       var headerLogo = document.getElementById("header-logo");
       var headerSub = document.getElementById("header-sub");
+      var headerToolsToggle = document.getElementById("header-tools-toggle");
+      var featureRibbonPanel = document.getElementById("feature-ribbon-panel");
+      var featureRibbonToggle = document.getElementById("feature-ribbon-toggle");
       var micBtn = document.getElementById("mic-btn");
       var micPermissionBadge = document.getElementById("mic-permission-badge");
       var btnFast = document.getElementById("btn-fast");
@@ -2515,6 +2587,12 @@
 
       function setDeleteButtonState(enabled) {
         btnDeleteChat.disabled = !enabled;
+      }
+
+      function updateWebviewState(patch) {
+        var state = Object.assign({}, vscode.getState() || {}, patch || {});
+        vscode.setState(state);
+        return state;
       }
 
       function showKeySaved() {
@@ -2841,6 +2919,23 @@
         activityToggle.textContent = collapsed ? "Show" : "Hide";
       }
 
+      function setFeatureRibbonCollapsed(collapsed) {
+        featureRibbonPanel.classList.toggle("collapsed", collapsed);
+        featureRibbonToggle.textContent = collapsed ? "Show features" : "Hide features";
+        featureRibbonToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        updateWebviewState({ featureRibbonCollapsed: collapsed });
+      }
+
+      function setTopStackCollapsed(collapsed) {
+        document.body.classList.toggle("top-stack-collapsed", collapsed);
+        headerToolsToggle.textContent = collapsed ? "Show advanced" : "Hide advanced";
+        headerToolsToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        headerToolsToggle.title = collapsed
+          ? "Show advanced header controls and workspace highlights"
+          : "Hide advanced header controls and workspace highlights";
+        updateWebviewState({ topStackCollapsed: collapsed });
+      }
+
       function classifyActivity(text, explicitType) {
         if (explicitType) return explicitType;
         if (/allow|denied|blocked|outside workspace/i.test(text)) return "warn";
@@ -2890,6 +2985,14 @@
 
       resetActivity();
       setActivityCollapsed(true);
+      setTopStackCollapsed((vscode.getState() || {}).topStackCollapsed !== false);
+      setFeatureRibbonCollapsed((vscode.getState() || {}).featureRibbonCollapsed !== false);
+      headerToolsToggle.onclick = function () {
+        setTopStackCollapsed(!document.body.classList.contains("top-stack-collapsed"));
+      };
+      featureRibbonToggle.onclick = function () {
+        setFeatureRibbonCollapsed(!featureRibbonPanel.classList.contains("collapsed"));
+      };
       activityToggle.onclick = function () {
         setActivityCollapsed(!activityPanel.classList.contains("collapsed"));
       };
@@ -4533,7 +4636,7 @@
       var hasSeenTutorial = vscode.getState()?.hasSeenTutorial || false;
       if (!hasSeenTutorial) {
         setTimeout(showTutorial, 1000);
-        vscode.setState({ hasSeenTutorial: true });
+        updateWebviewState({ hasSeenTutorial: true });
       }
 
       // Web search functionality
