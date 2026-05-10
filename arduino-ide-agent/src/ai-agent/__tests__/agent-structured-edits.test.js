@@ -75,4 +75,24 @@ describe("Arduino AIAgent structured edit parsing", () => {
       "src/ai-agent/chat-panel.html"
     ])
   })
+
+  test("blocks unsafe command execution escape hatches", () => {
+    const agent = new AIAgent()
+
+    expect(agent.validateCommand("arduino-cli compile --fqbn arduino:avr:uno sketch")).toEqual({
+      allowed: true
+    })
+    expect(agent.validateCommand("arduino-cli upload -p COM3 --fqbn arduino:avr:uno sketch")).toEqual({
+      allowed: false,
+      reason: "Only project-scoped read, test, and build commands are allowed"
+    })
+    expect(agent.validateCommand('node -e "console.log(1)"')).toEqual({
+      allowed: false,
+      reason: "Blocked unsafe, global, or network command"
+    })
+    expect(agent.validateCommand("git push origin main")).toEqual({
+      allowed: false,
+      reason: "Blocked unsafe, global, or network command"
+    })
+  })
 })

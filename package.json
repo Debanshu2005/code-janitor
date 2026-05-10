@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
-  "version": "1.17.2",
+  "version": "1.19.5",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -164,6 +164,16 @@
           "type": "boolean",
           "default": false,
           "description": "Show parsed AI actions in chat status messages for debugging"
+        },
+        "codeJanitor.ai.gstackGateMode": {
+          "type": "string",
+          "default": "smart",
+          "enum": [
+            "off",
+            "smart",
+            "always"
+          ],
+          "description": "Run a GStack-inspired pre-execution review gate for AI-generated edits. smart reviews only riskier edits, always reviews every AI-generated edit, off disables it."
         },
         "codeJanitor.ai.selfHealing.enabled": {
           "type": "boolean",

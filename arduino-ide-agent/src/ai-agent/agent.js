@@ -2744,10 +2744,13 @@ ${resolvedMessage}`
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
+- When an edit, debug, or verification request would benefit from real workspace evidence, use CMD: to inspect files, scripts, package metadata, git state, or command output instead of guessing.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
 - If a command is likely to fail, propose a corrected safer command immediately.
 - For Arduino sketches, treat all ".ino" tabs in the same sketch folder as one program before claiming a function is missing.
+- Good CMD uses include: \`rg\`, \`Get-Content\`, \`Get-ChildItem\`, \`Select-String\`, \`git status\`, \`git diff\`, \`npm run <script>\`, \`npm test\`, and other focused workspace commands.
+- After code edits, it is good to verify the result with targeted CMD checks when they directly confirm the fix.
 - When asked to create diagrams, flowcharts, or visualizations, ALWAYS use mermaid syntax in code blocks.
 - For mermaid requests, prefer ONE diagram per answer unless the user explicitly asks for multiple diagrams.
 - For mermaid requests, keep node labels simple plain text. Avoid markdown, HTML, emojis, and nested punctuation inside labels.
@@ -2795,11 +2798,11 @@ ${resolvedMessage}`
       case "greeting":
         return `${base}
 ${operatingPrinciples}
-Reply naturally and briefly.`
+Reply naturally and helpfully.`
       case "show_graph":
         return `${base}
 ${operatingPrinciples}
-Graph visualization is not part of the Arduino IDE chat workflow. Explain that briefly and continue with a normal text answer.`
+Graph visualization is not part of the Arduino IDE chat workflow. Explain that clearly and continue with a normal text answer.`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
@@ -2815,7 +2818,7 @@ Write professional, production-ready code by default:
 You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
 - MKDIR: to create directories
-- CMD: to run a single workspace shell command only when strictly needed
+- CMD: to run one workspace shell command per line for inspection, package scripts, syntax checks, or verification when that materially helps
 Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences.
 Format:
 FILE: folder/file.ext
@@ -2871,6 +2874,7 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Include concrete fixes, not advisory text.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
+When the current file state is unclear, use CMD inspection first. When the fix should be proven, include focused CMD verification after the edit.
 
 Use PATCH by default for small, targeted edits:
 PATCH: <exact file path>
@@ -2935,7 +2939,7 @@ Rules:
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
 - If a previous command failed, return a corrected command that addresses the failure cause.
-- You have access to workspace shell commands through CMD:, but avoid CMD unless file edits alone cannot solve the request.
+- You have access to workspace shell commands through CMD:, and you should use them when they help inspect context or verify the applied fix.
 - Do not give explanations or tutorial steps.
 - Do not describe what to click in VS Code.
 - Use exact file paths.
@@ -3829,20 +3833,32 @@ ${userMessage}`
   }
 
   validateCommand(command) {
-    const normalized = command.trim().toLowerCase()
+    const raw = String(command || "").trim()
+    const normalized = raw.toLowerCase()
 
     if (!normalized) {
       return { allowed: false, reason: "Empty command" }
     }
 
+    if (/[\r\n]/.test(raw)) {
+      return {
+        allowed: false,
+        reason: "Use a single-line project-scoped command"
+      }
+    }
+
     const blockedPatterns = [
       /\bnpm\s+install\s+-g\b/,
       /\bnpm\s+i\s+-g\b/,
+      /\bnpm(?:\.cmd)?\s+(?:exec|install|update|audit|cache|config)\b/,
       /\bpip(?:3)?\s+install\b/,
       /\bcargo\s+install\b/,
       /\bgo\s+install\b/,
       /\byarn\s+global\b/,
+      /\byarn(?:\.cmd)?\s+(?:add|install|dlx|global|set|config|npm)\b/,
       /\bpnpm\s+add\s+-g\b/,
+      /\bpnpm(?:\.cmd)?\s+(?:add|install|dlx|setup|env)\b/,
+      /\bnpx(?:\.cmd)?\b(?!\s+--no-install\b)/,
       /\bchoco\s+install\b/,
       /\bwinget\s+install\b/,
       /\bapt(?:-get)?\s+install\b/,
@@ -3850,7 +3866,11 @@ ${userMessage}`
       /\bwget\b/,
       /\binvoke-webrequest\b/,
       /\birm\b/,
-      /\bgit\s+clone\b/,
+      /\bnode\s+-e\b/,
+      /\bnpm\s+(?:publish|unpublish|login|logout|adduser|owner|access|team|org|token|profile|dist-tag|deprecate|hook)\b/,
+      /\byarn\s+(?:publish|login|logout|npm\s+publish|npm\s+login|npm\s+logout)\b/,
+      /\bpnpm\s+publish\b/,
+      /\bgit\s+(?:clone|push|pull|fetch|checkout|switch|restore|reset|merge|rebase|stash|tag|add|commit|cherry-pick|am|apply|remote)\b/,
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
@@ -3871,124 +3891,67 @@ ${userMessage}`
       }
     }
 
-    const allowedPrefixes = [
-      "mkdir ",
-      "md ",
-      "findstr ",
-      "rg ",
-      "grep ",
-      "ls",
-      "dir",
-      "cat ",
-      "type ",
-      "head ",
-      "tail ",
-      "echo ",
-      "pwd",
-      "cd ",
-      "tree ",
-      "find ",
-      "which ",
-      "where ",
-      "npm install",
-      "npm i",
-      "npm run ",
-      "npm test",
-      "npm start",
-      "npm build",
-      "npm list",
-      "npm outdated",
-      "npm audit",
-      "npx ",
-      "yarn install",
-      "yarn add",
-      "yarn remove",
-      "yarn run",
-      "yarn test",
-      "yarn build",
-      "pnpm install",
-      "pnpm add",
-      "pnpm remove",
-      "pnpm run",
-      "pnpm test",
-      "node --check",
-      "node -e",
-      "node ",
-      "git status",
-      "git diff",
-      "git log",
-      "git show",
-      "git branch",
-      "git checkout",
-      "git add",
-      "git commit",
-      "git pull",
-      "git fetch",
-      "git merge",
-      "git rebase",
-      "git stash",
-      "git tag",
-      "git remote",
-      "git rev-parse",
-      "git push",
-      "python -m py_compile",
-      "python -m flake8",
-      "python -m pylint",
-      "python -m pytest",
-      "python -m unittest",
-      "python ",
-      "python3 -m py_compile",
-      "python3 -m flake8",
-      "python3 -m pylint",
-      "python3 -m pytest",
-      "python3 -m unittest",
-      "python3 ",
-      "pytest",
-      "eslint ",
-      "tsc ",
-      "javac ",
-      "java ",
-      "mvn clean",
-      "mvn compile",
-      "mvn test",
-      "mvn package",
-      "gradle build",
-      "gradle test",
-      "gradle clean",
-      "cargo build",
-      "cargo test",
-      "cargo check",
-      "cargo run",
-      "go build",
-      "go test",
-      "go run",
-      "dotnet build",
-      "dotnet test",
-      "dotnet run",
-      ".\\node_modules\\.bin\\",
-      "./node_modules/.bin/",
-      "wmic path win32_pnpentity",
-      "mode",
-      "arduino-cli board list",
-      "arduino-cli lib list",
-      "arduino-cli lib search",
-      "arduino-cli lib install",
-      "arduino-cli compile",
-      "arduino-cli upload",
-      "pip list",
-      "pip3 list",
-      "pip show",
-      "pip3 show"
-    ]
-
-    if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+    if (/(^|\s)(>>?|<)(\s|$)/.test(raw) || /`|\$\(/.test(raw)) {
       return {
         allowed: false,
-        reason: "Only project-scoped commands are allowed"
+        reason: "Shell redirection and substitution are not allowed"
+      }
+    }
+
+    const allowedPatterns = [
+      /^(?:ls|dir|pwd|tree)(?:\s+.+)?$/i,
+      /^(?:get-childitem|gci|get-location|gl)(?:\s+.+)?$/i,
+      /^(?:cat|type|get-content|gc|get-item|gi|resolve-path|head|tail|echo|find|which|where|select-string|sls|grep|rg|findstr)(?:\s+.+)?$/i,
+      /^(?:mkdir|md)\s+.+$/i,
+      /^npm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+--.*)?|ls(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^yarn(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^pnpm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^npx(?:\.cmd)?\s+--no-install\s+\S+(?:\s+.*)?$/i,
+      /^node\s+(?:--check\s+\S.*|--version)$/i,
+      /^python(?:3)?\s+(?:--version|-m\s+(?:py_compile|flake8|pylint|pytest|unittest)\b.*)$/i,
+      /^(?:pip|pip3)\s+(?:list|show)\b.*$/i,
+      /^pytest(?:\s+.*)?$/i,
+      /^eslint\b.*$/i,
+      /^tsc\b.*$/i,
+      /^javac\b.+$/i,
+      /^java\s+-version$/i,
+      /^mvn\s+(?:clean|compile|test|package)\b.*$/i,
+      /^gradle\s+(?:build|test|clean)\b.*$/i,
+      /^cargo\s+(?:build|test|check)\b.*$/i,
+      /^go\s+(?:build|test)\b.*$/i,
+      /^dotnet\s+(?:build|test)\b.*$/i,
+      /^git\s+(?:status|diff|log|show|rev-parse)\b.*$/i,
+      /^(?:\.\/|\.\\)node_modules[\\/]\.bin[\\/][^\s]+(?:\s+.*)?$/i,
+      /^wmic\s+path\s+win32_pnpentity\b.*$/i,
+      /^mode(?:\s+.+)?$/i,
+      /^arduino-cli\s+board\s+list\b.*$/i,
+      /^arduino-cli\s+lib\s+(?:list|search)\b.*$/i,
+      /^arduino-cli\s+compile\b.*$/i
+    ]
+
+    const allowed = allowedPatterns.some((pattern) => pattern.test(raw))
+
+    if (!allowed) {
+      return {
+        allowed: false,
+        reason: "Only project-scoped read, test, and build commands are allowed"
       }
     }
 
     return { allowed: true }
+  }
+
+  _shouldUsePowerShellForCommand(command) {
+    if (process.platform !== "win32") {
+      return false
+    }
+
+    const normalized = String(command || "").trim().toLowerCase()
+    if (!normalized) {
+      return false
+    }
+
+    return true
   }
 
   _summarizeLineChanges(oldContent, newContent) {
@@ -4213,11 +4176,8 @@ ${userMessage}`
     }
 
     return new Promise((resolve) => {
-      const { exec } = require("child_process")
-      exec(
-        command,
-        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
-        (error, stdout, stderr) => {
+      const { exec, execFile } = require("child_process")
+      const handleResult = (error, stdout, stderr) => {
           const rawOutput = [stdout, stderr].filter(Boolean).join("\n")
           const outputInfo = this._truncateCommandOutput(rawOutput)
           const hitMaxBuffer =
@@ -4253,6 +4213,32 @@ ${userMessage}`
             outputTruncated: outputInfo.truncated
           })
         }
+
+      if (this._shouldUsePowerShellForCommand(command)) {
+        execFile(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command
+          ],
+          {
+            cwd: workspaceFolder,
+            maxBuffer: MAX_COMMAND_BUFFER_BYTES,
+            windowsHide: true
+          },
+          handleResult
+        )
+        return
+      }
+
+      exec(
+        command,
+        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
+        handleResult
       )
     })
   }

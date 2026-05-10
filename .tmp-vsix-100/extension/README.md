@@ -7,6 +7,10 @@ This directory is a standalone AI-agent extension package for Arduino IDE 2.x (T
 - Adds the command `Code Janitor Arduino: Open Arduino AI Chat`.
 - Reuses the Code Janitor AI chat engine in a separate extension package.
 - Keeps this Arduino-targeted package isolated from the main Code Janitor extension.
+- Provides full internet connectivity status with visual indicators (Online/Offline/Checking)
+- Includes Speech-to-Text (STT) functionality with microphone input and real-time transcription
+- Offers Text-to-Speech (TTS) capabilities with adjustable speech rate and smart text cleaning
+- Supports NVIDIA AI integration with multiple NVIDIA NIM models
 
 ## Directory layout
 

@@ -22,6 +22,8 @@
         --muted: #8ba0b6;
         --accent: #58a6ff;
         --accent-soft: rgba(88, 166, 255, 0.12);
+        --teal: #3dd9b6;
+        --teal-soft: rgba(61, 217, 182, 0.14);
         --green: #3fb950;
         --green-soft: rgba(63, 185, 80, 0.12);
         --red: #f85149;
@@ -43,20 +45,28 @@
 
       /* Header */
       #header {
-        padding: 10px 14px;
+        padding: 12px 14px 10px;
         background: rgba(15, 20, 27, 0.94);
         border-bottom: 1px solid var(--border);
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+        flex-direction: column;
+        gap: 12px;
         flex-shrink: 0;
         backdrop-filter: blur(10px);
+      }
+      #header-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
       }
       #header-left {
         display: flex;
         align-items: center;
         gap: 10px;
+        min-width: 0;
+        flex: 1 1 320px;
       }
       #header-logo {
         width: 52px;
@@ -93,19 +103,21 @@
       #header-brand {
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 4px;
+        min-width: 0;
       }
       #session-controls {
         display: flex;
         align-items: center;
         gap: 6px;
+        flex-wrap: wrap;
         min-width: 0;
       }
       #session-select {
-        max-width: 180px;
+        max-width: 220px;
       }
       #header-title {
-        font-size: 14px;
+        font-size: 15px;
         font-weight: 600;
         color: var(--text);
         letter-spacing: 0.3px;
@@ -113,6 +125,9 @@
       #header-sub {
         font-size: 11px;
         color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       #connectivity-status {
         display: flex;
@@ -152,10 +167,32 @@
       }
 
       #header-controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
+        flex-wrap: wrap;
+        flex: 1 1 460px;
+        min-width: min(100%, 540px);
+      }
+      .toolbar-cluster {
         display: flex;
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
+        min-height: 44px;
+        padding: 8px 10px;
+        border-radius: 14px;
+        border: 1px solid rgba(88, 166, 255, 0.14);
+        background:
+          linear-gradient(180deg, rgba(24, 34, 48, 0.78), rgba(15, 20, 27, 0.78));
+      }
+      .toolbar-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        min-width: 38px;
       }
 
       .undo-btn {
@@ -194,12 +231,20 @@
         background: var(--panel-2);
         color: var(--text);
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: 12px;
         font-size: 11px;
         cursor: pointer;
       }
       select {
-        padding: 4px 6px;
+        padding: 6px 8px;
+      }
+      #provider-select,
+      #model-select {
+        min-width: 120px;
+        flex: 1 1 120px;
+      }
+      #gstack-gate-select {
+        min-width: 102px;
       }
       select:focus {
         outline: none;
@@ -355,17 +400,31 @@
       }
 
       .pill-btn {
-        padding: 4px 10px;
+        padding: 6px 10px;
         font-weight: 500;
         transition: background 0.15s;
       }
       .pill-btn:hover {
         background: var(--panel-3);
       }
+      .pill-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
       .pill-btn.active {
         background: var(--accent-soft);
         color: #fff;
         border-color: var(--accent);
+      }
+      .pill-btn.danger {
+        color: #ffb4b0;
+        border-color: rgba(248, 81, 73, 0.38);
+        background: rgba(248, 81, 73, 0.12);
+      }
+      .pill-btn.danger:hover:not(:disabled) {
+        background: rgba(248, 81, 73, 0.18);
+        border-color: var(--red);
+        color: #ffd7d5;
       }
       .icon-btn {
         width: 34px;
@@ -390,6 +449,49 @@
         background: var(--accent-soft);
         color: #fff;
         border-color: var(--accent);
+      }
+      .toggle-switch {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 4px;
+        min-width: 54px;
+        height: 32px;
+        border-radius: 999px;
+        border: 1px solid rgba(61, 217, 182, 0.26);
+        background: rgba(61, 217, 182, 0.14);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+      }
+      .toggle-switch.off {
+        background: rgba(139, 160, 182, 0.12);
+        border-color: rgba(139, 160, 182, 0.22);
+      }
+      .toggle-track {
+        position: relative;
+        width: 40px;
+        height: 20px;
+        border-radius: 999px;
+        background: rgba(12, 18, 26, 0.8);
+        border: 1px solid rgba(88, 166, 255, 0.14);
+      }
+      .toggle-thumb {
+        position: absolute;
+        top: 1px;
+        left: 1px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--teal);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 6px 16px rgba(0, 0, 0, 0.28);
+        transform: translateX(18px);
+        transition: transform 0.2s ease, background 0.2s ease;
+      }
+      .toggle-switch.off .toggle-thumb {
+        transform: translateX(0);
+        background: #8ba0b6;
       }
 
       /* Progress bar */
@@ -421,6 +523,110 @@
         border-radius: 2px;
         width: 0%;
         transition: width 0.2s ease;
+      }
+
+      #feature-ribbon {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        padding: 10px 14px 12px;
+        border-bottom: 1px solid var(--border);
+        background:
+          linear-gradient(180deg, rgba(12, 18, 26, 0.54), rgba(12, 18, 26, 0));
+      }
+      .feature-card {
+        position: relative;
+        overflow: hidden;
+        min-height: 112px;
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(88, 166, 255, 0.12);
+        background:
+          radial-gradient(circle at top right, rgba(88, 166, 255, 0.12), transparent 38%),
+          linear-gradient(180deg, rgba(18, 26, 35, 0.94), rgba(12, 18, 26, 0.94));
+        box-shadow: 0 16px 28px rgba(0, 0, 0, 0.18);
+        animation: featureLift 0.48s ease both;
+      }
+      .feature-card:nth-child(2) {
+        animation-delay: 0.08s;
+      }
+      .feature-card:nth-child(3) {
+        animation-delay: 0.16s;
+      }
+      .feature-card::before {
+        content: "";
+        position: absolute;
+        inset: -40% auto auto -25%;
+        width: 120px;
+        height: 180px;
+        background: linear-gradient(180deg, rgba(88, 166, 255, 0.14), transparent 70%);
+        transform: rotate(18deg);
+        animation: ribbonSweep 8s linear infinite;
+        pointer-events: none;
+      }
+      .feature-card strong {
+        display: block;
+        margin-top: 10px;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+      .feature-card p {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .feature-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .feature-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #9ecbff;
+      }
+      .feature-card.health {
+        border-color: rgba(61, 217, 182, 0.16);
+        background:
+          radial-gradient(circle at top right, rgba(61, 217, 182, 0.14), transparent 38%),
+          linear-gradient(180deg, rgba(18, 26, 35, 0.94), rgba(12, 18, 26, 0.94));
+      }
+      .feature-card.health.watch {
+        border-color: rgba(210, 153, 34, 0.28);
+      }
+      .feature-card.health.needs_optimization {
+        border-color: rgba(248, 81, 73, 0.28);
+      }
+      .feature-card.health.off {
+        border-color: rgba(139, 160, 182, 0.18);
+      }
+      @keyframes featureLift {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes ribbonSweep {
+        from {
+          transform: translateX(-12px) rotate(18deg);
+        }
+        50% {
+          transform: translateX(26px) rotate(18deg);
+        }
+        to {
+          transform: translateX(-12px) rotate(18deg);
+        }
       }
 
       /* Action bar */
@@ -1487,6 +1693,9 @@
       .welcome-slide.active {
         display: flex;
       }
+      .welcome-slide.active .welcome-card {
+        animation: featureLift 0.42s ease both;
+      }
       @keyframes slideIn {
         from {
           opacity: 0;
@@ -1521,10 +1730,23 @@
         gap: 10px;
       }
       .welcome-card {
+        position: relative;
+        overflow: hidden;
         background: rgba(12, 18, 26, 0.9);
         border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 10px 12px;
+        border-radius: 14px;
+        padding: 12px 13px;
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+      }
+      .welcome-card::before {
+        content: "";
+        position: absolute;
+        inset: -30% auto auto -20%;
+        width: 90px;
+        height: 140px;
+        background: linear-gradient(180deg, rgba(88, 166, 255, 0.12), transparent 75%);
+        transform: rotate(18deg);
+        animation: ribbonSweep 8s linear infinite;
       }
       .welcome-card h4 {
         font-size: 12px;
@@ -1756,6 +1978,15 @@
         height: 100%;
         border: none;
       }
+      @media (max-width: 940px) {
+        #header-controls {
+          grid-template-columns: 1fr;
+          min-width: 100%;
+        }
+        #feature-ribbon {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1854,7 +2085,7 @@
           </ul>
           <div class="tutorial-tip">
             <strong>Pro Tip:</strong>
-            <span>Use /fast or /heavy to switch modes, /scan to analyze your workspace, /ping to test AI connection</span>
+            <span>Use /fast or /heavy to switch modes, /scan to analyze your workspace, /ping to test AI connection, and /gstack to see the built-in Garry Tan inspired workflows.</span>
           </div>
         </div>
 
@@ -1914,8 +2145,8 @@
     <div id="welcome-overlay" class="hidden">
       <div class="welcome-header">
         <div>
-          <div class="welcome-title">Hi, I am Code Janitor</div>
-          <div class="welcome-sub">Fast fixes, safe edits, and syntax checks in one place.</div>
+          <div class="welcome-title">Meet the cleaner Code Janitor</div>
+          <div class="welcome-sub">Focused controls, safer edits, and an always-on health watch.</div>
         </div>
         <button class="welcome-btn" id="welcome-skip">Skip</button>
       </div>
@@ -1923,27 +2154,27 @@
       <!-- Slide 1: Introduction -->
       <div class="welcome-slide active" data-slide="0">
         <div class="welcome-steps">
-          <div class="welcome-step" data-step="0">I can format, repair, and refactor your code with AI-powered intelligence.</div>
-          <div class="welcome-step" data-step="1">Ask anything, or use the action chips to run fixes fast.</div>
-          <div class="welcome-step" data-step="2">I respect your workspace and only edit what you ask.</div>
+          <div class="welcome-step" data-step="0">Fix, refactor, and generate with structured edits that stay scoped to your workspace.</div>
+          <div class="welcome-step" data-step="1">Use quick actions for scans, Quick Fix, tests, Graphify, and deeper code reviews.</div>
+          <div class="welcome-step" data-step="2">Every applied change is tracked, undoable, and followed by safety checks when useful.</div>
         </div>
         <div class="welcome-grid">
           <div class="welcome-card">
-            <h4>Core Features</h4>
+            <h4>Build Lane</h4>
             <ul>
-              <li>Code formatting & linting (Python, JS, Java, C/C++, HTML, CSS)</li>
-              <li>AI-powered syntax repair with safety checks</li>
-              <li>Live preview for HTML, React, Markdown, Vue, Svelte</li>
-              <li>Frontend dependency validation</li>
+              <li>Quick Fix, Explain, Refactor, and Generate tests</li>
+              <li>Structured FILE and PATCH edits with undo support</li>
+              <li>Preview-aware fixes for HTML, React, Markdown, Vue, and Svelte</li>
+              <li>Frontend dependency validation when imports drift</li>
             </ul>
           </div>
           <div class="welcome-card">
-            <h4>Quick Actions</h4>
+            <h4>Context Lane</h4>
             <ul>
-              <li>Auto-correction while typing</li>
-              <li>Real-time syntax checking</li>
-              <li>Workspace scanning & analysis</li>
-              <li>Graphify codebase visualization</li>
+              <li>Graphify summaries guide architecture-aware answers</li>
+              <li>Workspace scans stay focused on relevant files</li>
+              <li>GStack reviews pressure-test code before risky edits</li>
+              <li>Live activity shows what the agent is doing now</li>
             </ul>
           </div>
         </div>
@@ -1952,22 +2183,22 @@
       <!-- Slide 2: Advanced Features -->
       <div class="welcome-slide" data-slide="1">
         <div class="welcome-steps">
-          <div class="welcome-step" data-step="0">Multiple AI providers: Ollama (local), Groq, OpenRouter, Anthropic, NVIDIA</div>
-          <div class="welcome-step" data-step="1">Self-healing performance: Auto-detects slow models and optimizes settings</div>
-          <div class="welcome-step" data-step="2">Self-diagnosing errors: Automatically fixes file operation issues</div>
+          <div class="welcome-step" data-step="0">Choose your provider and model without the header turning into a junk drawer.</div>
+          <div class="welcome-step" data-step="1">Auto-heal now watches latency, failures, and edit reliability instead of only one slow run.</div>
+          <div class="welcome-step" data-step="2">When health drops, Code Janitor can recommend or apply safer fixes like model, timeout, and gate changes.</div>
         </div>
         <div class="welcome-grid">
           <div class="welcome-card">
-            <h4>AI Features</h4>
+            <h4>Operator Stack</h4>
             <ul>
-              <li>Syntax checking for JS, TS, Python, Java, C/C++</li>
-              <li>Code generation and refactoring</li>
-              <li>Bug fixing and debugging assistance</li>
-              <li>Performance monitoring & optimization</li>
+              <li>Fast, Heavy, and Deep modes for different workloads</li>
+              <li>Provider and model switching for Ollama, Groq, OpenRouter, Anthropic, and NVIDIA</li>
+              <li>GStack gate modes for smart or always-on preflight review</li>
+              <li>Health review with model breakdowns, trends, and issue history</li>
             </ul>
           </div>
           <div class="welcome-card">
-            <h4>Keybindings</h4>
+            <h4>Shortcuts</h4>
             <ul>
               <li class="welcome-key"><span>Format Code</span><kbd>Alt + D</kbd></li>
               <li class="welcome-key"><span>Lint Code</span><kbd>Alt + L</kbd></li>
@@ -1993,52 +2224,86 @@
       </div>
     </div>
     <div id="header">
-      <div id="header-left">
-        <button id="header-logo" title="Open AI Chat (Ctrl + Alt + C)" aria-label="Open AI Chat">
-          <img src="__LOGO_URI__" alt="Code Janitor logo" />
-        </button>
-        <div id="header-brand">
-          <div id="header-title">Code Janitor AI</div>
-          <div id="header-sub">Ollama</div>
-          <div id="session-controls">
-            <select id="session-select" title="Chat sessions">
-              <option value="">Loading chats...</option>
-            </select>
-            <button class="pill-btn" id="btn-new-chat" title="New chat">New</button>
+      <div id="header-top">
+        <div id="header-left">
+          <button id="header-logo" title="Open AI Chat (Ctrl + Alt + C)" aria-label="Open AI Chat">
+            <img src="__LOGO_URI__" alt="Code Janitor logo" />
+          </button>
+          <div id="header-brand">
+            <div id="header-title">Code Janitor AI</div>
+            <div id="header-sub">Ollama</div>
+            <div id="session-controls">
+              <select id="session-select" title="Chat sessions">
+                <option value="">Loading chats...</option>
+              </select>
+              <button class="pill-btn" id="btn-new-chat" title="New chat">New</button>
+              <button class="pill-btn" id="btn-undo-chat" title="Undo the last model edit" disabled>Undo</button>
+              <button class="pill-btn danger" id="btn-delete-chat" title="Delete the current chat" disabled>Delete</button>
+            </div>
+          </div>
+          <div id="connectivity-status" class="checking" title="Checking internet connectivity...">
+            <span class="connectivity-dot pulse"></span>
+            <span>Checking...</span>
           </div>
         </div>
-        <div id="connectivity-status" class="checking" title="Checking internet connectivity...">
-          <span class="connectivity-dot pulse"></span>
-          <span>Checking...</span>
+        <div id="header-controls">
+          <div class="toolbar-cluster">
+            <span class="toolbar-label">Mode</span>
+            <button class="pill-btn active" id="btn-fast" title="Fast mode">Fast</button>
+            <button class="pill-btn" id="btn-heavy" title="Heavy mode">Heavy</button>
+            <button class="pill-btn" id="btn-deep" title="Deep mode">Deep</button>
+          </div>
+          <div class="toolbar-cluster">
+            <span class="toolbar-label">Model</span>
+            <select id="provider-select" title="AI Provider">
+              <option value="ollama">Ollama (local)</option>
+              <option value="groq">Groq (cloud)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="nvidia">NVIDIA NIM</option>
+            </select>
+            <select id="model-select" title="Switch model">
+              <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
+            </select>
+            <button class="pill-btn" id="provider-add-btn" title="Add a custom provider">Add</button>
+          </div>
+          <div class="toolbar-cluster">
+            <span class="toolbar-label">Ops</span>
+            <button class="pill-btn" id="btn-performance" title="Open AI performance review">Health</button>
+            <select id="gstack-gate-select" title="GStack gate mode">
+              <option value="smart">Gate: Smart</option>
+              <option value="always">Gate: Always</option>
+              <option value="off">Gate: Off</option>
+            </select>
+            <button class="pill-btn" id="btn-think" title="Show reasoning summary">Think</button>
+            <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">TTS</button>
+            <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">Guide</button>
+            <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
+          </div>
         </div>
       </div>
-      <div id="header-controls">
-        <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">Tutorial</button>
-        <button class="pill-btn" id="btn-deep" title="Deep mode">
-          Deep
-        </button>
-        <button class="pill-btn" id="btn-think" title="Show reasoning summary">
-          Think
-        </button>
-        <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">TTS</button>
-        <select id="provider-select" title="AI Provider">
-          <option value="ollama">Ollama (local)</option>
-          <option value="groq">Groq (cloud)</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="nvidia">NVIDIA NIM</option>
-        </select>
-        <button class="pill-btn" id="provider-add-btn" title="Add a custom provider">Add New</button>
-        <select id="model-select" title="Switch model">
-          <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
-        </select>
-        <button class="pill-btn active" id="btn-fast" title="Fast mode">
-          Fast
-        </button>
-        <button class="pill-btn" id="btn-heavy" title="Heavy mode">
-          Heavy
-        </button>
-        <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
+    </div>
+
+    <div id="feature-ribbon">
+      <div class="feature-card">
+        <span class="feature-kicker">Ship fixes</span>
+        <strong>Quick Fix, refactors, and test generation</strong>
+        <p>Use structured edits with undo support and syntax-aware follow-up checks.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-kicker">See context</span>
+        <strong>Graphify, live preview inspect, and workspace scans</strong>
+        <p>Move from one-file guesses to project-aware answers and preview-guided repairs.</p>
+      </div>
+      <div class="feature-card health" id="auto-heal-card">
+        <div class="feature-card-head">
+          <span class="feature-kicker" id="auto-heal-badge">Auto-heal on</span>
+          <button class="toggle-switch" id="auto-heal-toggle" title="Toggle auto-heal" aria-pressed="true">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </button>
+        </div>
+        <strong>Health watch</strong>
+        <p id="auto-heal-summary">Watching latency, failures, and edit safety across recent runs.</p>
       </div>
     </div>
 
@@ -2106,15 +2371,17 @@
       </button>
       <div id="actions-dropdown-menu">
         <div class="action-chip" data-action="syntax">Check syntax</div>
+        <div class="action-chip" data-action="quickfix">Quick Fix</div>
         <div class="action-chip" data-action="scan">Scan codebase</div>
         <div class="action-chip" data-action="graphify">Graphify</div>
-        <div class="action-chip" data-action="quickfix">Quick Fix</div>
+        <div class="action-chip" data-action="officehours">GStack Office Hours</div>
+        <div class="action-chip" data-action="engreview">GStack Eng Review</div>
+        <div class="action-chip" data-action="codereview">GStack Code Review</div>
+        <div class="action-chip" data-action="qasweep">GStack QA Sweep</div>
         <div class="action-chip" data-action="explain">Explain file</div>
         <div class="action-chip" data-action="fix">Fix issues</div>
         <div class="action-chip" data-action="refactor">Refactor</div>
         <div class="action-chip" data-action="tests">Generate tests</div>
-        <div class="action-chip" data-action="docs">Add docs</div>
-        <div class="action-chip" data-action="git">Git status</div>
       </div>
     </div>
 
@@ -2160,7 +2427,7 @@
       </div>
       <div id="input-hint">
         Enter to send &nbsp;?&nbsp; Shift+Enter for new line &nbsp;?&nbsp; /scan
-        /fast /heavy /audit /bugfix /undo &nbsp;?&nbsp; Alt+B scan &nbsp;?&nbsp; Ctrl+Z to revert last edit
+        /fast /heavy /deep /bugfix /undo /gstack /office-hours /eng-review /review /qa /ship &nbsp;?&nbsp; Alt+B scan &nbsp;?&nbsp; Ctrl+Z to revert last edit
       </div>
     </div>
 
@@ -2171,6 +2438,7 @@
       var sendBtn = document.getElementById("send-btn");
       var stopBtn = document.getElementById("stop-btn");
       var headerLogo = document.getElementById("header-logo");
+      var headerSub = document.getElementById("header-sub");
       var micBtn = document.getElementById("mic-btn");
       var micPermissionBadge = document.getElementById("mic-permission-badge");
       var btnFast = document.getElementById("btn-fast");
@@ -2178,9 +2446,17 @@
       var btnDeep = document.getElementById("btn-deep");
       var btnThink = document.getElementById("btn-think");
       var btnClear = document.getElementById("btn-clear");
+      var btnPerformance = document.getElementById("btn-performance");
+      var autoHealToggle = document.getElementById("auto-heal-toggle");
+      var autoHealBadge = document.getElementById("auto-heal-badge");
+      var autoHealSummary = document.getElementById("auto-heal-summary");
+      var autoHealCard = document.getElementById("auto-heal-card");
       var btnNewChat = document.getElementById("btn-new-chat");
+      var btnUndoChat = document.getElementById("btn-undo-chat");
+      var btnDeleteChat = document.getElementById("btn-delete-chat");
       var sessionSelect = document.getElementById("session-select");
       var btnTts = document.getElementById("btn-tts");
+      var gateModeSelect = document.getElementById("gstack-gate-select");
       var inputHint = document.getElementById("input-hint");
       var providerSelect = document.getElementById("provider-select");
       var providerAddBtn = document.getElementById("provider-add-btn");
@@ -2206,6 +2482,8 @@
       // Ctrl+Z does not double-undo a stale entry; the host will tell us
       // about the next edit when it happens.
       var latestUndoId = null;
+      var currentSessionId = "";
+      var suppressSessionEvents = false;
 
       // Ctrl+Z / Cmd+Z anywhere in the chat panel triggers an undo of the
       // most recent applied edit. The textarea retains its native typing-undo
@@ -2224,6 +2502,20 @@
         e.stopPropagation();
         vscode.postMessage({ type: "undoEdit", id: latestUndoId || undefined });
       });
+
+      function setUndoButtonState(canUndo, undoId) {
+        if (typeof undoId !== "undefined") {
+          latestUndoId = undoId || null;
+        }
+        btnUndoChat.disabled = !canUndo;
+        btnUndoChat.title = canUndo
+          ? "Undo the last model edit"
+          : "No model edit is available to undo yet";
+      }
+
+      function setDeleteButtonState(enabled) {
+        btnDeleteChat.disabled = !enabled;
+      }
 
       function showKeySaved() {
         apiKeyInput.style.display = "none";
@@ -2362,6 +2654,12 @@
       providerSelect.onchange = function () {
         var p = providerSelect.value;
         syncProviderUi(p);
+        setHeaderProviderSummary(
+          providerSelect.options[providerSelect.selectedIndex]
+            ? providerSelect.options[providerSelect.selectedIndex].textContent
+            : p,
+          modelSelect.value
+        );
         vscode.postMessage({ type: "setProvider", provider: p });
         if (p === "ollama" || (p === "nvidia" && providerHasSavedKey(p))) {
           vscode.postMessage({ type: "refreshProviderModels" });
@@ -2426,9 +2724,109 @@
       };
       var currentMessage = null;
       var chatMode = "fast";
-      var currentSessionId = "";
-      var suppressSessionEvents = false;
       var activityEmptyMessage = "No activity yet. Start a task to see the agent workflow.";
+      var streamScrollSlack = 48;
+
+      function isChatNearBottom() {
+        return (
+          chat.scrollHeight - chat.scrollTop - chat.clientHeight <= streamScrollSlack
+        );
+      }
+
+      function scrollChatToBottom() {
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      function clearScheduledStreamFlush(row) {
+        if (!row || !row._streamFlushScheduled) return;
+        if (row._streamFlushMode === "timer") {
+          clearTimeout(row._streamFlushHandle);
+        } else if (typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(row._streamFlushHandle);
+        }
+        row._streamFlushHandle = null;
+        row._streamFlushMode = null;
+        row._streamFlushScheduled = false;
+      }
+
+      function ensureStreamNode(bubble) {
+        if (!bubble._streamNode) {
+          bubble._streamNode = document.createElement("span");
+          bubble._streamNode.style.whiteSpace = "pre-wrap";
+          bubble.appendChild(bubble._streamNode);
+        }
+        return bubble._streamNode;
+      }
+
+      function flushStreamMessage(row, forceScroll) {
+        if (!row) return;
+        clearScheduledStreamFlush(row);
+
+        var bubble = row.querySelector(".bubble");
+        if (!bubble) return;
+
+        var ind = bubble.querySelector(".typing");
+        if (ind) ind.remove();
+
+        var hasPendingRawSource =
+          typeof row._pendingRawSource === "string" && row._pendingRawSource.length > 0;
+        if (hasPendingRawSource) {
+          bubble._rawSource = row._pendingRawSource;
+          row._pendingRawSource = null;
+        }
+
+        var pending = row._streamBuffer || "";
+        var shouldReplace = row._streamReplacePending === true;
+        var shouldScroll = !!forceScroll || row._streamShouldAutoScroll === true;
+
+        row._streamBuffer = "";
+        row._streamReplacePending = false;
+        row._streamShouldAutoScroll = false;
+
+        if (!pending && !shouldReplace && !hasPendingRawSource) {
+          if (shouldScroll) scrollChatToBottom();
+          return;
+        }
+
+        if (shouldReplace) {
+          bubble._rawText = pending;
+        } else {
+          bubble._rawText = (bubble._rawText || "") + pending;
+        }
+
+        var streamNode = ensureStreamNode(bubble);
+
+        // Hide Code Janitor structured tokens during streaming so they don't
+        // flash before being replaced by structured cards on `done`.
+        var visibleText = stripJanitorTokensForStream(bubble._rawText);
+        if (bubble._lastStreamText !== visibleText) {
+          streamNode.textContent = visibleText;
+          bubble._lastStreamText = visibleText;
+        }
+
+        if (shouldScroll) scrollChatToBottom();
+      }
+
+      function scheduleStreamFlush(row) {
+        if (!row || row._streamFlushScheduled) return;
+        row._streamFlushScheduled = true;
+
+        var flush = function () {
+          row._streamFlushHandle = null;
+          row._streamFlushMode = null;
+          row._streamFlushScheduled = false;
+          flushStreamMessage(row);
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+          row._streamFlushMode = "raf";
+          row._streamFlushHandle = requestAnimationFrame(flush);
+          return;
+        }
+
+        row._streamFlushMode = "timer";
+        row._streamFlushHandle = setTimeout(flush, 16);
+      }
 
       function resetActivity() {
         activityList.innerHTML = "";
@@ -3532,6 +3930,7 @@
           sessionSelect.appendChild(emptyOpt);
           currentSessionId = "";
           suppressSessionEvents = false;
+          setDeleteButtonState(false);
           return;
         }
 
@@ -3539,10 +3938,10 @@
           var opt = document.createElement("option");
           opt.value = session.id;
           var label = session.title || ("Chat " + (index + 1));
-          if (session.compactedCount > 0) {
-            label += " ? compacted";
-          }
           opt.textContent = label;
+          if (session.compactedCount > 0) {
+            opt.title = label + " (older history was summarized to keep the chat responsive)";
+          }
           if (session.id === selectedId) {
             opt.selected = true;
           }
@@ -3551,14 +3950,16 @@
 
         currentSessionId = selectedId || sessionSelect.value || "";
         suppressSessionEvents = false;
+        setDeleteButtonState(!!currentSessionId);
       }
 
       function restoreConversation(history) {
         chat.innerHTML = "";
+        clearScheduledStreamFlush(currentMessage);
         currentMessage = null;
 
         if (!Array.isArray(history) || history.length === 0) {
-          addRow("Ready. Select a model above, pick an action chip, or just ask.", "status");
+          addRow("Ready. Choose a model, launch a quick action, or ask for a targeted fix.", "status");
           return;
         }
 
@@ -3594,6 +3995,46 @@
         btnThink.title = enabled
           ? "Reasoning summary is enabled"
           : "Show reasoning summary";
+      }
+
+      function normalizeGateMode(mode) {
+        var value = String(mode || "").trim().toLowerCase();
+        return value === "off" || value === "always" ? value : "smart";
+      }
+
+      function setGateModeState(mode) {
+        var normalized = normalizeGateMode(mode);
+        gateModeSelect.value = normalized;
+        gateModeSelect.title = "GStack gate mode: " + normalized;
+      }
+
+      function setHeaderProviderSummary(provider, model) {
+        if (!headerSub) return;
+        var providerLabel = provider || providerSelect.value || "Provider";
+        var modelLabel = model || modelSelect.value || "Model";
+        headerSub.textContent = providerLabel + " · " + modelLabel;
+      }
+
+      function setAutoHealState(state) {
+        var enabled = !state || state.enabled !== false;
+        var status = state && state.status ? state.status : "healthy";
+
+        if (autoHealToggle) {
+          autoHealToggle.classList.toggle("off", !enabled);
+          autoHealToggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+          autoHealToggle.title = enabled ? "Disable auto-heal" : "Enable auto-heal";
+        }
+        if (autoHealBadge && state && state.badge) {
+          autoHealBadge.textContent = state.badge;
+        }
+        if (autoHealSummary && state && state.summary) {
+          autoHealSummary.textContent = state.summary;
+        }
+        if (autoHealCard) {
+          autoHealCard.classList.toggle("off", !enabled);
+          autoHealCard.classList.toggle("watch", status === "watch");
+          autoHealCard.classList.toggle("needs_optimization", status === "needs_optimization");
+        }
       }
 
       // Send
@@ -3649,6 +4090,7 @@
         vscode.postMessage({ type: "stop" });
         setInputState(false);
         if (currentMessage) {
+          flushStreamMessage(currentMessage, true);
           var em = document.createElement("em");
           em.style.color = "#64748b";
           em.textContent = " (stopped)";
@@ -3671,7 +4113,16 @@
       btnThink.onclick = function () {
         vscode.postMessage({ type: "toggleThinking" });
       };
+      btnPerformance.onclick = function () {
+        vscode.postMessage({ type: "showPerformanceReport" });
+      };
+      autoHealToggle.onclick = function () {
+        var enable = autoHealToggle.classList.contains("off");
+        vscode.postMessage({ type: "setAutoHealEnabled", enabled: enable });
+      };
       btnClear.onclick = function () {
+        clearScheduledStreamFlush(currentMessage);
+        currentMessage = null;
         chat.innerHTML = "";
         vscode.postMessage({ type: "clear" });
         resetActivity();
@@ -3679,6 +4130,21 @@
       };
       btnNewChat.onclick = function () {
         vscode.postMessage({ type: "createSession" });
+      };
+      btnUndoChat.onclick = function () {
+        if (btnUndoChat.disabled) return;
+        setUndoButtonState(false, latestUndoId);
+        vscode.postMessage({ type: "undoEdit", id: latestUndoId || undefined });
+      };
+      btnDeleteChat.onclick = function () {
+        if (!currentSessionId || btnDeleteChat.disabled) return;
+        var selectedOption = sessionSelect.options[sessionSelect.selectedIndex];
+        var chatLabel = selectedOption ? selectedOption.textContent : "this chat";
+        vscode.postMessage({
+          type: "confirmDeleteSession",
+          sessionId: currentSessionId,
+          label: chatLabel
+        });
       };
       sessionSelect.onchange = function () {
         if (suppressSessionEvents) return;
@@ -3690,7 +4156,18 @@
 
       modelSelect.onchange = function () {
         vscode.postMessage({ type: "setModel", model: modelSelect.value });
+        setHeaderProviderSummary(
+          providerSelect.options[providerSelect.selectedIndex]
+            ? providerSelect.options[providerSelect.selectedIndex].textContent
+            : providerSelect.value,
+          modelSelect.value
+        );
         addRow("Model switched to " + modelSelect.value, "status");
+      };
+      gateModeSelect.onchange = function () {
+        var nextMode = normalizeGateMode(gateModeSelect.value);
+        setGateModeState(nextMode);
+        vscode.postMessage({ type: "setGstackGateMode", value: nextMode });
       };
 
       // Actions dropdown
@@ -3762,6 +4239,12 @@
             return;
           }
           var prompts = {
+            officehours: "/office-hours",
+            ceoreview: "/ceo",
+            engreview: "/eng-review",
+            designreview: "/design-review",
+            codereview: "/review",
+            qasweep: "/qa",
             explain: "Explain what the active file does",
             refactor: "Refactor the active file for clarity and performance",
             tests: "Generate unit tests for the active file",
@@ -3818,41 +4301,45 @@
           row.appendChild(av);
           row.appendChild(bubble);
           chat.appendChild(row);
-          chat.scrollTop = chat.scrollHeight;
+          scrollChatToBottom();
           currentMessage = row;
-        } else if (msg.type === "stream" && currentMessage) {
-          var bubble = currentMessage.querySelector(".bubble");
-          var ind = bubble.querySelector(".typing");
-          if (ind) ind.remove();
-          bubble._rawText = (bubble._rawText || "") + msg.text;
-          if (!bubble._streamNode) {
-            bubble._streamNode = document.createElement("span");
-            bubble._streamNode.style.whiteSpace = "pre-wrap";
-            bubble.appendChild(bubble._streamNode);
+        } else if ((msg.type === "stream" || msg.type === "streamReplace") && currentMessage) {
+          currentMessage._streamShouldAutoScroll =
+            currentMessage._streamShouldAutoScroll || isChatNearBottom();
+          if (typeof msg.rawText === "string" && msg.rawText) {
+            currentMessage._pendingRawSource = msg.rawText;
           }
-          // Hide Code Janitor structured tokens during streaming so they don't
-          // flash before being replaced by structured cards on `done`.
-          bubble._streamNode.textContent = stripJanitorTokensForStream(bubble._rawText);
-          chat.scrollTop = chat.scrollHeight;
+          if (msg.type === "streamReplace") {
+            currentMessage._streamBuffer = msg.text || "";
+            currentMessage._streamReplacePending = true;
+          } else {
+            currentMessage._streamBuffer =
+              (currentMessage._streamBuffer || "") + (msg.text || "");
+          }
+          scheduleStreamFlush(currentMessage);
         } else if (msg.type === "done") {
           addActivity("Run finished.", "success");
           hideProgress();
           if (currentMessage) {
+            flushStreamMessage(currentMessage, true);
             var bubble = currentMessage.querySelector(".bubble");
-            if (bubble && bubble._rawText) {
-              bubble._rawSource = bubble._rawText;
+            var finalRenderText = bubble
+              ? (bubble._rawSource || bubble._rawText || "")
+              : "";
+            if (bubble && finalRenderText) {
+              bubble._rawSource = finalRenderText;
               bubble.innerHTML = "";
-              bubble.appendChild(renderContent(bubble._rawText));
+              bubble.appendChild(renderContent(finalRenderText));
               
               // Speak the response if TTS is enabled
               if (ttsEnabled) {
-                speakText(bubble._rawText);
+                speakText(bubble._rawText || finalRenderText);
               }
             }
           }
           currentMessage = null;
           setInputState(false);
-          chat.scrollTop = chat.scrollHeight;
+          scrollChatToBottom();
         } else if (msg.type === "confirm" || msg.type === "confirmOutsideEdit") {
           addActivity(
             msg.type === "confirmOutsideEdit"
@@ -3903,7 +4390,7 @@
           addRow(makeAppliedStatusContent(msg.text, msg.filePath, msg.undoId), "status");
           if (msg.undoId) {
             addRow(makeUndoCard(msg.text, msg.filePath, msg.undoId), "status");
-            latestUndoId = msg.undoId;
+            setUndoButtonState(true, msg.undoId);
           }
         } else if (msg.type === "editUndone") {
           if (msg.id && latestUndoId === msg.id) {
@@ -3915,8 +4402,11 @@
             staleButtons[ub].disabled = true;
             staleButtons[ub].textContent = "Undone";
           }
+        } else if (msg.type === "undoState") {
+          setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);
         } else if (msg.type === "sessionState") {
           populateSessions(msg.sessions, msg.currentSessionId);
+          setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);
           restoreConversation(msg.history);
         } else if (msg.type === "setCurrentProvider") {
           if (msg.providers && msg.providers.length) {
@@ -3942,6 +4432,7 @@
           if (msg.provider) {
             providerSelect.value = msg.provider;
             syncProviderUi(msg.provider, msg.model, msg.models || null);
+            setHeaderProviderSummary(providerSelect.options[providerSelect.selectedIndex] ? providerSelect.options[providerSelect.selectedIndex].textContent : msg.provider, msg.model);
           }
         } else if (msg.type === "setModelOptions") {
           // Only update if this matches the currently selected provider
@@ -3958,6 +4449,10 @@
           });
         } else if (msg.type === "thinkingState") {
           setThinkingState(!!msg.enabled);
+        } else if (msg.type === "autoHealState") {
+          setAutoHealState(msg);
+        } else if (msg.type === "gstackGateModeState") {
+          setGateModeState(msg.value);
         } else if (msg.type === "triggerFix") {
           // Triggered by Alt+D - simulate clicking the Fix issues button
           var fixButton = document.querySelector('.action-chip[data-action="fix"]');
@@ -4482,22 +4977,12 @@
 
       if (inputHint) {
         inputHint.innerHTML =
-          "Enter to send &nbsp;&middot;&nbsp; Shift+Enter for new line &nbsp;&middot;&nbsp; /scan /fast /heavy /deep /audit /bugfix /think &nbsp;&middot;&nbsp; Alt+B to scan active file";
-      }
-
-      var headerControls = document.getElementById("header-controls");
-      if (headerControls) {
-        headerControls.appendChild(btnFast);
-        headerControls.appendChild(btnHeavy);
-        headerControls.appendChild(btnDeep);
-        headerControls.appendChild(btnThink);
-        headerControls.appendChild(btnTts);
-        headerControls.appendChild(btnClear);
+          "Enter to send &nbsp;&middot;&nbsp; Shift+Enter for new line &nbsp;&middot;&nbsp; /scan /fast /heavy /deep /bugfix /think /gstack /office-hours /eng-review /review /qa /ship &nbsp;&middot;&nbsp; Alt+B to scan active file";
       }
 
       var actionsHeading = document.querySelector("#action-bar #actions-dropdown-btn span");
       if (actionsHeading) {
-        actionsHeading.textContent = "Actions";
+        actionsHeading.textContent = "Launch";
       }
       Array.prototype.forEach.call(document.querySelectorAll("h4"), function(node) {
         if (/quick actions/i.test(node.textContent)) {
@@ -4506,9 +4991,16 @@
       });
 
       // Init
+      setAutoHealState({
+        enabled: true,
+        status: "healthy",
+        badge: "Auto-heal on",
+        summary: "Watching latency, failures, and edit safety across recent runs."
+      });
+      setHeaderProviderSummary("Ollama", "qwen2.5-coder:1.5b");
       vscode.postMessage({ type: "ready" });
       addRow(
-        "Ready. Select a model above, pick an action chip, or just ask.",
+        "Ready. Choose a model, launch a quick action, or ask for a targeted fix.",
         "status",
       );
 

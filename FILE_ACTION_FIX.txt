@@ -1,0 +1,89 @@
+// FILE ACTION FIX - Add logging and fix double-apply issue
+
+// Around line 4521 - Add logging to the probe phase:
+            } else if (action.type === "file") {
+              console.log(`[FileAction] Probing FILE: ${action.path}`);
+              const probe = await this.agent.applyChanges(
+                action.path,
+                action.content,
+                false,
+                writeOptions
+              );
+              console.log(`[FileAction] Probe result for ${action.path}:`, {
+                success: probe.success,
+                error: probe.error,
+                path: probe.path,
+                created: probe.created
+              });
+              if (probe.error === "outside_workspace") {
+                outsideFiles.push({ action, path: probe.path });
+              } else {
+                insideActions.push({ action, result: probe });
+              }
+            }
+
+// Around line 4752 - Fix the FILE action execution to not double-apply:
+            } else if (action.type === "file") {
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              console.log(`[FileAction] Processing FILE: ${action.path}, outside=${outside}, hasPreResult=${!!preResult}`);
+              
+              // CRITICAL FIX: Don't re-apply if we already have a successful result from probe
+              let result = preResult;
+              if (!result || outside) {
+                console.log(`[FileAction] Applying changes for ${action.path}`);
+                result = await this.agent.applyChanges(
+                  action.path,
+                  action.content,
+                  outside,
+                  writeOptions
+                );
+              } else {
+                console.log(`[FileAction] Using probe result for ${action.path}`);
+              }
+              
+              console.log(`[FileAction] Final result for ${action.path}:`, {
+                success: result.success,
+                error: result.error,
+                path: result.path,
+                relativePath: result.relativePath
+              });
+
+              if (
+                !result.success &&
+                isEditLikeIntent &&
+                this._isReadmePath(action.path) &&
+                this._isDocTruncateGuardError(result.error)
+              ) {
+                this._postMessage({
+                  type: "status",
+                  text: "README guard blocked truncation. Retrying with strict full-file README rewrite..."
+                });
+                result = await this._retryReadmeRewrite(
+                  requestText,
+                  workspaceFolder,
+                  writeOptions
+                );
+                if (!result.success) {
+                  this._postMessage({
+                    type: "error",
+                    text: `README retry failed: ${result.error}`
+                  });
+                  stopFurtherActions = true;
+                } else {
+                  this._postMessage({
+                    type: "status",
+                    text: "README retry succeeded with a full-file rewrite."
+                  });
+                }
+              }
+
+              if (stopFurtherActions) {
+                break;
+              }
+              const operation = result.created ? "Adding file" : "Editing file";
+              this._postMessage({ type: "status", text: `${operation}: ${action.path}` });
+              // Rest of the code continues...
