@@ -1173,6 +1173,101 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
+      .fix-insights-card {
+        margin: 6px 0;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(61, 217, 182, 0.28);
+        background:
+          linear-gradient(180deg, rgba(11, 41, 38, 0.9), rgba(12, 22, 31, 0.96)),
+          radial-gradient(circle at top right, rgba(61, 217, 182, 0.12), transparent 45%);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .fix-insights-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .fix-insights-title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--text);
+      }
+      .fix-insights-summary {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .quality-score-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(61, 217, 182, 0.3);
+        background: rgba(61, 217, 182, 0.12);
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--teal);
+      }
+      .quality-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 8px;
+      }
+      .quality-metric {
+        padding: 9px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(139, 160, 182, 0.14);
+        background: rgba(15, 20, 27, 0.78);
+      }
+      .quality-metric-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .quality-metric-value {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 6px;
+        color: var(--text);
+      }
+      .quality-metric-score {
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .quality-metric-delta {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--teal);
+      }
+      .quality-metric-delta.negative {
+        color: var(--red);
+      }
+      .insight-section {
+        padding-top: 9px;
+        border-top: 1px solid rgba(139, 160, 182, 0.12);
+      }
+      .insight-section-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 5px;
+      }
+      .insight-section-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.45;
+      }
       .status-text {
         white-space: pre-wrap;
       }
@@ -3314,6 +3409,133 @@
         return card;
       }
 
+      function formatSignedDelta(delta) {
+        var value = Number(delta || 0);
+        return value > 0 ? "+" + value : String(value);
+      }
+
+      function makeQualityMetric(label, beforeValue, afterValue) {
+        var metric = document.createElement("div");
+        metric.className = "quality-metric";
+
+        var title = document.createElement("div");
+        title.className = "quality-metric-label";
+        title.textContent = label;
+        metric.appendChild(title);
+
+        var valueRow = document.createElement("div");
+        valueRow.className = "quality-metric-value";
+
+        var score = document.createElement("span");
+        score.className = "quality-metric-score";
+        score.textContent = String(afterValue);
+        valueRow.appendChild(score);
+
+        var delta = document.createElement("span");
+        var change = Number(afterValue || 0) - Number(beforeValue || 0);
+        delta.className = "quality-metric-delta" + (change < 0 ? " negative" : "");
+        delta.textContent = formatSignedDelta(change);
+        valueRow.appendChild(delta);
+
+        metric.appendChild(valueRow);
+        return metric;
+      }
+
+      function makeFixInsightsCard(insights) {
+        var safeInsights = insights || {};
+        var quality = safeInsights.quality || {};
+        var beforeSubscores = quality.beforeSubscores || {};
+        var afterSubscores = quality.afterSubscores || {};
+
+        var card = document.createElement("div");
+        card.className = "fix-insights-card";
+
+        var head = document.createElement("div");
+        head.className = "fix-insights-head";
+
+        var heading = document.createElement("div");
+        var title = document.createElement("div");
+        title.className = "fix-insights-title";
+        title.textContent = "Fix Explanation";
+        heading.appendChild(title);
+
+        var summary = document.createElement("div");
+        summary.className = "fix-insights-summary";
+        summary.textContent = safeInsights.summary || "Applied a targeted code fix.";
+        heading.appendChild(summary);
+        head.appendChild(heading);
+
+        var scoreBadge = document.createElement("div");
+        scoreBadge.className = "quality-score-badge";
+        scoreBadge.textContent =
+          "Score " +
+          String(quality.after || 0) +
+          " (" +
+          formatSignedDelta(quality.delta || 0) +
+          ")";
+        head.appendChild(scoreBadge);
+
+        card.appendChild(head);
+
+        var grid = document.createElement("div");
+        grid.className = "quality-grid";
+        grid.appendChild(
+          makeQualityMetric(
+            "Readability",
+            beforeSubscores.readability || 0,
+            afterSubscores.readability || 0
+          )
+        );
+        grid.appendChild(
+          makeQualityMetric(
+            "Maintainability",
+            beforeSubscores.maintainability || 0,
+            afterSubscores.maintainability || 0
+          )
+        );
+        grid.appendChild(
+          makeQualityMetric(
+            "Security",
+            beforeSubscores.security || 0,
+            afterSubscores.security || 0
+          )
+        );
+        grid.appendChild(
+          makeQualityMetric(
+            "Docs",
+            beforeSubscores.documentation || 0,
+            afterSubscores.documentation || 0
+          )
+        );
+        grid.appendChild(
+          makeQualityMetric(
+            "Correctness",
+            beforeSubscores.correctness || 0,
+            afterSubscores.correctness || 0
+          )
+        );
+        card.appendChild(grid);
+
+        (safeInsights.sections || []).forEach(function(section) {
+          var wrap = document.createElement("div");
+          wrap.className = "insight-section";
+
+          var label = document.createElement("div");
+          label.className = "insight-section-label";
+          label.textContent = section.label || "Details";
+          wrap.appendChild(label);
+
+          var body = document.createElement("div");
+          body.className = "insight-section-text";
+          body.textContent = section.text || "";
+          wrap.appendChild(body);
+
+          card.appendChild(wrap);
+        });
+
+        return card;
+      }
+
       function extractYouTubeId(url) {
         var cleanUrl = String(url || "").trim();
         if (!cleanUrl) return null;
@@ -4495,6 +4717,9 @@
             addRow(makeUndoCard(msg.text, msg.filePath, msg.undoId), "status");
             setUndoButtonState(true, msg.undoId);
           }
+        } else if (msg.type === "fixInsights" && msg.insights) {
+          addActivity(msg.insights.summary || "Generated fix explanation.", "success");
+          addRow(makeFixInsightsCard(msg.insights), "status");
         } else if (msg.type === "editUndone") {
           if (msg.id && latestUndoId === msg.id) {
             latestUndoId = null;

@@ -12,6 +12,7 @@ const {
 } = require("./gstack");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
+const { buildFixInsights } = require("../core/fix-insights");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 
@@ -1775,7 +1776,8 @@ class ChatPanel {
       workspaceFolder,
       activeEditor.document.getText()
     );
-    if (verifyCheck && verifyCheck.success) {
+    const verificationPassed = !!(verifyCheck && verifyCheck.success);
+    if (verificationPassed) {
       this._postMessage({
         type: "stream",
         text: "\n\nSyntax errors fixed successfully!"
@@ -1786,6 +1788,18 @@ class ChatPanel {
         text: "\n\nWarning: Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
+
+    this._postFixInsights(
+      applyResult.path,
+      applyResult.previousContent,
+      applyResult.newContent,
+      {
+        syntaxErrorOutput: errorOutput,
+        verificationPassed,
+        knownSyntaxBefore: false,
+        knownSyntaxAfter: verificationPassed
+      }
+    );
 
     this._postMessage({ type: "done" });
   }
@@ -2402,6 +2416,48 @@ class ChatPanel {
     };
   }
 
+  _postFixInsights(filePath, beforeCode, afterCode, options = {}) {
+    if (
+      typeof beforeCode !== "string" ||
+      typeof afterCode !== "string" ||
+      beforeCode === afterCode
+    ) {
+      return;
+    }
+
+    try {
+      const insights = buildFixInsights({
+        filePath,
+        beforeCode,
+        afterCode,
+        syntaxErrorOutput: options.syntaxErrorOutput || "",
+        verificationPassed:
+          typeof options.verificationPassed === "boolean"
+            ? options.verificationPassed
+            : null,
+        knownSyntaxBefore:
+          typeof options.knownSyntaxBefore === "boolean"
+            ? options.knownSyntaxBefore
+            : null,
+        knownSyntaxAfter:
+          typeof options.knownSyntaxAfter === "boolean"
+            ? options.knownSyntaxAfter
+            : null
+      });
+
+      if (!insights) {
+        return;
+      }
+
+      this._postMessage({
+        type: "fixInsights",
+        insights
+      });
+    } catch (error) {
+      console.warn("Could not generate fix insights:", error.message);
+    }
+  }
+
   _shouldInspectPreviewRequest(message) {
     const text = String(message || "");
     return /\b(preview|render|runtime|page|ui)\b/i.test(text) &&
@@ -2535,6 +2591,7 @@ ${document.getText()}
     return {
       success: true,
       path: relativePath,
+      applyResult: result,
       verification
     };
   }
@@ -3780,6 +3837,17 @@ ${trimmedText}`;
               undoId: syntaxUndoId,
               text: `\u2705 Auto-fixed syntax in ${repairResult.applyResult.relativePath || file}\n${repairResult.applyResult.changeSummary || ""}`
             });
+            this._postFixInsights(
+              repairResult.applyResult.path || file,
+              repairResult.applyResult.previousContent,
+              repairResult.applyResult.newContent,
+              {
+                syntaxErrorOutput: result.error || result.output || "",
+                verificationPassed: true,
+                knownSyntaxBefore: false,
+                knownSyntaxAfter: true
+              }
+            );
             await this._revealWorkspaceFile(repairResult.applyResult.path);
             results.checks.push({
               file,
@@ -4776,6 +4844,13 @@ ${trimmedText}`;
                       : `\u2705 Opened draft ${result.path}`
                     : result.error
                 });
+                if (result.success && shouldApplyToOpenFile) {
+                  this._postFixInsights(
+                    result.path || action.path,
+                    result.previousContent,
+                    result.newContent
+                  );
+                }
               } else if (action.type === "patch") {
                 const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
                 const activeFileName = activeEditor?.document?.fileName || "";
@@ -4845,6 +4920,13 @@ ${trimmedText}`;
                     ? `\u2705 Patched open file ${result.relativePath || result.path}`
                     : result.error
                 });
+                if (result.success) {
+                  this._postFixInsights(
+                    result.path || action.path,
+                    result.previousContent,
+                    result.newContent
+                  );
+                }
               } else if (action.type === "mkdir") {
                 this._postMessage({
                   type: "status",
@@ -5090,6 +5172,13 @@ ${trimmedText}`;
                       ? `\u2705 Recovered edit ${recoveryResult.relativePath || action.path}\n${recoveryResult.changeSummary || ""}`
                       : recoveryResult.error
                   });
+                  if (recoveryResult.success) {
+                    this._postFixInsights(
+                      recoveryResult.path || action.path,
+                      recoveryResult.previousContent,
+                      recoveryResult.newContent
+                    );
+                  }
 
                   if (recoveryResult.success && !outside) {
                     changedFiles.push(recoveryResult.relativePath || action.path);
@@ -5151,6 +5240,13 @@ ${trimmedText}`;
                   ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              if (result.success) {
+                this._postFixInsights(
+                  result.path || action.path,
+                  result.previousContent,
+                  result.newContent
+                );
+              }
               
               if (result.success && !outside) {
                 changedFiles.push(result.relativePath || action.path);
@@ -5254,6 +5350,13 @@ ${trimmedText}`;
                     : `\u2705 Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              if (result.success && !result.created) {
+                this._postFixInsights(
+                  result.path || action.path,
+                  result.previousContent,
+                  result.newContent
+                );
+              }
               if (result.success && !outside) {
                 changedFiles.push(result.relativePath || action.path);
                 await this._revealWorkspaceFile(result.path);
@@ -5376,14 +5479,24 @@ ${trimmedText}`;
                         text: fixResult.error
                       });
                     } else {
+                      const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                      const cleanPreview = verificationDiagnostics
+                        ? !this._previewDiagnosticsHasIssues(verificationDiagnostics)
+                        : null;
                       this._postMessage({
                         type: "applied",
                         text: `Updated ${fixResult.path} using preview diagnostics.`
                       });
+                      this._postFixInsights(
+                        fixResult.applyResult?.path || fixResult.path,
+                        fixResult.applyResult?.previousContent,
+                        fixResult.applyResult?.newContent,
+                        {
+                          verificationPassed: cleanPreview
+                        }
+                      );
 
-                      const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                       if (verificationDiagnostics) {
-                        const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
                         this._postMessage({
                           type: cleanPreview ? "applied" : "status",
                           text: cleanPreview
@@ -5443,14 +5556,24 @@ ${trimmedText}`;
                       text: fixResult.error
                     });
                   } else {
+                    const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                    const cleanPreview = verificationDiagnostics
+                      ? !this._previewDiagnosticsHasIssues(verificationDiagnostics)
+                      : null;
                     this._postMessage({
                       type: "applied",
                         text: `Updated ${fixResult.path} using preview diagnostics.`
                     });
+                    this._postFixInsights(
+                      fixResult.applyResult?.path || fixResult.path,
+                      fixResult.applyResult?.previousContent,
+                      fixResult.applyResult?.newContent,
+                      {
+                        verificationPassed: cleanPreview
+                      }
+                    );
 
-                    const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                     if (verificationDiagnostics) {
-                      const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
                       this._postMessage({
                         type: cleanPreview ? "applied" : "status",
                         text: cleanPreview
@@ -5593,6 +5716,11 @@ ${trimmedText}`;
             : result.error
         });
         if (result.success) {
+          this._postFixInsights(
+            result.path || message.filePath,
+            result.previousContent,
+            result.newContent
+          );
           await this._revealWorkspaceFile(result.path);
         }
       } else if (message.type === "clear") {
