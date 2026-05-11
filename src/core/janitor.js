@@ -1,5 +1,6 @@
 const fs = require("fs").promises;
 const OllamaClient = require("./ai/ollama-client");
+const { resolveCliAiConfig } = require("../utils/cli-config");
 
 const {
   FIXER_MAP,
@@ -10,33 +11,30 @@ const { findFiles } = require("../utils/file-finder");
 
 function buildAiRuntimeConfig(options = {}) {
   const config = {};
-  const envNvidiaApiKey =
-    process.env.CODE_JANITOR_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY || "";
+  const resolved = resolveCliAiConfig(options);
 
   if (typeof options.ai === "boolean") {
     config.enabled = options.ai;
   }
 
-  if (typeof options.provider === "string" && options.provider.trim()) {
-    config.provider = options.provider.trim().toLowerCase();
+  if (resolved.provider) {
+    config.provider = resolved.provider;
   }
 
-  if (typeof options.aiModel === "string" && options.aiModel.trim()) {
-    config.model = options.aiModel.trim();
+  if (resolved.model) {
+    config.model = resolved.model;
   }
 
-  if (typeof options.ollamaUrl === "string" && options.ollamaUrl.trim()) {
-    config.baseUrl = options.ollamaUrl.trim();
+  if (resolved.ollamaUrl) {
+    config.baseUrl = resolved.ollamaUrl;
   }
 
-  if (typeof options.nvidiaApiKey === "string" && options.nvidiaApiKey.trim()) {
-    config.nvidiaApiKey = options.nvidiaApiKey.trim();
-  } else if (envNvidiaApiKey) {
-    config.nvidiaApiKey = envNvidiaApiKey.trim();
+  if (resolved.nvidiaApiKey) {
+    config.nvidiaApiKey = resolved.nvidiaApiKey;
   }
 
-  if (Number.isFinite(options.timeout) && options.timeout > 0) {
-    config.timeout = options.timeout;
+  if (Number.isFinite(resolved.timeout) && resolved.timeout > 0) {
+    config.timeout = resolved.timeout;
   }
 
   return Object.keys(config).length > 0 ? config : null;

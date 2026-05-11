@@ -10,6 +10,7 @@ jest.mock("../ai-agent/agent", () =>
 const {
   buildChatRuntimeConfig,
   getReadOnlyOverlay,
+  normalizeIo,
   runSingleChatTurn
 } = require("../cli-chat");
 
@@ -34,6 +35,34 @@ describe("cli chat", () => {
       model: "meta/llama-3.1-8b-instruct",
       nvidiaApiKey: "secret-token"
     });
+  });
+
+  test("builds NVIDIA runtime config from workspace cli config file", () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "code-janitor-chat-config-"));
+    const configPath = path.join(workspace, ".code-janitor.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ai: {
+          provider: "nvidia",
+          nvidiaApiKey: "file-key",
+          nvidiaModel: "meta/llama-3.1-8b-instruct"
+        }
+      }),
+      "utf8"
+    );
+
+    expect(buildChatRuntimeConfig({ cwd: workspace })).toMatchObject({
+      enabled: true,
+      provider: "nvidia",
+      model: "meta/llama-3.1-8b-instruct",
+      nvidiaApiKey: "file-key"
+    });
+
+    fs.rmSync(workspace, { recursive: true, force: true });
   });
 
   test("uses read-only overlay for chat turns", async () => {
@@ -78,5 +107,52 @@ describe("cli chat", () => {
     );
     expect(io.log).toHaveBeenCalledWith("Hello from chat.");
     expect(writes).toEqual([]);
+  });
+
+  test("normalizes console-style io for streamed responses", async () => {
+    const io = {
+      log: jest.fn(),
+      error: jest.fn()
+    };
+    const stdoutSpy = jest
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    mockChat.mockResolvedValue({
+      text: "Hello from stream.",
+      actions: []
+    });
+
+    const exitCode = await runSingleChatTurn(
+      { chat: (message, workspace, streamCallback, abortSignal, chatOptions) => {
+        streamCallback("Hello ");
+        streamCallback("from stream.");
+        return mockChat(message, workspace, streamCallback, abortSignal, chatOptions);
+      } },
+      "Hi",
+      {},
+      io
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdoutSpy).toHaveBeenCalled();
+    expect(io.error).not.toHaveBeenCalled();
+
+    stdoutSpy.mockRestore();
+  });
+
+  test("normalizeIo adds a write fallback", () => {
+    const stdoutSpy = jest
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+
+    const io = normalizeIo({
+      log: jest.fn(),
+      error: jest.fn()
+    });
+
+    io.write("hello");
+
+    expect(stdoutSpy).toHaveBeenCalledWith("hello");
+    stdoutSpy.mockRestore();
   });
 });

@@ -109,7 +109,7 @@ describe("cli", () => {
       aiModel: "",
       nvidiaApiKey: "",
       ollamaUrl: "",
-      provider: "ollama",
+      provider: "",
       timeout: null,
       write: false
     });
@@ -174,7 +174,7 @@ describe("cli", () => {
       aiModel: "qwen2.5-coder:7b",
       nvidiaApiKey: "",
       ollamaUrl: "http://127.0.0.1:11434",
-      provider: "ollama",
+      provider: "",
       timeout: 45000,
       write: true
     });

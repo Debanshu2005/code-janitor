@@ -17,7 +17,7 @@ function parseArgs(argv) {
     mode: "fast",
     nvidiaApiKey: "",
     ollamaUrl: "",
-    provider: "ollama",
+    provider: "",
     timeout: null,
     version: false,
     write: true
