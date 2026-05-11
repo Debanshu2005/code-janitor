@@ -1,8 +1,13 @@
 /* eslint-env jest */
 const mockAnalyzeTarget = jest.fn();
+const mockRunChatCli = jest.fn();
 
 jest.mock("../core/janitor", () => ({
   analyzeTarget: (...args) => mockAnalyzeTarget(...args)
+}));
+
+jest.mock("../cli-chat", () => ({
+  runChatCli: (...args) => mockRunChatCli(...args)
 }));
 
 const { getHelpText, parseArgs, runCli } = require("../cli");
@@ -46,6 +51,16 @@ describe("cli", () => {
       model: "qwen2.5-coder:7b",
       ollamaUrl: "http://127.0.0.1:11434",
       timeout: 45000
+    });
+  });
+
+  test("parses chat subcommand with free-form message", () => {
+    expect(
+      parseArgs(["chat", "explain", "src/extension.js", "--mode", "heavy"])
+    ).toMatchObject({
+      command: "chat",
+      chatMessage: "explain src/extension.js",
+      mode: "heavy"
     });
   });
 
@@ -216,5 +231,22 @@ describe("cli", () => {
     expect(io.error).toHaveBeenCalledWith("Unknown option: --wat");
     expect(io.error).toHaveBeenCalledWith(expect.stringContaining("Usage: code-janitor"));
     expect(getHelpText()).toContain("--check");
+  });
+
+  test("delegates chat subcommand to chat runner", async () => {
+    const io = createIo();
+    mockRunChatCli.mockResolvedValue(0);
+
+    const exitCode = await runCli(["chat", "hello", "there", "--mode", "deep"], io);
+
+    expect(exitCode).toBe(0);
+    expect(mockRunChatCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "chat",
+        chatMessage: "hello there",
+        mode: "deep"
+      }),
+      io
+    );
   });
 });

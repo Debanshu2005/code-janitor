@@ -2,15 +2,19 @@
 
 const path = require("path");
 
+const { runChatCli } = require("./cli-chat");
 const { analyzeTarget } = require("./core/janitor");
 
 function parseArgs(argv) {
   const options = {
     ai: false,
+    chatMessage: "",
     check: false,
+    command: "fix",
     help: false,
     json: false,
     model: "",
+    mode: "fast",
     nvidiaApiKey: "",
     ollamaUrl: "",
     provider: "ollama",
@@ -19,6 +23,7 @@ function parseArgs(argv) {
     write: true
   };
   const positionals = [];
+  const chatTokens = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -59,6 +64,15 @@ function parseArgs(argv) {
 
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+
+    if (arg === "--mode") {
+      const mode = readValue("--mode").trim().toLowerCase();
+      if (!["fast", "heavy", "deep"].includes(mode)) {
+        throw new Error("Option --mode must be one of: fast, heavy, deep.");
+      }
+      options.mode = mode;
       continue;
     }
 
@@ -110,7 +124,25 @@ function parseArgs(argv) {
       throw new Error(`Unknown option: ${arg}`);
     }
 
+    if (options.command === "chat") {
+      chatTokens.push(arg);
+      continue;
+    }
+
+    if (arg === "chat" && positionals.length === 0) {
+      options.command = "chat";
+      continue;
+    }
+
     positionals.push(arg);
+  }
+
+  if (options.command === "chat") {
+    return {
+      ...options,
+      chatMessage: chatTokens.join(" ").trim(),
+      targetPath: process.cwd()
+    };
   }
 
   if (positionals.length > 1) {
@@ -137,6 +169,7 @@ Options:
   --check           Report files that would change without writing them
   --write           Apply fixes to disk (default)
   --json            Print the final report as JSON
+  --mode NAME       Chat mode: fast, heavy, or deep
   --ai              Allow AI-assisted fixes when a fixer supports them
   --provider NAME   AI provider: ollama or nvidia
   --model NAME      Model to use for the selected provider
@@ -145,13 +178,16 @@ Options:
   --timeout MS      AI request timeout in milliseconds
 
 Description:
-  Analyze a supported file or directory and apply safe formatting and syntax fixes.
-  If no path is provided, the current working directory is used.
+  Default mode analyzes a supported file or directory and applies safe formatting
+  and syntax fixes. If no path is provided, the current working directory is used.
+  Use the chat subcommand for a read-only terminal chat experience.
 
 Examples:
   code-janitor
   code-janitor src
   code-janitor src/app.js --check
+  code-janitor chat
+  code-janitor chat explain src/extension.js --mode heavy
   code-janitor . --json
   code-janitor src/broken.py --ai --model qwen2.5-coder:1.5b
   code-janitor src/broken.js --ai --provider nvidia --model meta/llama-3.1-8b-instruct
@@ -220,6 +256,10 @@ async function runCli(argv, io = console) {
   if (options.version) {
     io.log(`code-janitor v${getVersion()}`);
     return 0;
+  }
+
+  if (options.command === "chat") {
+    return runChatCli(options, io);
   }
 
   try {

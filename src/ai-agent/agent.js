@@ -1,4 +1,4 @@
-const vscode = require("vscode");
+const vscode = require("../utils/vscode-shim");
 const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
