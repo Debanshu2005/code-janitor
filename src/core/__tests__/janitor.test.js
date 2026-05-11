@@ -22,8 +22,10 @@ jest.mock("../../utils/file-finder", () => ({
 const { analyzeAndFixDirectory, analyzeTarget } = require("../janitor");
 
 class UppercaseFixer {
-  constructor(code) {
+  constructor(code, filePath, options = {}) {
     this.code = code;
+    this.filePath = filePath;
+    this.options = options;
     this.fixes = [{ range: [0, code.length], text: code.toUpperCase() }];
   }
 
@@ -92,5 +94,27 @@ describe("janitor core", () => {
     expect(report.fixedFiles).toEqual([firstFile, secondFile]);
     expect(fs.readFileSync(firstFile, "utf8")).toBe("FIRST\n");
     expect(fs.readFileSync(secondFile, "utf8")).toBe("SECOND\n");
+  });
+
+  test("passes AI runtime options into fixers", async () => {
+    const workspace = createWorkspace();
+    const filePath = path.join(workspace, "sample.js");
+    workspaces.push(workspace);
+
+    fs.writeFileSync(filePath, "const value = 1;\n", "utf8");
+    mockIsFileTypeSupported.mockReturnValue(true);
+    mockGetFixerForFile.mockReturnValue(UppercaseFixer);
+
+    const report = await analyzeTarget(filePath, {
+      write: false,
+      ai: true,
+      aiModel: "qwen2.5-coder:7b",
+      ollamaUrl: "http://127.0.0.1:11434",
+      timeout: 45000
+    });
+
+    expect(report.filesProcessed).toBe(1);
+    expect(report.fileResults[0].error).toBeNull();
+    expect(report.fileResults[0].modified).toBe(true);
   });
 });

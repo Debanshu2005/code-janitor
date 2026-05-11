@@ -6,15 +6,35 @@ const { analyzeTarget } = require("./core/janitor");
 
 function parseArgs(argv) {
   const options = {
+    ai: false,
     check: false,
     help: false,
     json: false,
+    model: "",
+    nvidiaApiKey: "",
+    ollamaUrl: "",
+    provider: "ollama",
+    timeout: null,
     version: false,
     write: true
   };
   const positionals = [];
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    const readValue = (flagName) => {
+      const nextIndex = index + 1;
+      const value = argv[nextIndex];
+
+      if (!value || value.startsWith("-")) {
+        throw new Error(`Option ${flagName} requires a value.`);
+      }
+
+      index = nextIndex;
+      return value;
+    };
+
     if (arg === "--help" || arg === "-h") {
       options.help = true;
       continue;
@@ -39,6 +59,50 @@ function parseArgs(argv) {
 
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+
+    if (arg === "--ai") {
+      options.ai = true;
+      continue;
+    }
+
+    if (arg === "--model") {
+      options.model = readValue("--model");
+      options.ai = true;
+      continue;
+    }
+
+    if (arg === "--provider") {
+      const provider = readValue("--provider").trim().toLowerCase();
+      if (provider !== "ollama" && provider !== "nvidia") {
+        throw new Error("Option --provider must be either ollama or nvidia.");
+      }
+      options.provider = provider;
+      options.ai = true;
+      continue;
+    }
+
+    if (arg === "--ollama-url") {
+      options.ollamaUrl = readValue("--ollama-url");
+      options.ai = true;
+      continue;
+    }
+
+    if (arg === "--nvidia-api-key") {
+      options.nvidiaApiKey = readValue("--nvidia-api-key");
+      options.provider = "nvidia";
+      options.ai = true;
+      continue;
+    }
+
+    if (arg === "--timeout") {
+      const timeoutValue = Number(readValue("--timeout"));
+      if (!Number.isFinite(timeoutValue) || timeoutValue <= 0) {
+        throw new Error("Option --timeout requires a positive number.");
+      }
+      options.timeout = timeoutValue;
+      options.ai = true;
       continue;
     }
 
@@ -73,6 +137,12 @@ Options:
   --check           Report files that would change without writing them
   --write           Apply fixes to disk (default)
   --json            Print the final report as JSON
+  --ai              Allow AI-assisted fixes when a fixer supports them
+  --provider NAME   AI provider: ollama or nvidia
+  --model NAME      Model to use for the selected provider
+  --ollama-url URL  Ollama base URL (default: http://localhost:11434)
+  --nvidia-api-key  NVIDIA API key (or set NVIDIA_API_KEY / CODE_JANITOR_NVIDIA_API_KEY)
+  --timeout MS      AI request timeout in milliseconds
 
 Description:
   Analyze a supported file or directory and apply safe formatting and syntax fixes.
@@ -83,6 +153,8 @@ Examples:
   code-janitor src
   code-janitor src/app.js --check
   code-janitor . --json
+  code-janitor src/broken.py --ai --model qwen2.5-coder:1.5b
+  code-janitor src/broken.js --ai --provider nvidia --model meta/llama-3.1-8b-instruct
 `.trim();
 }
 
@@ -152,6 +224,12 @@ async function runCli(argv, io = console) {
 
   try {
     const report = await analyzeTarget(path.resolve(options.targetPath), {
+      ai: options.ai,
+      aiModel: options.model,
+      nvidiaApiKey: options.nvidiaApiKey,
+      ollamaUrl: options.ollamaUrl,
+      provider: options.provider,
+      timeout: options.timeout,
       write: options.write
     });
 

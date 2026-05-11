@@ -28,6 +28,48 @@ describe("cli", () => {
     });
   });
 
+  test("parses AI model options", () => {
+    expect(
+      parseArgs([
+        "src/broken.py",
+        "--ai",
+        "--model",
+        "qwen2.5-coder:7b",
+        "--ollama-url",
+        "http://127.0.0.1:11434",
+        "--timeout",
+        "45000"
+      ])
+    ).toMatchObject({
+      targetPath: "src/broken.py",
+      ai: true,
+      model: "qwen2.5-coder:7b",
+      ollamaUrl: "http://127.0.0.1:11434",
+      timeout: 45000
+    });
+  });
+
+  test("parses NVIDIA CLI options", () => {
+    expect(
+      parseArgs([
+        "src/broken.js",
+        "--ai",
+        "--provider",
+        "nvidia",
+        "--model",
+        "meta/llama-3.1-8b-instruct",
+        "--nvidia-api-key",
+        "secret-token"
+      ])
+    ).toMatchObject({
+      targetPath: "src/broken.js",
+      ai: true,
+      provider: "nvidia",
+      model: "meta/llama-3.1-8b-instruct",
+      nvidiaApiKey: "secret-token"
+    });
+  });
+
   test("returns check failure when files would change", async () => {
     const io = createIo();
     mockAnalyzeTarget.mockResolvedValue({
@@ -48,6 +90,12 @@ describe("cli", () => {
 
     expect(exitCode).toBe(1);
     expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+      ai: false,
+      aiModel: "",
+      nvidiaApiKey: "",
+      ollamaUrl: "",
+      provider: "ollama",
+      timeout: null,
       write: false
     });
     expect(io.log).toHaveBeenCalledWith(expect.stringContaining("Files needing changes"));
@@ -73,6 +121,90 @@ describe("cli", () => {
 
     expect(exitCode).toBe(0);
     expect(io.log).toHaveBeenCalledWith(expect.stringContaining("\"filesWritten\": 1"));
+  });
+
+  test("passes AI CLI options through to janitor", async () => {
+    const io = createIo();
+    mockAnalyzeTarget.mockResolvedValue({
+      targetPath: "D:\\project",
+      mode: "write",
+      filesProcessed: 1,
+      filesFixed: 0,
+      filesWritten: 0,
+      totalFixes: 0,
+      fixedFiles: [],
+      writtenFiles: [],
+      skippedFiles: [],
+      errors: [],
+      fileResults: []
+    });
+
+    const exitCode = await runCli(
+      [
+        "D:\\project",
+        "--ai",
+        "--model",
+        "qwen2.5-coder:7b",
+        "--ollama-url",
+        "http://127.0.0.1:11434",
+        "--timeout",
+        "45000"
+      ],
+      io
+    );
+
+    expect(exitCode).toBe(0);
+    expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+      ai: true,
+      aiModel: "qwen2.5-coder:7b",
+      nvidiaApiKey: "",
+      ollamaUrl: "http://127.0.0.1:11434",
+      provider: "ollama",
+      timeout: 45000,
+      write: true
+    });
+  });
+
+  test("passes NVIDIA CLI options through to janitor", async () => {
+    const io = createIo();
+    mockAnalyzeTarget.mockResolvedValue({
+      targetPath: "D:\\project",
+      mode: "write",
+      filesProcessed: 1,
+      filesFixed: 0,
+      filesWritten: 0,
+      totalFixes: 0,
+      fixedFiles: [],
+      writtenFiles: [],
+      skippedFiles: [],
+      errors: [],
+      fileResults: []
+    });
+
+    const exitCode = await runCli(
+      [
+        "D:\\project",
+        "--ai",
+        "--provider",
+        "nvidia",
+        "--model",
+        "meta/llama-3.1-8b-instruct",
+        "--nvidia-api-key",
+        "secret-token"
+      ],
+      io
+    );
+
+    expect(exitCode).toBe(0);
+    expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+      ai: true,
+      aiModel: "meta/llama-3.1-8b-instruct",
+      nvidiaApiKey: "secret-token",
+      ollamaUrl: "",
+      provider: "nvidia",
+      timeout: null,
+      write: true
+    });
   });
 
   test("shows help for unknown flags", async () => {

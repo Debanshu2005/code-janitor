@@ -1,4 +1,5 @@
 const fs = require("fs").promises;
+const OllamaClient = require("./ai/ollama-client");
 
 const {
   FIXER_MAP,
@@ -6,6 +7,53 @@ const {
   isFileTypeSupported
 } = require("./fixers/index");
 const { findFiles } = require("../utils/file-finder");
+
+function buildAiRuntimeConfig(options = {}) {
+  const config = {};
+  const envNvidiaApiKey =
+    process.env.CODE_JANITOR_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY || "";
+
+  if (typeof options.ai === "boolean") {
+    config.enabled = options.ai;
+  }
+
+  if (typeof options.provider === "string" && options.provider.trim()) {
+    config.provider = options.provider.trim().toLowerCase();
+  }
+
+  if (typeof options.aiModel === "string" && options.aiModel.trim()) {
+    config.model = options.aiModel.trim();
+  }
+
+  if (typeof options.ollamaUrl === "string" && options.ollamaUrl.trim()) {
+    config.baseUrl = options.ollamaUrl.trim();
+  }
+
+  if (typeof options.nvidiaApiKey === "string" && options.nvidiaApiKey.trim()) {
+    config.nvidiaApiKey = options.nvidiaApiKey.trim();
+  } else if (envNvidiaApiKey) {
+    config.nvidiaApiKey = envNvidiaApiKey.trim();
+  }
+
+  if (Number.isFinite(options.timeout) && options.timeout > 0) {
+    config.timeout = options.timeout;
+  }
+
+  return Object.keys(config).length > 0 ? config : null;
+}
+
+function configureAiRuntime(options = {}) {
+  const runtimeConfig = buildAiRuntimeConfig(options);
+
+  if (!runtimeConfig) {
+    return () => {};
+  }
+
+  OllamaClient.configureRuntime(runtimeConfig);
+  return () => {
+    OllamaClient.clearRuntimeConfig();
+  };
+}
 
 function resolveAppliedFixCount(result, fixer, modified) {
   if (!modified) {
@@ -42,30 +90,35 @@ async function analyzeFile(filePath, options = {}) {
   }
 
   try {
+    const restoreAiRuntime = configureAiRuntime(options);
     const code = await fs.readFile(filePath, "utf-8");
-    const fixer = new FixerClass(code, filePath);
-    const result = await fixer.analyze();
-    const fixedCode =
-      result && typeof result.fixedCode === "string"
-        ? result.fixedCode
-        : result && typeof result.formatted === "string"
-          ? result.formatted
-          : fixer.applyFixes();
-    const modified = code !== fixedCode;
-    const fixCount = resolveAppliedFixCount(result, fixer, modified);
+    try {
+      const fixer = new FixerClass(code, filePath, options);
+      const result = await fixer.analyze();
+      const fixedCode =
+        result && typeof result.fixedCode === "string"
+          ? result.fixedCode
+          : result && typeof result.formatted === "string"
+            ? result.formatted
+            : fixer.applyFixes();
+      const modified = code !== fixedCode;
+      const fixCount = resolveAppliedFixCount(result, fixer, modified);
 
-    if (modified && write) {
-      await fs.writeFile(filePath, fixedCode);
+      if (modified && write) {
+        await fs.writeFile(filePath, fixedCode);
+      }
+
+      return {
+        filePath,
+        supported: true,
+        modified,
+        written: modified && write,
+        fixCount,
+        error: null
+      };
+    } finally {
+      restoreAiRuntime();
     }
-
-    return {
-      filePath,
-      supported: true,
-      modified,
-      written: modified && write,
-      fixCount,
-      error: null
-    };
   } catch (error) {
     console.error(`Error processing ${filePath}:`, error.message);
     return {

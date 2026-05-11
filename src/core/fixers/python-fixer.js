@@ -414,6 +414,10 @@ class PythonFixer extends BaseFixer {
   }
 
   async _fixWithAI(code) {
+    if (!this.options.ai) {
+      return null;
+    }
+
     try {
       const client = this._getOllamaClient();
       const isAvailable = await client.isAvailable();

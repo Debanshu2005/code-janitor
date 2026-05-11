@@ -25,6 +25,20 @@ try {
 }
 
 class JavaScriptFixer extends BaseFixer {
+  constructor(code, filePath, options = {}) {
+    super(code, filePath);
+    this.options = options;
+    this.ollamaClient = null;
+  }
+
+  _getOllamaClient() {
+    if (!this.ollamaClient) {
+      const OllamaClient = require("../ai/ollama-client");
+      this.ollamaClient = new OllamaClient();
+    }
+    return this.ollamaClient;
+  }
+
   async analyze() {
     console.log("Analyzing JavaScript file:", this.filePath);
 
@@ -47,6 +61,12 @@ class JavaScriptFixer extends BaseFixer {
       } else {
         candidateCode = await this._repairInvalidCode(originalCode);
       }
+
+      candidateCode = await this._maybeImproveWithAI(
+        originalCode,
+        candidateCode,
+        originalIsValid
+      );
 
       if (
         candidateCode &&
@@ -76,6 +96,40 @@ class JavaScriptFixer extends BaseFixer {
         message: error.message
       };
     }
+  }
+
+  async _maybeImproveWithAI(originalCode, candidateCode, originalIsValid) {
+    if (!this.options.ai) {
+      return candidateCode;
+    }
+
+    try {
+      const client = this._getOllamaClient();
+      const force =
+        !originalIsValid ||
+        !this._isParsable(candidateCode);
+      const aiResult = await client.validateAndFix(
+        originalCode,
+        candidateCode,
+        "javascript",
+        { force }
+      );
+
+      if (
+        aiResult &&
+        aiResult.shouldUseAI &&
+        aiResult.fixedCode &&
+        this._isParsable(aiResult.fixedCode)
+      ) {
+        return aiResult.fixedCode;
+      }
+    } catch (error) {
+      console.warn(
+        `JavaScript AI enhancement failed for ${this.filePath || "buffer"}: ${error.message}`
+      );
+    }
+
+    return candidateCode;
   }
 
   _getParserPlugins() {
