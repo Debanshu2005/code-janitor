@@ -42,6 +42,9 @@
     "Linters",
     "Other"
   ],
+  "bin": {
+    "code-janitor": "./bin/cli.js"
+  },
   "main": "./src/extension.js",
   "activationEvents": [
     "onStartupFinished",

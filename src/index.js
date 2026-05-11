@@ -1,8 +1,15 @@
 // Main library entry point
-const { analyzeAndFixFile, analyzeAndFixDirectory } = require("./core/janitor");
+const {
+  analyzeFile,
+  analyzeTarget,
+  analyzeAndFixFile,
+  analyzeAndFixDirectory
+} = require("./core/janitor");
 
 // Export the public API
 module.exports = {
+  analyzeFile,
+  analyzeTarget,
   analyzeAndFixFile,
   analyzeAndFixDirectory,
   

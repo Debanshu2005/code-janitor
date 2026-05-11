@@ -11,6 +11,39 @@ Website: https://code-janitor-web.vercel.app/
 
 ---
 
+## CLI Mode
+
+Code Janitor also ships with a local CLI for batch cleanup outside the extension UI.
+
+### Local Usage
+
+```bash
+node src/cli.js
+node src/cli.js src --check
+```
+
+### Install As a Command
+
+```bash
+npm install
+npm link
+
+code-janitor . --check
+code-janitor src/app.js
+```
+
+### CLI Options
+
+- `--check` report files that would change without writing them
+- `--write` apply fixes to disk (default)
+- `--json` print the final report as JSON
+- `--help` show usage information
+- `--version` print the CLI version
+
+Supported targets: one file or one directory. Supported extensions currently include JavaScript/TypeScript, Python, C/C++/Arduino, Java, and HTML.
+
+---
+
 ## 🚀 VS Code Extension
 
 ### Key Features
