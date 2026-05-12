@@ -18,6 +18,12 @@ const REPETITION_WINDOW_HEAVY = 300  // Reduced from 400
 const SCAN_STALE_MS = 45_000  // Increased from 30000 to reduce rescans
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_COMMAND_OUTPUT_CHARS = 12_000
+const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+])
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -73,6 +79,7 @@ const NVIDIA_FALLBACK_MODELS = [
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
   openrouter: [
+    "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free"
@@ -866,7 +873,185 @@ class AIAgent {
     return profile
   }
 
-  _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
+  _sanitizeImageAttachments(images) {
+    if (!Array.isArray(images)) return []
+
+    return images
+      .slice(0, 3)
+      .map((entry, index) => {
+        const mimeType = String(entry?.mimeType || entry?.mime || "")
+          .trim()
+          .toLowerCase()
+        const dataUrl = typeof entry?.dataUrl === "string" ? entry.dataUrl.trim() : ""
+        const name = String(entry?.name || `image-${index + 1}`).trim()
+        const match = /^data:([^;]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl)
+
+        if (!SUPPORTED_CHAT_IMAGE_MIME_TYPES.has(mimeType) || !match) {
+          return null
+        }
+
+        const matchedMimeType = String(match[1] || "").trim().toLowerCase()
+        if (matchedMimeType !== mimeType) {
+          return null
+        }
+
+        return {
+          name,
+          mimeType,
+          dataUrl,
+          base64Data: String(match[2] || "").replace(/\s+/g, "")
+        }
+      })
+      .filter(Boolean)
+  }
+
+  _buildImageAttachmentHistoryNote(images) {
+    if (!Array.isArray(images) || images.length === 0) return ""
+    const names = images
+      .map((image) => image?.name)
+      .filter(Boolean)
+      .slice(0, 3)
+    return names.length > 0
+      ? `[Attached image${images.length === 1 ? "" : "s"}: ${names.join(", ")}]`
+      : `[Attached ${images.length} image${images.length === 1 ? "" : "s"}]`
+  }
+
+  _buildOpenAiCompatibleUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image_url",
+        image_url: {
+          url: image.dataUrl
+        }
+      }))
+    ]
+  }
+
+  _buildAnthropicUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: image.mimeType,
+          data: image.base64Data
+        }
+      }))
+    ]
+  }
+
+  _buildOllamaUserMessage(userContent, images = []) {
+    const message = {
+      role: "user",
+      content: userContent || "Please analyze the attached image(s)."
+    }
+
+    if (Array.isArray(images) && images.length > 0) {
+      message.images = images.map((image) => image.base64Data)
+    }
+
+    return message
+  }
+
+  _extractTextFromStructuredContent(content) {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return ""
+        if (typeof part.text === "string") return part.text
+        if (typeof part.content === "string") return part.content
+        return ""
+      })
+      .filter(Boolean)
+      .join("\n")
+  }
+
+  _extractOpenAiCompatibleImages(images) {
+    if (!Array.isArray(images)) return []
+    return images
+      .map((image) => {
+        const url =
+          image?.image_url?.url ||
+          image?.imageUrl?.url ||
+          image?.url ||
+          ""
+        return typeof url === "string" && /^data:image\//i.test(url) ? url : ""
+      })
+      .filter(Boolean)
+  }
+
+  _buildGeneratedImageSummary(images) {
+    const count = Array.isArray(images) ? images.length : 0
+    return count > 0
+      ? `Generated ${count} image${count === 1 ? "" : "s"}.`
+      : "Generated an image."
+  }
+
+  _isOpenRouterImageGenerationModel(model) {
+    const value = String(model || "").trim().toLowerCase()
+    return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value)
+  }
+
+  _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
+    if (!this._isOpenRouterImageGenerationModel(model)) {
+      return false
+    }
+
+    if (intent === "create") {
+      return true
+    }
+
+    const text = String(userContent || "").toLowerCase()
+    if (
+      /\b(generate|create|draw|make|render|illustrate|design|poster|banner|logo|icon|image|picture|photo|artwork|scene|portrait)\b/.test(
+        text
+      )
+    ) {
+      return true
+    }
+
+    return (
+      Array.isArray(images) &&
+      images.length > 0 &&
+      /\b(edit|modify|transform|restyle|remove|replace|add|erase|upscale|variation|variant)\b/.test(
+        text
+      )
+    )
+  }
+
+  async _readResponseOutput(reqOpts, response, options = {}) {
+    if (typeof reqOpts?.parseResponseBody === "function") {
+      const parsed = await reqOpts.parseResponseBody(response, options)
+      return {
+        text: typeof parsed?.text === "string" ? parsed.text : "",
+        images: Array.isArray(parsed?.images) ? parsed.images : []
+      }
+    }
+
+    const parseChunk =
+      typeof options.parseChunk === "function" ? options.parseChunk : reqOpts.parseChunk
+    const text = await this._readResponseText(response, parseChunk, options)
+    return { text, images: [] }
+  }
+
+  _buildRequestOptions(config, prompt, mode = "fast", intent = "general", images = []) {
     const isUnlimited = mode === "deep" && intent === "create"
     const latencyProfile = this._getLatencyProfile(config, mode, intent)
     const maxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens
@@ -885,6 +1070,15 @@ class AIAgent {
             .replace(/\nAssistant:$/, "")
             .trim()
         : prompt
+    const userMessageContent = this._buildOpenAiCompatibleUserContent(
+      userContent,
+      images
+    )
+    const anthropicUserContent = this._buildAnthropicUserContent(
+      userContent,
+      images
+    )
+    const ollamaUserMessage = this._buildOllamaUserMessage(userContent, images)
 
     if (config.provider === "anthropic") {
       return {
@@ -899,7 +1093,7 @@ class AIAgent {
           max_tokens: maxTokens,
           stream: true,
           system: sysContent,
-          messages: [{ role: "user", content: userContent }]
+          messages: [{ role: "user", content: anthropicUserContent }]
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ")) return null
@@ -925,7 +1119,7 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: 0.2,
@@ -946,6 +1140,12 @@ class AIAgent {
       }
     }
     if (config.provider === "openrouter") {
+      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(
+        config.model,
+        userContent,
+        images,
+        intent
+      )
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
         headers: {
@@ -958,12 +1158,17 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
-          stream: true,
+          stream: !requestImageOutput,
           temperature: 0.2,
           max_tokens: maxTokens,
-          top_p: 0.9
+          top_p: 0.9,
+          ...(requestImageOutput
+            ? {
+                modalities: ["image", "text"]
+              }
+            : {})
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -974,7 +1179,29 @@ class AIAgent {
           } catch {
             return null
           }
-        }
+        },
+        parseResponseBody: requestImageOutput
+          ? async (response, options = {}) => {
+              const data = await response.json()
+              const message = data?.choices?.[0]?.message || {}
+              const generatedImages = this._extractOpenAiCompatibleImages(
+                message.images || []
+              )
+              const text =
+                this._extractTextFromStructuredContent(message.content) ||
+                this._buildGeneratedImageSummary(generatedImages)
+              if (
+                generatedImages.length > 0 &&
+                typeof options.streamCallback === "function"
+              ) {
+                options.streamCallback(text)
+              }
+              return {
+                text,
+                images: generatedImages
+              }
+            }
+          : null
       }
     }
     if (config.provider === "nvidia") {
@@ -1018,7 +1245,7 @@ class AIAgent {
           model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
@@ -1051,7 +1278,7 @@ class AIAgent {
         model: config.model,
         messages: [
           { role: "system", content: sysContent },
-          { role: "user", content: userContent }
+          ollamaUserMessage
         ],
         stream: true,
         options: {
@@ -1590,6 +1817,10 @@ class AIAgent {
   ) {
     // IMPORTANT: Always get fresh config to respect provider switches
     const config = this.getConfig()
+    const imageAttachments = this._sanitizeImageAttachments(options.images)
+    if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
+      userMessage = "Please analyze the attached image(s)."
+    }
     const mode =
       options.mode === "deep"
         ? "deep"
@@ -1637,7 +1868,12 @@ class AIAgent {
       }
     }
 
-    this._appendConversationEntry("user", userMessage)
+    this._appendConversationEntry(
+      "user",
+      [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
+        .filter(Boolean)
+        .join("\n\n")
+    )
     const isTabQuestion = this._isTabQuestion(userMessage)
 
     // Arduino IDE chat does not use Graphify context.
@@ -1851,7 +2087,8 @@ ${resolvedMessage}`
         runtimeConfig,
         prompt,
         mode,
-        reqIntent
+        reqIntent,
+        imageAttachments
       )
       reportStatus?.(
         `Request ready: provider=${runtimeConfig.provider}, model=${runtimeConfig.model}`
@@ -1899,15 +2136,14 @@ ${resolvedMessage}`
       console.log(`[CodeJanitor] Response OK - Status: ${response.status}, Content-Type: ${response.headers.get('content-type')}`);
 
       let fullResponse = ""
+      let responseImages = []
       let repetitionDetected = false
       let sawFirstToken = false
 
-      fullResponse = await this._readResponseText(
-        response,
-        (line) => {
+      const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        parseChunk: (line) => {
           const token = reqOpts.parseChunk(line)
           if (token === null) {
-            // Log first few null responses to debug parsing
             if (fullResponse.length < 100) {
               console.log(`[CodeJanitor] Null token from line:`, line.substring(0, 100));
             }
@@ -1929,12 +2165,12 @@ ${resolvedMessage}`
           fullResponse = nextResponse
           return token
         },
-        {
-          streamCallback,
-          abortSignal,
-          shouldStop: () => repetitionDetected
-        }
-      )
+        streamCallback,
+        abortSignal,
+        shouldStop: () => repetitionDetected
+      })
+      fullResponse = initialResponse.text || fullResponse
+      responseImages = initialResponse.images || []
 
       if (repetitionDetected && abortSignal?.aborted) {
         repetitionDetected = false
@@ -1965,7 +2201,11 @@ ${resolvedMessage}`
         finalIntent,
         userMessage
       )
-      let assistantText = cleanedFinalText || finalText
+      let assistantText =
+        cleanedFinalText ||
+        (responseImages.length > 0
+          ? this._buildGeneratedImageSummary(responseImages)
+          : finalText)
       let firstRetryText = ""
 
       const shouldAllowClarification = this._isClarificationResponse(
@@ -2014,11 +2254,11 @@ ${resolvedMessage}`
           )
         }
 
-        const retryText = await this._readResponseText(
-          retryResponse,
-          retryOpts.parseChunk,
-          { abortSignal }
-        )
+        const retryText = (
+          await this._readResponseOutput(retryOpts, retryResponse, {
+            abortSignal
+          })
+        ).text
 
         firstRetryText = retryText || finalText
         parsedResponse = this._parseResponse(firstRetryText)
@@ -2067,11 +2307,11 @@ ${resolvedMessage}`
           )
         }
 
-        const fileOnlyRetryText = await this._readResponseText(
-          fileOnlyRetryResponse,
-          fileOnlyRetryOpts.parseChunk,
-          { abortSignal }
-        )
+        const fileOnlyRetryText = (
+          await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
+            abortSignal
+          })
+        ).text
 
         assistantText = fileOnlyRetryText || assistantText
         parsedResponse = this._parseResponse(assistantText)
@@ -2108,11 +2348,26 @@ ${resolvedMessage}`
 
       this._appendConversationEntry(
         "assistant",
-        assistantText ||
-          (repetitionDetected
-            ? `${fullResponse}\n\n[stopped repetitive output]`
-            : fullResponse || this._getEmptyResponseFallback(mode))
+        [
+          assistantText ||
+            (repetitionDetected
+              ? `${fullResponse}\n\n[stopped repetitive output]`
+              : fullResponse || this._getEmptyResponseFallback(mode)),
+          responseImages.length > 0
+            ? this._buildGeneratedImageSummary(responseImages)
+            : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
       )
+
+      if (responseImages.length > 0) {
+        parsedResponse = {
+          ...parsedResponse,
+          text: parsedResponse.text || assistantText,
+          images: responseImages
+        }
+      }
 
       return parsedResponse
     } catch (error) {
@@ -2740,7 +2995,7 @@ ${resolvedMessage}`
       : ""
     
     const base =
-      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic" + thinkingInstruction
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Image understanding for attached screenshots, wiring diagrams, circuit photos, and schematics when the selected model supports vision\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic" + thinkingInstruction
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.

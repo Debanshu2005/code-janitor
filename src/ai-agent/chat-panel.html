@@ -1769,6 +1769,81 @@
         background: #991b1b;
       }
 
+      #image-btn {
+        padding: 9px 12px;
+        background: var(--panel-2);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        cursor: pointer;
+        font-size: 12px;
+        flex-shrink: 0;
+      }
+      #image-btn:hover {
+        background: var(--panel-3);
+        border-color: var(--accent);
+        color: var(--text);
+      }
+      #image-preview-strip {
+        display: none;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      #image-preview-strip.visible {
+        display: flex;
+      }
+      .image-chip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 220px;
+        padding: 6px 8px;
+        border-radius: 12px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+      }
+      .image-chip img {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+      }
+      .image-chip-name {
+        flex: 1;
+        min-width: 0;
+        font-size: 11px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .image-chip-remove {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0 2px;
+      }
+      .image-chip-remove:hover {
+        color: var(--text);
+      }
+      .chat-image-gallery {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .chat-image-gallery img {
+        width: 160px;
+        max-width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+      }
+
       #input-hint {
         font-size: 10px;
         color: var(--muted);
@@ -2581,6 +2656,10 @@
           Mic
           <span id="mic-permission-badge" style="display: none;">Lock</span>
         </button>
+        <button id="image-btn" title="Attach images for vision-capable models">
+          Image
+        </button>
+        <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none;" />
         <textarea
           id="input"
           rows="1"
@@ -2589,9 +2668,10 @@
         <button class="send-btn" id="send-btn">Send</button>
         <button id="stop-btn">Stop</button>
       </div>
+      <div id="image-preview-strip"></div>
       <div id="input-hint">
         Enter to send &nbsp;?&nbsp; Shift+Enter for new line &nbsp;?&nbsp; /scan
-        /fast /heavy /deep /bugfix /undo /gstack /office-hours /eng-review /review /qa /ship &nbsp;?&nbsp; Alt+B scan &nbsp;?&nbsp; Ctrl+Z to revert last edit
+        /fast /heavy /deep /bugfix /undo /gstack /office-hours /eng-review /review /qa /ship &nbsp;?&nbsp; Paste or attach images for vision models &nbsp;?&nbsp; Alt+B scan &nbsp;?&nbsp; Ctrl+Z to revert last edit
       </div>
     </div>
 
@@ -2601,6 +2681,9 @@
       var input = document.getElementById("input");
       var sendBtn = document.getElementById("send-btn");
       var stopBtn = document.getElementById("stop-btn");
+      var imageBtn = document.getElementById("image-btn");
+      var imageInput = document.getElementById("image-input");
+      var imagePreviewStrip = document.getElementById("image-preview-strip");
       var headerLogo = document.getElementById("header-logo");
       var headerSub = document.getElementById("header-sub");
       var headerToolsToggle = document.getElementById("header-tools-toggle");
@@ -2651,6 +2734,7 @@
       var latestUndoId = null;
       var currentSessionId = "";
       var suppressSessionEvents = false;
+      var pendingImages = [];
 
       // Ctrl+Z / Cmd+Z anywhere in the chat panel triggers an undo of the
       // most recent applied edit. The textarea retains its native typing-undo
@@ -2688,6 +2772,80 @@
         var state = Object.assign({}, vscode.getState() || {}, patch || {});
         vscode.setState(state);
         return state;
+      }
+
+      function renderPendingImages() {
+        imagePreviewStrip.innerHTML = "";
+        imagePreviewStrip.classList.toggle("visible", pendingImages.length > 0);
+        pendingImages.forEach(function(image, index) {
+          var chip = document.createElement("div");
+          chip.className = "image-chip";
+          var thumb = document.createElement("img");
+          thumb.src = image.dataUrl;
+          thumb.alt = image.name || ("Image " + (index + 1));
+          var name = document.createElement("div");
+          name.className = "image-chip-name";
+          name.textContent = image.name || ("Image " + (index + 1));
+          var remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "image-chip-remove";
+          remove.textContent = "x";
+          remove.onclick = function() {
+            pendingImages.splice(index, 1);
+            renderPendingImages();
+          };
+          chip.appendChild(thumb);
+          chip.appendChild(name);
+          chip.appendChild(remove);
+          imagePreviewStrip.appendChild(chip);
+        });
+      }
+
+      function resetPendingImages() {
+        pendingImages = [];
+        if (imageInput) imageInput.value = "";
+        renderPendingImages();
+      }
+
+      function createImageGallery(images) {
+        var wrap = document.createElement("div");
+        wrap.className = "chat-image-gallery";
+        images.forEach(function(url, index) {
+          if (!/^data:image\//i.test(String(url || ""))) return;
+          var img = document.createElement("img");
+          img.src = url;
+          img.alt = "Chat image " + (index + 1);
+          wrap.appendChild(img);
+        });
+        return wrap;
+      }
+
+      function addImageFiles(fileList) {
+        var files = Array.prototype.slice.call(fileList || []);
+        files.forEach(function(file) {
+          if (!file || !/^image\/(png|jpeg|webp|gif)$/i.test(file.type || "")) {
+            addRow("Only PNG, JPEG, WEBP, and GIF images are supported.", "status");
+            return;
+          }
+          if (pendingImages.length >= 3) {
+            addRow("You can attach up to 3 images per message.", "status");
+            return;
+          }
+          if (file.size > 4 * 1024 * 1024) {
+            addRow(file.name + " is larger than 4 MB. Please choose a smaller image.", "status");
+            return;
+          }
+          var reader = new FileReader();
+          reader.onload = function(event) {
+            pendingImages.push({
+              name: file.name,
+              mimeType: file.type,
+              dataUrl: String(event.target && event.target.result || "")
+            });
+            renderPendingImages();
+          };
+          reader.readAsDataURL(file);
+        });
       }
 
       function showKeySaved() {
@@ -4304,6 +4462,7 @@
         sendBtn.style.display = busy ? "none" : "inline-block";
         stopBtn.style.display = busy ? "inline-block" : "none";
         input.disabled = busy;
+        imageBtn.disabled = busy;
       }
 
       function setMode(m) {
@@ -4367,12 +4526,22 @@
       function sendMessage(text) {
         try {
           text = (text || input.value).trim();
-          if (!text) return;
+          if (!text && pendingImages.length === 0) return;
           console.log("[Chat] Sending message:", text);
-          addRow(text, "user");
+          addRow(
+            text || ("[Sent " + pendingImages.length + " image" + (pendingImages.length === 1 ? "" : "s") + "]"),
+            "user"
+          );
+          if (pendingImages.length > 0) {
+            addRow(createImageGallery(pendingImages.map(function(image) {
+              return image.dataUrl;
+            })), "user");
+          }
+          var imagesToSend = pendingImages.slice();
           input.value = "";
           input.style.height = "38px";
           setInputState(true);
+          resetPendingImages();
 
           if (/^\/fast$/i.test(text)) {
             setMode("fast");
@@ -4396,7 +4565,7 @@
           }
 
           console.log("[Chat] Posting message to extension");
-          vscode.postMessage({ type: "chat", text: text });
+          vscode.postMessage({ type: "chat", text: text, images: imagesToSend });
           console.log("[Chat] Message posted successfully");
         } catch (error) {
           console.error("[Chat] Error in sendMessage:", error);
@@ -4421,6 +4590,14 @@
           em.textContent = " (stopped)";
           currentMessage.querySelector(".bubble").appendChild(em);
         }
+      };
+
+      imageBtn.onclick = function () {
+        imageInput.click();
+      };
+
+      imageInput.onchange = function () {
+        addImageFiles(imageInput.files);
       };
 
       btnFast.onclick = function () {
@@ -4589,6 +4766,22 @@
         input.style.height = Math.min(input.scrollHeight, 120) + "px";
       });
 
+      input.addEventListener("paste", function (e) {
+        var items = Array.prototype.slice.call((e.clipboardData && e.clipboardData.items) || []);
+        var imageFiles = items
+          .filter(function(item) {
+            return item && item.kind === "file" && /^image\//i.test(item.type || "");
+          })
+          .map(function(item) {
+            return item.getAsFile();
+          })
+          .filter(Boolean);
+        if (imageFiles.length > 0) {
+          e.preventDefault();
+          addImageFiles(imageFiles);
+        }
+      });
+
       input.addEventListener("keydown", function (e) {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
@@ -4710,6 +4903,8 @@
           hideProgress();
           setInputState(false);
           addRow("\u274c " + msg.text, "status");
+        } else if (msg.type === "assistantImages") {
+          addRow(createImageGallery(msg.images || []), "ai");
         } else if (msg.type === "applied") {
           addActivity(msg.text, "success");
           addRow(makeAppliedStatusContent(msg.text, msg.filePath, msg.undoId), "status");

@@ -291,6 +291,19 @@ class ChatPanel {
     return String(response?.text || "");
   }
 
+  _postAssistantImages(images = []) {
+    const safeImages = Array.isArray(images)
+      ? images.filter((url) => typeof url === "string" && /^data:image\//i.test(url))
+      : [];
+    if (safeImages.length === 0) {
+      return;
+    }
+    this._postMessage({
+      type: "assistantImages",
+      images: safeImages
+    });
+  }
+
   _buildInterruptedStreamMessage(error) {
     if (error?.name === "AbortError") {
       return "Code Janitor hid a partial response because generation stopped before completion. Retry with a faster model or increase the timeout in settings.";
@@ -4644,6 +4657,7 @@ ${trimmedText}`;
                 intentOverride: workflowIntentOverride || undefined,
                 forceStructuredEdits: workflowForceStructuredEdits,
                 runtimeConfig: config,
+                images: Array.isArray(message.images) ? message.images : [],
                 onStatus: (text) => {
                   if (this._shouldSuppressInternalStatus(text)) {
                     return;
@@ -4687,6 +4701,7 @@ ${trimmedText}`;
             rawText: typeof response.text === "string" ? response.text : ""
           }
         );
+        this._postAssistantImages(response.images);
 
         this._postMessage({ type: "done" });
         this._postSessionState();

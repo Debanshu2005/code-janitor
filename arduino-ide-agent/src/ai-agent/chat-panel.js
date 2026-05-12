@@ -7,6 +7,7 @@ const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
   openrouter: [
+    "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free"
@@ -58,6 +59,18 @@ class ChatPanel {
       ...this.agent.getSessionState(),
       ...extra
     });
+  }
+
+  _postAssistantImages(images = []) {
+    if (!this.panel?.webview) return
+    const safeImages = Array.isArray(images)
+      ? images.filter((url) => typeof url === "string" && /^data:image\//i.test(url))
+      : []
+    if (safeImages.length === 0) return
+    this.panel.webview.postMessage({
+      type: "assistantImages",
+      images: safeImages
+    })
   }
 
   async _setThinkingMode(enabled) {
@@ -2780,6 +2793,7 @@ ${trimmedText}`;
               this.abortController.signal,
               {
                 mode: this.chatMode,
+                images: Array.isArray(message.images) ? message.images : [],
                 onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
               }
             );
@@ -2820,6 +2834,7 @@ ${trimmedText}`;
           this.panel.webview.postMessage({ type: "stream", text: response.text });
         }
 
+        this._postAssistantImages(response.images)
         this.panel.webview.postMessage({ type: "done" });
         this._postSessionState();
 

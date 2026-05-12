@@ -34,6 +34,12 @@ const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const MAX_FETCHED_URLS = 2;
 const MAX_FETCHED_CONTENT_CHARS = 5_000;
+const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+]);
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -1101,7 +1107,185 @@ class AIAgent {
     return profile;
   }
 
-  _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
+  _sanitizeImageAttachments(images) {
+    if (!Array.isArray(images)) return [];
+
+    return images
+      .slice(0, 3)
+      .map((entry, index) => {
+        const mimeType = String(entry?.mimeType || entry?.mime || "")
+          .trim()
+          .toLowerCase();
+        const dataUrl = typeof entry?.dataUrl === "string" ? entry.dataUrl.trim() : "";
+        const name = String(entry?.name || `image-${index + 1}`).trim();
+        const match = /^data:([^;]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl);
+
+        if (!SUPPORTED_CHAT_IMAGE_MIME_TYPES.has(mimeType) || !match) {
+          return null;
+        }
+
+        const matchedMimeType = String(match[1] || "").trim().toLowerCase();
+        if (matchedMimeType !== mimeType) {
+          return null;
+        }
+
+        return {
+          name,
+          mimeType,
+          dataUrl,
+          base64Data: String(match[2] || "").replace(/\s+/g, "")
+        };
+      })
+      .filter(Boolean);
+  }
+
+  _buildImageAttachmentHistoryNote(images) {
+    if (!Array.isArray(images) || images.length === 0) return "";
+    const names = images
+      .map((image) => image?.name)
+      .filter(Boolean)
+      .slice(0, 3);
+    return names.length > 0
+      ? `[Attached image${images.length === 1 ? "" : "s"}: ${names.join(", ")}]`
+      : `[Attached ${images.length} image${images.length === 1 ? "" : "s"}]`;
+  }
+
+  _buildOpenAiCompatibleUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent;
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image_url",
+        image_url: {
+          url: image.dataUrl
+        }
+      }))
+    ];
+  }
+
+  _buildAnthropicUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent;
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: image.mimeType,
+          data: image.base64Data
+        }
+      }))
+    ];
+  }
+
+  _buildOllamaUserMessage(userContent, images = []) {
+    const message = {
+      role: "user",
+      content: userContent || "Please analyze the attached image(s)."
+    };
+
+    if (Array.isArray(images) && images.length > 0) {
+      message.images = images.map((image) => image.base64Data);
+    }
+
+    return message;
+  }
+
+  _extractTextFromStructuredContent(content) {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        if (typeof part.text === "string") return part.text;
+        if (typeof part.content === "string") return part.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  _extractOpenAiCompatibleImages(images) {
+    if (!Array.isArray(images)) return [];
+    return images
+      .map((image) => {
+        const url =
+          image?.image_url?.url ||
+          image?.imageUrl?.url ||
+          image?.url ||
+          "";
+        return typeof url === "string" && /^data:image\//i.test(url) ? url : "";
+      })
+      .filter(Boolean);
+  }
+
+  _buildGeneratedImageSummary(images) {
+    const count = Array.isArray(images) ? images.length : 0;
+    return count > 0
+      ? `Generated ${count} image${count === 1 ? "" : "s"}.`
+      : "Generated an image.";
+  }
+
+  _isOpenRouterImageGenerationModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value);
+  }
+
+  _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
+    if (!this._isOpenRouterImageGenerationModel(model)) {
+      return false;
+    }
+
+    if (intent === "create") {
+      return true;
+    }
+
+    const text = String(userContent || "").toLowerCase();
+    if (
+      /\b(generate|create|draw|make|render|illustrate|design|poster|banner|logo|icon|image|picture|photo|artwork|scene|portrait)\b/.test(
+        text
+      )
+    ) {
+      return true;
+    }
+
+    return (
+      Array.isArray(images) &&
+      images.length > 0 &&
+      /\b(edit|modify|transform|restyle|remove|replace|add|erase|upscale|variation|variant)\b/.test(
+        text
+      )
+    );
+  }
+
+  async _readResponseOutput(reqOpts, response, options = {}) {
+    if (typeof reqOpts?.parseResponseBody === "function") {
+      const parsed = await reqOpts.parseResponseBody(response, options);
+      return {
+        text: typeof parsed?.text === "string" ? parsed.text : "",
+        images: Array.isArray(parsed?.images) ? parsed.images : []
+      };
+    }
+
+    const parseChunk =
+      typeof options.parseChunk === "function" ? options.parseChunk : reqOpts.parseChunk;
+    const text = await this._readResponseText(response, parseChunk, options);
+    return { text, images: [] };
+  }
+
+  _buildRequestOptions(config, prompt, mode = "fast", intent = "general", images = []) {
     const latencyProfile = this._getLatencyProfile(config, mode, intent);
     const optimizedMaxTokens = latencyProfile.maxTokens;
     const isExecutionIntent = this._isExecutionLikeIntent(intent);
@@ -1135,6 +1319,15 @@ class AIAgent {
             .replace(/\nAssistant:$/, "")
             .trim()
         : prompt;
+    const userMessageContent = this._buildOpenAiCompatibleUserContent(
+      userContent,
+      images
+    );
+    const anthropicUserContent = this._buildAnthropicUserContent(
+      userContent,
+      images
+    );
+    const ollamaUserMessage = this._buildOllamaUserMessage(userContent, images);
 
     if (config.customProvider?.protocol === "openai") {
       return {
@@ -1147,7 +1340,7 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: requestTemperature,
@@ -1181,7 +1374,7 @@ class AIAgent {
           stream: true,
           temperature: requestTemperature,
           system: sysContent,
-          messages: [{ role: "user", content: userContent }]
+          messages: [{ role: "user", content: anthropicUserContent }]
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ")) return null;
@@ -1209,7 +1402,7 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: requestTemperature,
@@ -1230,6 +1423,12 @@ class AIAgent {
       };
     }
     if (config.provider === "openrouter") {
+      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(
+        config.model,
+        userContent,
+        images,
+        intent
+      );
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
         headers: {
@@ -1242,12 +1441,17 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
-          stream: true,
+          stream: !requestImageOutput,
           temperature: requestTemperature,
           max_tokens: optimizedMaxTokens,
-          top_p: requestTopP
+          top_p: requestTopP,
+          ...(requestImageOutput
+            ? {
+                modalities: ["image", "text"]
+              }
+            : {})
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -1258,7 +1462,29 @@ class AIAgent {
           } catch {
             return null;
           }
-        }
+        },
+        parseResponseBody: requestImageOutput
+          ? async (response, options = {}) => {
+              const data = await response.json();
+              const message = data?.choices?.[0]?.message || {};
+              const generatedImages = this._extractOpenAiCompatibleImages(
+                message.images || []
+              );
+              const text =
+                this._extractTextFromStructuredContent(message.content) ||
+                this._buildGeneratedImageSummary(generatedImages);
+              if (
+                generatedImages.length > 0 &&
+                typeof options.streamCallback === "function"
+              ) {
+                options.streamCallback(text);
+              }
+              return {
+                text,
+                images: generatedImages
+              };
+            }
+          : null
       };
     }
     if (config.provider === "nvidia") {
@@ -1294,7 +1520,7 @@ class AIAgent {
           model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: isMinimax
@@ -1334,7 +1560,7 @@ class AIAgent {
         model: config.model,
         messages: [
           { role: "system", content: sysContent },
-          { role: "user", content: userContent }
+          ollamaUserMessage
         ],
         stream: true,
         options: {
@@ -1908,9 +2134,18 @@ class AIAgent {
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." };
     }
+    const imageAttachments = this._sanitizeImageAttachments(options.images);
+    if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
+      userMessage = "Please analyze the attached image(s).";
+    }
 
     if (!skipHistory) {
-      this._appendConversationEntry("user", userMessage);
+      this._appendConversationEntry(
+        "user",
+        [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
+          .filter(Boolean)
+          .join("\n\n")
+      );
     }
     const isTabQuestion = this._isTabQuestion(userMessage);
 
@@ -2200,7 +2435,13 @@ ${resolvedMessage}`;
         forceStructuredEdits ||
         this._shouldForceStructuredEdit(reqIntent, userMessage)
       );
-      const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent);
+      const reqOpts = this._buildRequestOptions(
+        config,
+        prompt,
+        mode,
+        reqIntent,
+        imageAttachments
+      );
       const extendedTimeout =
         reqIntent === "create" ||
         reqIntent === "edit" ||
@@ -2238,10 +2479,10 @@ ${resolvedMessage}`;
       }
 
       let fullResponse = "";
+      let responseImages = [];
       let repetitionDetected = false;
-      fullResponse = await this._readResponseText(
-        response,
-        (line) => {
+      const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        parseChunk: (line) => {
           const token = reqOpts.parseChunk(line);
           if (token === null) return null;
           const nextResponse = fullResponse + token;
@@ -2255,12 +2496,12 @@ ${resolvedMessage}`;
           fullResponse = nextResponse;
           return token;
         },
-        {
-          streamCallback,
-          abortSignal,
-          shouldStop: () => repetitionDetected
-        }
-      );
+        streamCallback,
+        abortSignal,
+        shouldStop: () => repetitionDetected
+      });
+      fullResponse = initialResponse.text || fullResponse;
+      responseImages = initialResponse.images || [];
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
@@ -2274,7 +2515,11 @@ ${resolvedMessage}`;
       const requiresFileActions =
         forceStructuredEdits ||
         this._shouldForceStructuredEdit(finalIntent, userMessage);
-      let assistantText = finalText;
+      let assistantText =
+        cleanedText ||
+        (responseImages.length > 0
+          ? this._buildGeneratedImageSummary(responseImages)
+          : finalText);
       let firstRetryText = "";
       const shouldAllowClarification = this._isClarificationResponse(
         assistantText,
@@ -2327,11 +2572,11 @@ ${resolvedMessage}`;
           );
         }
 
-        const retryText = await this._readResponseText(
-          retryResponse,
-          retryOpts.parseChunk,
-          { abortSignal }
-        );
+        const retryText = (
+          await this._readResponseOutput(retryOpts, retryResponse, {
+            abortSignal
+          })
+        ).text;
 
         firstRetryText = retryText || finalText;
         parsedResponse = this._parseResponse(firstRetryText);
@@ -2383,11 +2628,11 @@ ${resolvedMessage}`;
           );
         }
 
-        const fileOnlyRetryText = await this._readResponseText(
-          fileOnlyRetryResponse,
-          fileOnlyRetryOpts.parseChunk,
-          { abortSignal }
-        );
+        const fileOnlyRetryText = (
+          await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
+            abortSignal
+          })
+        ).text;
 
         assistantText = fileOnlyRetryText || assistantText;
         parsedResponse = this._parseResponse(assistantText);
@@ -2433,13 +2678,28 @@ ${resolvedMessage}`;
         this._appendConversationEntry(
           "assistant",
           this._buildHistorySafeAssistantEntry(
-            assistantText ||
-              (repetitionDetected
-                ? `${fullResponse}\n\n[stopped repetitive output]`
-                : fullResponse || this._getEmptyResponseFallback(mode)),
+            [
+              assistantText ||
+                (repetitionDetected
+                  ? `${fullResponse}\n\n[stopped repetitive output]`
+                  : fullResponse || this._getEmptyResponseFallback(mode)),
+              responseImages.length > 0
+                ? this._buildGeneratedImageSummary(responseImages)
+                : ""
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
             { repetitionDetected }
           )
         );
+      }
+
+      if (responseImages.length > 0) {
+        parsedResponse = {
+          ...parsedResponse,
+          text: parsedResponse.text || assistantText,
+          images: responseImages
+        };
       }
 
       return parsedResponse;
@@ -3432,7 +3692,7 @@ ${resolvedMessage}`;
       : "";
     const base =
       silentPreamble +
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
       thinkingInstruction;
     const fastRules = [
       "Operational rules (fast):",
