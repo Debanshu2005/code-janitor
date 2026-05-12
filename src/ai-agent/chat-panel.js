@@ -4062,6 +4062,36 @@ ${trimmedText}`;
       : "qwen2.5-coder:1.5b";
   }
 
+  _getImageInputCapability(provider, model) {
+    const customProvider = this._getCustomProviderById(provider);
+    const enabled = this.agent._modelSupportsImageInput(
+      {
+        provider,
+        model,
+        customProvider
+      },
+      model
+    );
+
+    return {
+      imageInputEnabled: enabled,
+      imageInputReason: enabled
+        ? "Attach images for vision-capable models."
+        : "Selected model does not appear to support image input. Switch to a vision-capable model or remove attachments."
+    };
+  }
+
+  _postImageInputCapability(provider, model) {
+    if (!this.panel) return;
+    const capability = this._getImageInputCapability(provider, model);
+
+    this._postMessage({
+      type: "setImageInputAvailability",
+      enabled: capability.imageInputEnabled,
+      reason: capability.imageInputReason
+    });
+  }
+
   _getProviderModelStateKey(provider) {
     return `codeJanitor.ai.lastModel.${provider || "unknown"}`;
   }
@@ -5776,14 +5806,19 @@ ${trimmedText}`;
           // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(selectedProvider);
           const defaultModels = this._getModelsForInitialProviderState(selectedProvider);
+          const selectedModel =
+            this._getSavedProviderModel(selectedProvider) ||
+            customProvider?.defaultModel ||
+            savedConfig.model;
           
           this._postMessage({
             type: "setCurrentProvider",
             provider: selectedProvider,
-            model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+            model: selectedModel,
             providers: this._buildProviderCatalog(),
             keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Default, will update
-            models: defaultModels
+            models: defaultModels,
+            ...this._getImageInputCapability(selectedProvider, selectedModel)
           });
           this._postMessage({
             type: "thinkingState",
@@ -5799,10 +5834,11 @@ ${trimmedText}`;
               this._postMessage({
                 type: "setCurrentProvider",
                 provider: selectedProvider,
-                model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+                model: selectedModel,
                 providers: this._buildProviderCatalog(),
                 keyPresence,
-                models: defaultModels
+                models: defaultModels,
+                ...this._getImageInputCapability(selectedProvider, selectedModel)
               });
             }
           }).catch(err => {
@@ -5876,6 +5912,7 @@ ${trimmedText}`;
             text: `Model switched to ${nextModel}.`
           });
         }
+        this._postImageInputCapability(provider, nextModel);
       } else if (message.type === "setProvider") {
         try {
           console.log("[ChatPanel] setProvider message received:", message.provider);
@@ -5906,7 +5943,8 @@ ${trimmedText}`;
               model: nextModel,
               providers: this._buildProviderCatalog(),
               keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Will update in background
-              models: defaultModels
+              models: defaultModels,
+              ...this._getImageInputCapability(message.provider, nextModel)
             });
             this._postMessage({
               type: "status",
@@ -5925,7 +5963,8 @@ ${trimmedText}`;
                 model: nextModel,
                 providers: this._buildProviderCatalog(),
                 keyPresence,
-                models: defaultModels
+                models: defaultModels,
+                ...this._getImageInputCapability(message.provider, nextModel)
               });
             }
           }).catch(err => {
@@ -5951,7 +5990,8 @@ ${trimmedText}`;
               model: provider.defaultModel,
               providers: this._buildProviderCatalog(),
               keyPresence,
-              models: provider.models
+              models: provider.models,
+              ...this._getImageInputCapability(provider.id, provider.defaultModel)
             });
             this._postMessage({
               type: "status",

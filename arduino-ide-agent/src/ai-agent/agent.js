@@ -819,6 +819,11 @@ class AIAgent {
       }
     }
 
+    if (/not a multimodal model|does not support image|image input is not supported/i.test(message)) {
+      const modelLabel = config?.model ? ` (${config.model})` : ""
+      return `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+    }
+
     return `AI error: ${message}`
   }
 
@@ -1007,6 +1012,36 @@ class AIAgent {
   _isOpenRouterImageGenerationModel(model) {
     const value = String(model || "").trim().toLowerCase()
     return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value)
+  }
+
+  _looksLikeVisionCapableModel(model) {
+    const value = String(model || "").trim().toLowerCase()
+    if (!value) return false
+
+    return (
+      /\b(vision|visual|multimodal|image|images|img|photo|picture)\b/.test(value) ||
+      /\b(vl|llava|bakllava|minicpm-v|pixtral)\b/.test(value) ||
+      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3)\b/.test(value)
+    )
+  }
+
+  _modelSupportsImageInput(config = {}, model = "") {
+    const provider = String(config?.provider || "").trim().toLowerCase()
+    const selectedModel = String(model || config?.model || "").trim()
+    if (!selectedModel) return false
+
+    if (provider === "anthropic") {
+      return true
+    }
+
+    if (provider === "openrouter") {
+      return (
+        this._isOpenRouterImageGenerationModel(selectedModel) ||
+        this._looksLikeVisionCapableModel(selectedModel)
+      )
+    }
+
+    return this._looksLikeVisionCapableModel(selectedModel)
   }
 
   _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
@@ -1842,6 +1877,15 @@ class AIAgent {
     )
     if (!runtimeConfig.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
+    }
+    if (
+      imageAttachments.length > 0 &&
+      !this._modelSupportsImageInput(runtimeConfig, runtimeConfig.model)
+    ) {
+      const modelLabel = runtimeConfig.model ? ` (${runtimeConfig.model})` : ""
+      return {
+        error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+      }
     }
     if (runtimeConfig.provider === "groq" && !runtimeConfig.groqApiKey) {
       return {

@@ -81,6 +81,18 @@ describe("AIAgent structured edit parsing", () => {
     expect(message).toContain("http://localhost:11434");
   });
 
+  test("normalizes multimodal mismatch errors into an image-support hint", () => {
+    const agent = new AIAgent();
+
+    const message = agent._normalizeAiError(
+      { message: "/config/models/mystidia is not a multimodal model None" },
+      { provider: "custom:mystidia", model: "mystidia" }
+    );
+
+    expect(message).toContain("does not support image input");
+    expect(message).toContain("mystidia");
+  });
+
   test("parses PATCH blocks with CRLF line endings", () => {
     const agent = new AIAgent();
     const response =
@@ -688,6 +700,40 @@ describe("AIAgent structured edit parsing", () => {
     });
 
     expect(agent._appendConversationEntry).not.toHaveBeenCalled();
+  });
+
+  test("chat rejects image attachments for text-only models before requesting the provider", async () => {
+    const agent = new AIAgent();
+    agent.getConfig = jest.fn(() => ({
+      enabled: true,
+      provider: "custom:mystidia",
+      model: "mystidia",
+      timeout: 1000
+    }));
+    agent._prepareRuntimeConfig = jest.fn(async (config) => config);
+
+    const result = await agent.chat("what's in this screenshot?", "/workspace", null, null, {
+      runtimeConfig: {
+        enabled: true,
+        provider: "custom:mystidia",
+        model: "mystidia",
+        timeout: 1000
+      },
+      images: [
+        {
+          name: "ui.png",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,AAAA",
+          base64Data: "AAAA"
+        }
+      ]
+    });
+
+    expect(result).toEqual({
+      error:
+        "The selected model (mystidia) does not support image input. Remove attached images or switch to a vision-capable model."
+    });
+    expect(agent._prepareRuntimeConfig).toHaveBeenCalled();
   });
 
   test("forceStructuredEdits retries prose-only replies into executable edit actions", async () => {

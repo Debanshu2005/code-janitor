@@ -2735,6 +2735,9 @@
       var currentSessionId = "";
       var suppressSessionEvents = false;
       var pendingImages = [];
+      var inputBusy = false;
+      var imageInputEnabled = true;
+      var imageInputReason = "Attach images for vision-capable models.";
 
       // Ctrl+Z / Cmd+Z anywhere in the chat panel triggers an undo of the
       // most recent applied edit. The textarea retains its native typing-undo
@@ -2762,6 +2765,13 @@
         btnUndoChat.title = canUndo
           ? "Undo the last model edit"
           : "No model edit is available to undo yet";
+      }
+
+      function updateImageInputState() {
+        imageBtn.disabled = inputBusy || !imageInputEnabled;
+        imageBtn.title = imageInputEnabled
+          ? "Attach images for vision-capable models"
+          : (imageInputReason || "Selected model does not support image attachments.");
       }
 
       function setDeleteButtonState(enabled) {
@@ -4459,10 +4469,11 @@
       }
 
       function setInputState(busy) {
+        inputBusy = !!busy;
         sendBtn.style.display = busy ? "none" : "inline-block";
         stopBtn.style.display = busy ? "inline-block" : "none";
         input.disabled = busy;
-        imageBtn.disabled = busy;
+        updateImageInputState();
       }
 
       function setMode(m) {
@@ -4527,6 +4538,13 @@
         try {
           text = (text || input.value).trim();
           if (!text && pendingImages.length === 0) return;
+          if (pendingImages.length > 0 && !imageInputEnabled) {
+            addRow(
+              imageInputReason || "Selected model does not support image attachments.",
+              "status"
+            );
+            return;
+          }
           console.log("[Chat] Sending message:", text);
           addRow(
             text || ("[Sent " + pendingImages.length + " image" + (pendingImages.length === 1 ? "" : "s") + "]"),
@@ -4952,6 +4970,11 @@
           if (msg.keyPresence) {
             currentKeyPresence = msg.keyPresence || {};
           }
+          if (typeof msg.imageInputEnabled === "boolean") {
+            imageInputEnabled = msg.imageInputEnabled;
+            imageInputReason = msg.imageInputReason || imageInputReason;
+            updateImageInputState();
+          }
           if (msg.provider) {
             providerSelect.value = msg.provider;
             syncProviderUi(msg.provider, msg.model, msg.models || null);
@@ -4970,6 +4993,10 @@
             if (m === current) opt.selected = true;
             sel.appendChild(opt);
           });
+        } else if (msg.type === "setImageInputAvailability") {
+          imageInputEnabled = msg.enabled !== false;
+          imageInputReason = msg.reason || imageInputReason;
+          updateImageInputState();
         } else if (msg.type === "thinkingState") {
           setThinkingState(!!msg.enabled);
         } else if (msg.type === "autoHealState") {

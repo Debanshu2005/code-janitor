@@ -184,6 +184,23 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel._getRequestMode()).toBe("fast");
   });
 
+  test("image input capability disables attachments for text-only models", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      _modelSupportsImageInput: jest.fn(() => false)
+    };
+    panel._getCustomProviderById = jest.fn(() => ({
+      id: "custom:mystidia",
+      name: "Mystidia"
+    }));
+
+    expect(panel._getImageInputCapability("custom:mystidia", "mystidia")).toEqual({
+      imageInputEnabled: false,
+      imageInputReason:
+        "Selected model does not appear to support image input. Switch to a vision-capable model or remove attachments."
+    });
+  });
+
   test("undo state exposes the most recent undo id", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._undoStack = [

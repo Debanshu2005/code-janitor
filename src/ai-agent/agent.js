@@ -1243,6 +1243,36 @@ class AIAgent {
     return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value);
   }
 
+  _looksLikeVisionCapableModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    if (!value) return false;
+
+    return (
+      /\b(vision|visual|multimodal|image|images|img|photo|picture)\b/.test(value) ||
+      /\b(vl|llava|bakllava|minicpm-v|pixtral)\b/.test(value) ||
+      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3)\b/.test(value)
+    );
+  }
+
+  _modelSupportsImageInput(config = {}, model = "") {
+    const provider = String(config?.provider || "").trim().toLowerCase();
+    const selectedModel = String(model || config?.model || "").trim();
+    if (!selectedModel) return false;
+
+    if (provider === "anthropic") {
+      return true;
+    }
+
+    if (provider === "openrouter") {
+      return (
+        this._isOpenRouterImageGenerationModel(selectedModel) ||
+        this._looksLikeVisionCapableModel(selectedModel)
+      );
+    }
+
+    return this._looksLikeVisionCapableModel(selectedModel);
+  }
+
   _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
     if (!this._isOpenRouterImageGenerationModel(model)) {
       return false;
@@ -1666,6 +1696,15 @@ class AIAgent {
 
     if (errorCode === "ETIMEDOUT" || normalizedMessage.includes("timed out")) {
       return `The ${providerName} request timed out. Try a faster model, reduce the request size, or increase the timeout in settings.`;
+    }
+
+    if (
+      normalizedMessage.includes("not a multimodal model") ||
+      normalizedMessage.includes("does not support image") ||
+      normalizedMessage.includes("image input is not supported")
+    ) {
+      const modelLabel = config.model ? ` (${config.model})` : "";
+      return `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`;
     }
 
     if (normalizedMessage === "fetch failed") {
@@ -2135,6 +2174,15 @@ class AIAgent {
       return { error: "AI is disabled in Code Janitor settings." };
     }
     const imageAttachments = this._sanitizeImageAttachments(options.images);
+    if (
+      imageAttachments.length > 0 &&
+      !this._modelSupportsImageInput(config, config.model)
+    ) {
+      const modelLabel = config.model ? ` (${config.model})` : "";
+      return {
+        error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+      };
+    }
     if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
       userMessage = "Please analyze the attached image(s).";
     }
