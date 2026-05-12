@@ -201,6 +201,22 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("image input capability stays enabled for unknown custom models", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      _modelSupportsImageInput: jest.fn(() => true)
+    };
+    panel._getCustomProviderById = jest.fn(() => ({
+      id: "custom:visionhub",
+      name: "VisionHub"
+    }));
+
+    expect(panel._getImageInputCapability("custom:visionhub", "nova-pro")).toEqual({
+      imageInputEnabled: true,
+      imageInputReason: "Attach images for vision-capable models."
+    });
+  });
+
   test("undo state exposes the most recent undo id", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._undoStack = [
@@ -1075,6 +1091,10 @@ describe("ChatPanel structured edit helpers", () => {
     });
     panel._registerEditForUndo = jest.fn(() => 42);
     panel._revealWorkspaceFile = jest.fn().mockResolvedValue();
+    panel._runFrontendVerificationForFile = jest.fn().mockResolvedValue({
+      success: true,
+      issues: []
+    });
     panel._getPostEditVerificationCommands = jest.fn(() => []);
     panel._postMessage = jest.fn();
 
@@ -1109,6 +1129,48 @@ describe("ChatPanel structured edit helpers", () => {
       expect.objectContaining({
         type: "applied",
         undoId: 42
+      })
+    );
+  });
+
+  test("post-edit verification reports frontend dependency issues", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-frontend-verify-"));
+    const relativePath = "pages/index.html";
+    const fullPath = path.join(workspaceRoot, relativePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(
+      fullPath,
+      '<!DOCTYPE html><html><head><link rel="stylesheet" href="./missing.css"></head><body></body></html>',
+      "utf8"
+    );
+
+    panel.agent = {
+      _runSyntaxCheck: jest.fn().mockResolvedValue({ success: true })
+    };
+    panel._getPostEditVerificationCommands = jest.fn(() => []);
+    panel._postMessage = jest.fn();
+
+    const result = await panel._runPostEditVerification(
+      workspaceRoot,
+      [relativePath],
+      null,
+      {}
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: relativePath,
+          type: "frontend"
+        })
+      ])
+    );
+    expect(panel._postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "status",
+        text: expect.stringContaining(`Frontend validation found issues in ${relativePath}`)
       })
     );
   });

@@ -707,7 +707,7 @@ describe("AIAgent structured edit parsing", () => {
     agent.getConfig = jest.fn(() => ({
       enabled: true,
       provider: "custom:mystidia",
-      model: "mystidia",
+      model: "mystidia-coder",
       timeout: 1000
     }));
     agent._prepareRuntimeConfig = jest.fn(async (config) => config);
@@ -716,7 +716,7 @@ describe("AIAgent structured edit parsing", () => {
       runtimeConfig: {
         enabled: true,
         provider: "custom:mystidia",
-        model: "mystidia",
+        model: "mystidia-coder",
         timeout: 1000
       },
       images: [
@@ -731,9 +731,49 @@ describe("AIAgent structured edit parsing", () => {
 
     expect(result).toEqual({
       error:
-        "The selected model (mystidia) does not support image input. Remove attached images or switch to a vision-capable model."
+        "The selected model (mystidia-coder) does not support image input. Remove attached images or switch to a vision-capable model."
     });
     expect(agent._prepareRuntimeConfig).toHaveBeenCalled();
+  });
+
+  test("treats unknown custom models as image-capable unless they look text-only", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._modelSupportsImageInput(
+        { provider: "custom:visionhub", model: "nova-pro" },
+        "nova-pro"
+      )
+    ).toBe(true);
+    expect(
+      agent._modelSupportsImageInput(
+        { provider: "custom:visionhub", model: "qwen2.5-coder:7b" },
+        "qwen2.5-coder:7b"
+      )
+    ).toBe(false);
+  });
+
+  test("treats NVIDIA mistral-nemotron as text-only for image gating", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._modelSupportsImageInput(
+        { provider: "nvidia", model: "mistralai/mistral-nemotron" },
+        "mistralai/mistral-nemotron"
+      )
+    ).toBe(false);
+  });
+
+  test("strips streamed think tags without losing visible NVIDIA output", () => {
+    const agent = new AIAgent();
+    const state = { insideThink: false };
+
+    expect(agent._stripThinkTaggedTextChunk("<think>plan", state)).toBe("");
+    expect(state.insideThink).toBe(true);
+    expect(
+      agent._stripThinkTaggedTextChunk("ning</think>Hello world", state)
+    ).toBe("Hello world");
+    expect(state.insideThink).toBe(false);
   });
 
   test("forceStructuredEdits retries prose-only replies into executable edit actions", async () => {

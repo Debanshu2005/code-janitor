@@ -1249,9 +1249,58 @@ class AIAgent {
 
     return (
       /\b(vision|visual|multimodal|image|images|img|photo|picture)\b/.test(value) ||
-      /\b(vl|llava|bakllava|minicpm-v|pixtral)\b/.test(value) ||
-      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3)\b/.test(value)
+      /\b(vl|llava|bakllava|minicpm-v|pixtral|internvl|qvq|molmo)\b/.test(value) ||
+      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3|qwen2-vl|qwen2\.5-vl|llama-3\.2-11b-vision|llama-3\.2-90b-vision)\b/.test(value)
     );
+  }
+
+  _looksLikeTextOnlyModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    if (!value) return false;
+
+    return (
+      /\b(coder|code|embed|embedding|rerank|instruct|instruct-turbo)\b/.test(value) ||
+      /\b(qwen2\.5-coder|qwen3-coder|deepseek-coder|codellama|starcoder|codegemma)\b/.test(value)
+    );
+  }
+
+  _stripThinkTaggedTextChunk(chunk, state = { insideThink: false }) {
+    let remaining = String(chunk || "");
+    if (!remaining) return "";
+
+    let visible = "";
+    while (remaining) {
+      const lowered = remaining.toLowerCase();
+
+      if (state.insideThink) {
+        const endIndex = lowered.indexOf("</think>");
+        if (endIndex === -1) {
+          return visible;
+        }
+        remaining = remaining.slice(endIndex + "</think>".length);
+        state.insideThink = false;
+        continue;
+      }
+
+      const startIndex = lowered.indexOf("<think>");
+      const strayEndIndex = lowered.indexOf("</think>");
+
+      if (strayEndIndex !== -1 && (startIndex === -1 || strayEndIndex < startIndex)) {
+        remaining = remaining.slice(strayEndIndex + "</think>".length);
+        continue;
+      }
+
+      if (startIndex === -1) {
+        visible += remaining;
+        return visible;
+      }
+
+      visible += remaining.slice(0, startIndex);
+      remaining = remaining.slice(startIndex + "<think>".length);
+      state.insideThink = true;
+    }
+
+    return visible;
   }
 
   _modelSupportsImageInput(config = {}, model = "") {
@@ -1263,6 +1312,10 @@ class AIAgent {
       return true;
     }
 
+    if (provider === "nvidia" || provider === "groq" || provider === "ollama") {
+      return this._looksLikeVisionCapableModel(selectedModel);
+    }
+
     if (provider === "openrouter") {
       return (
         this._isOpenRouterImageGenerationModel(selectedModel) ||
@@ -1270,7 +1323,18 @@ class AIAgent {
       );
     }
 
-    return this._looksLikeVisionCapableModel(selectedModel);
+    if (this._looksLikeVisionCapableModel(selectedModel)) {
+      return true;
+    }
+
+    // For custom and newer provider models, avoid blocking image input purely
+    // because the model name is unfamiliar. The provider can still reject the
+    // request and we normalize that server-side error into a clearer hint.
+    if (provider.startsWith("custom:")) {
+      return !this._looksLikeTextOnlyModel(selectedModel);
+    }
+
+    return !this._looksLikeTextOnlyModel(selectedModel);
   }
 
   _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
@@ -1522,6 +1586,7 @@ class AIAgent {
       const isMinimax = resolvedModel === "minimaxai/minimax-m2.7";
       const isLlama70b = resolvedModel === "meta/llama-3.1-70b-instruct";
       const isNemotron = resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
+      const thinkState = { insideThink: false };
       
       const minimaxOptimizations = isMinimax ? {
         top_p: 0.8,
@@ -1570,11 +1635,8 @@ class AIAgent {
           try {
             const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null;
             if (!token) return null;
-            // Filter out <think> tags and their content
-            if (token.includes("<think>") || token.includes("</think>")) {
-              return null;
-            }
-            return token;
+            const visibleToken = this._stripThinkTaggedTextChunk(token, thinkState);
+            return visibleToken || null;
           } catch {
             return null;
           }

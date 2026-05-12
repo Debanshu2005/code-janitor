@@ -13,6 +13,7 @@ const {
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
 const { buildFixInsights } = require("../core/fix-insights");
+const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 
@@ -3807,6 +3808,7 @@ ${trimmedText}`;
     // Categorize changed files by type
     const fileTypes = {
       js: changedFiles.filter(file => /\.(js|jsx|ts|tsx)$/i.test(file)),
+      css: changedFiles.filter(file => /\.(css|scss|sass|less)$/i.test(file)),
       py: changedFiles.filter(file => /\.py$/i.test(file)),
       java: changedFiles.filter(file => /\.java$/i.test(file)),
       html: changedFiles.filter(file => /\.html?$/i.test(file)),
@@ -3888,6 +3890,35 @@ ${trimmedText}`;
       }
     }
 
+    const frontendFiles = Array.from(
+      new Set([...fileTypes.html, ...fileTypes.css, ...fileTypes.js])
+    );
+    for (const file of frontendFiles) {
+      const verification = await this._runFrontendVerificationForFile(
+        workspaceFolder,
+        file
+      );
+      if (!verification.success) {
+        results.success = false;
+        results.errors.push({
+          file,
+          error: verification.error,
+          type: "frontend"
+        });
+        this._postMessage({
+          type: "status",
+          text: `Frontend validation found issues in ${file}`
+        });
+        continue;
+      }
+
+      results.checks.push({
+        file,
+        check: "frontend-dependencies",
+        passed: true
+      });
+    }
+
     // Warn about C/C++ files (need manual compilation)
     if (fileTypes.c.length > 0) {
       this._postMessage({
@@ -3961,6 +3992,34 @@ ${trimmedText}`;
     }
 
     return results;
+  }
+
+  async _runFrontendVerificationForFile(workspaceFolder, relativePath) {
+    try {
+      const fullPath = path.join(workspaceFolder, relativePath);
+      const content = await fs.readFile(fullPath, "utf8");
+      const validation = new FrontendValidator(fullPath, content).validate();
+      if (!validation.hasIssues) {
+        return { success: true, issues: [] };
+      }
+
+      const summary = validation.issues
+        .slice(0, 3)
+        .map((issue) => issue.message)
+        .join("; ");
+
+      return {
+        success: false,
+        issues: validation.issues,
+        error: `${validation.issues.length} frontend issue(s): ${summary}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        issues: [],
+        error: `Frontend validation failed for ${relativePath}: ${error.message}`
+      };
+    }
   }
 
   async _fetchAndSendModels(forceProvider = null) {
