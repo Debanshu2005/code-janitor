@@ -109,6 +109,23 @@ describe("ChatPanel structured edit helpers", () => {
     ).toBe(false);
   });
 
+  test("suppresses nested gstack gate provider chatter", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._shouldSuppressGStackGateStatus("Fetching 2 referenced links...")
+    ).toBe(true);
+    expect(
+      panel._shouldSuppressGStackGateStatus("Scanning active files...")
+    ).toBe(true);
+    expect(
+      panel._shouldSuppressGStackGateStatus("Contacting nvidia...")
+    ).toBe(true);
+    expect(
+      panel._shouldSuppressGStackGateStatus("Applying patch to: README.md")
+    ).toBe(false);
+  });
+
   test("delegates edit-like intent checks to the agent", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel.agent = {
@@ -824,6 +841,27 @@ describe("ChatPanel structured edit helpers", () => {
         { type: "patch", path: "src/ui/button.js", search: "Save", replace: "Apply" }
       ],
       { requestMode: "fast" }
+    );
+
+    expect(decision.enabled).toBe(false);
+    expect(decision.reasons).toEqual([]);
+  });
+
+  test("smart gstack gate skips single-file documentation edits", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._getGStackGateMode = jest.fn(() => "smart");
+
+    const decision = panel._getGStackGateDecision(
+      "Update the README installation steps",
+      [
+        {
+          type: "patch",
+          path: "README.md",
+          search: "# Install\n" + "old ".repeat(600),
+          replace: "# Install\n" + "new ".repeat(600)
+        }
+      ],
+      { requestMode: "heavy" }
     );
 
     expect(decision.enabled).toBe(false);

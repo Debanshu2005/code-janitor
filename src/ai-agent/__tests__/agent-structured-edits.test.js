@@ -511,6 +511,37 @@ describe("AIAgent structured edit parsing", () => {
     );
   });
 
+  test("extracts natural filename references for README and package json", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._extractPathHints("please update the README file and bump package json")
+    ).toEqual(expect.arrayContaining(["readme", "package.json"]));
+  });
+
+  test("resolves README edits to the named file instead of the active tab", () => {
+    const agent = new AIAgent();
+    agent.codebaseContext = new Map([
+      ["README.md", {}],
+      ["src/extension.js", {}]
+    ]);
+
+    const result = agent._resolveEditableTargets(
+      "please update the README file",
+      "/workspace",
+      {
+        activeTabPath: "src/extension.js",
+        visibleTabs: ["src/extension.js"],
+        allOpenTabs: ["src/extension.js"]
+      }
+    );
+
+    expect(result).toEqual({
+      scope: "restricted",
+      paths: ["README.md"]
+    });
+  });
+
   test("uses PowerShell command execution on Windows", () => {
     const agent = new AIAgent();
 

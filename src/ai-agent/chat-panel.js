@@ -92,6 +92,19 @@ class ChatPanel {
     );
   }
 
+  _shouldSuppressGStackGateStatus(text) {
+    const value = String(text || "");
+    return (
+      this._shouldSuppressInternalStatus(value) ||
+      /fetching\s+\d+\s+referenced links/i.test(value) ||
+      /scanning\s+(active files|workspace)/i.test(value) ||
+      /contacting\s+[a-z0-9._:/ -]+/i.test(value) ||
+      /studying workspace before responding/i.test(value) ||
+      /active file in focus:/i.test(value) ||
+      /relevant files:/i.test(value)
+    );
+  }
+
   _queueModeOverride(mode) {
     this._queuedModeOverride = mode || null;
   }
@@ -3199,6 +3212,24 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     );
   }
 
+  _isDocumentationPath(filePath) {
+    const normalized = String(filePath || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      normalized.endsWith(".md") ||
+      normalized.startsWith("docs/") ||
+      /(^|\/)(readme|changelog|contributing|license)(\.[a-z0-9]+)?$/i.test(
+        normalized
+      )
+    );
+  }
+
   _getGStackGateDecision(
     requestText,
     actions = [],
@@ -3259,6 +3290,17 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
           .filter(Boolean)
       )
     );
+    const isSingleDocEdit =
+      touchedFiles.length === 1 &&
+      touchedFiles.every((filePath) => this._isDocumentationPath(filePath));
+    if (isSingleDocEdit && !actions.some((action) => action?.type === "cmd")) {
+      return {
+        enabled: false,
+        gateMode,
+        editableActions,
+        reasons: []
+      };
+    }
     const reasons = [];
     const text = String(requestText || "");
 
@@ -3452,7 +3494,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
         systemOverlay: buildGStackEditGateOverlay(),
         skipHistory: true,
         onStatus: (text) => {
-          if (this._shouldSuppressInternalStatus(text)) {
+          if (this._shouldSuppressGStackGateStatus(text)) {
             return;
           }
           this._postMessage({

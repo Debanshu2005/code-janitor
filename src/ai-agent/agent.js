@@ -4925,9 +4925,36 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       addHint(match);
     }
 
+    const namedFilePhraseHints = [
+      { pattern: /\bpackage(?:\s+|-)?lock(?:\s+|-)?json\b/gi, hint: "package-lock.json" },
+      { pattern: /\bpackage(?:\s+|-)?json\b/gi, hint: "package.json" },
+      { pattern: /\bts(?:\s+|-)?config\b/gi, hint: "tsconfig" },
+      { pattern: /\bjs(?:\s+|-)?config\b/gi, hint: "jsconfig" },
+      { pattern: /\bcargo(?:\s+|-)?toml\b/gi, hint: "cargo.toml" },
+      { pattern: /\breadme\b/gi, hint: "readme" },
+      { pattern: /\blicen[sc]e\b/gi, hint: "license" },
+      { pattern: /\bchangelog\b/gi, hint: "changelog" },
+      { pattern: /\bcontributing\b/gi, hint: "contributing" },
+      { pattern: /\bmakefile\b/gi, hint: "makefile" },
+      { pattern: /\bdockerfile\b/gi, hint: "dockerfile" },
+      { pattern: /\bgitignore\b/gi, hint: ".gitignore" }
+    ];
+
+    for (const { pattern, hint } of namedFilePhraseHints) {
+      if (pattern.test(text)) {
+        addHint(hint);
+      }
+    }
+
     const quotedTokenRegex = /[`'"]([A-Za-z0-9_.-]{3,})[`'"]/g;
     let match;
     while ((match = quotedTokenRegex.exec(text)) !== null) {
+      addHint(match[1]);
+    }
+
+    const labeledFileRegex =
+      /\b([A-Za-z0-9_.-]*[._-][A-Za-z0-9_.-]+|[A-Z0-9]{3,})\s+(?:file|tab|document|doc)\b/g;
+    while ((match = labeledFileRegex.exec(text)) !== null) {
       addHint(match[1]);
     }
 
