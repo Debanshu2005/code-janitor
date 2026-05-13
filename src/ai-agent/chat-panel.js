@@ -160,15 +160,19 @@ class ChatPanel {
         if (!value.trim()) {
           return;
         }
-        const metadata = rawText ? { rawText } : {};
-        const shouldRefreshRawText =
-          !!rawText && rawText !== value;
+        const finalRawText = rawText || value;
+        const alreadyBufferedFinalText =
+          !!bufferedText &&
+          (bufferedText === value || bufferedText === finalRawText);
         if (!emittedContent) {
-          emit(value, metadata);
+          emit(value);
           return;
         }
-        if (value !== visibleText || shouldRefreshRawText) {
-          replace(value, metadata);
+        if (alreadyBufferedFinalText) {
+          return;
+        }
+        if (value !== visibleText) {
+          replace(value);
         }
       },
       hasEmittedContent: () => emittedContent
@@ -3061,11 +3065,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
   }
 
   _isEditLikeIntent(intent, message) {
-    if (intent === "edit" || intent === "create") return true;
-    if ((intent === "debug" || intent === "refactor") && this.agent._isEditRequest(message || "")) {
-      return true;
-    }
-    return false;
+    return !!this.agent?._shouldTreatAsEditIntent?.(intent, message || "");
   }
 
   _hasExplicitCommandRequest(message) {

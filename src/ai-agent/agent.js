@@ -1069,10 +1069,16 @@ class AIAgent {
             : Math.max(configuredMaxTokens.heavy, 4096);
       const maximumExecutionTokens =
         mode === "fast"
-          ? Math.min(configuredMaxTokens.heavy, 3072)
+          ? Math.min(
+              configuredMaxTokens.create,
+              Math.max(configuredMaxTokens.heavy, 4096)
+            )
           : mode === "heavy"
-            ? Math.min(configuredMaxTokens.create, 6144)
-            : Math.min(configuredMaxTokens.create, 8192);
+            ? Math.min(
+                configuredMaxTokens.create,
+                Math.max(configuredMaxTokens.heavy, 8192)
+              )
+            : configuredMaxTokens.create;
       profile.maxTokens = Math.min(
         Math.max(profile.maxTokens, minimumExecutionTokens),
         maximumExecutionTokens
@@ -3227,6 +3233,17 @@ ${resolvedMessage}`;
     );
   }
 
+  _shouldTreatAsEditIntent(intent, userMessage) {
+    if (intent === "edit" || intent === "create") return true;
+    if (
+      (intent === "debug" || intent === "refactor") &&
+      this._isEditRequest(userMessage || "")
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   _detectIntent(message) {
     const m = message.toLowerCase();
     if (this._isGreetingOnly(m)) return "greeting";
@@ -3255,6 +3272,14 @@ ${resolvedMessage}`;
       /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
       this._mentionsEditorFiles(m) ||
       /\b(code|project|app|site|html|css|js|file|files)\b/.test(m);
+    const hasExplainIntent =
+      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
+        m
+      );
+    const hasImperativeEditClause =
+      /(?:^|[.!?;:,]\s*|\band\s+)(?:edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/.test(
+        m
+      );
     const hasReviewIntent =
       /\b(review|code review|pr review|audit|inspect for bugs|look for bugs|find issues|find bugs|find regressions|find risks|find problems)\b/.test(
         m
@@ -3302,11 +3327,7 @@ ${resolvedMessage}`;
       )
     )
       return "create";
-    if (
-      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
-        m
-      )
-    )
+    if (hasExplainIntent && !(hasApplyChangePhrase || hasImperativeEditClause))
       return "explain";
     if (hasApplyChangePhrase && hasImplementationContext) return "edit";
     if (hasExplicitEditVerb) return "edit";
@@ -4181,11 +4202,9 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
   _shouldForceStructuredEdit(intent, userMessage) {
     // Only force structured edits when user explicitly asks to change files
     if (intent === "create") return true;
-    if (intent === "edit" && this._isEditRequest(userMessage)) return true;
     if (
-      (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage) &&
-      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
+      this._shouldTreatAsEditIntent(intent, userMessage) &&
+      this._isEditRequest(userMessage)
     ) {
       return true;
     }

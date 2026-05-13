@@ -2191,11 +2191,7 @@ ${mermaidCode}
   }
 
   _isEditLikeIntent(intent, message) {
-    if (intent === "edit" || intent === "create") return true;
-    if ((intent === "debug" || intent === "refactor") && this.agent._isEditRequest(message || "")) {
-      return true;
-    }
-    return false;
+    return !!this.agent?._shouldTreatAsEditIntent?.(intent, message || "");
   }
 
   _hasExplicitCommandRequest(message) {

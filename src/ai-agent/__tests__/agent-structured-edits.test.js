@@ -231,6 +231,26 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("prefers edit intent when an explanation request also asks for a fix", () => {
+    const agent = new AIAgent();
+
+    expect(agent._detectIntent("Why is this broken, fix it.")).toBe("edit");
+  });
+
+  test("keeps advisory how-do-i fix questions in explain intent", () => {
+    const agent = new AIAgent();
+
+    expect(agent._detectIntent("How do I fix this?")).toBe("explain");
+  });
+
+  test("treats refactor requests with explicit file changes as structured edits", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._shouldForceStructuredEdit("refactor", "clean up this file for me")
+    ).toBe(true);
+  });
+
   test("parses CMD actions as executable command steps", () => {
     const agent = new AIAgent();
     const response = "CMD: npm test";
@@ -618,6 +638,22 @@ describe("AIAgent structured edit parsing", () => {
     expect(agent._getLatencyProfile(config, "fast", "create").maxTokens).toBe(3072);
     expect(agent._getLatencyProfile(config, "heavy", "edit").maxTokens).toBe(5120);
     expect(agent._getLatencyProfile(config, "deep", "create").maxTokens).toBe(12288);
+  });
+
+  test("fast edit requests can use the larger configured edit budget", () => {
+    const agent = new AIAgent();
+    const config = {
+      provider: "custom:test",
+      maxTokens: {
+        fast: 4096,
+        heavy: 8192,
+        deep: 12288,
+        create: 16384
+      }
+    };
+
+    expect(agent._getLatencyProfile(config, "fast", "edit").maxTokens).toBe(4096);
+    expect(agent._getLatencyProfile(config, "heavy", "edit").maxTokens).toBe(8192);
   });
 
   test("fast create requests get a larger token budget for full-file generation", () => {

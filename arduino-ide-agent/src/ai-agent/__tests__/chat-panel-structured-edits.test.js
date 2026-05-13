@@ -63,4 +63,19 @@ describe("Arduino ChatPanel structured edit helpers", () => {
       matchCount: 2
     })
   })
+
+  test("delegates edit-like intent checks to the agent", () => {
+    const panel = Object.create(ChatPanel.prototype)
+    panel.agent = {
+      _shouldTreatAsEditIntent: jest.fn(() => true)
+    }
+
+    expect(panel._isEditLikeIntent("refactor", "clean up this file for me")).toBe(
+      true
+    )
+    expect(panel.agent._shouldTreatAsEditIntent).toHaveBeenCalledWith(
+      "refactor",
+      "clean up this file for me"
+    )
+  })
 })

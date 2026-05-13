@@ -2957,6 +2957,17 @@ ${resolvedMessage}`
     )
   }
 
+  _shouldTreatAsEditIntent(intent, userMessage) {
+    if (intent === "edit" || intent === "create") return true
+    if (
+      (intent === "debug" || intent === "refactor") &&
+      this._isEditRequest(userMessage || "")
+    ) {
+      return true
+    }
+    return false
+  }
+
   _detectIntent(message) {
     const m = message.toLowerCase()
     const hasExplicitEditVerb =
@@ -2978,6 +2989,14 @@ ${resolvedMessage}`
       /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
       this._mentionsEditorFiles(m) ||
       /\b(code|project|app|site|html|css|js|file|files)\b/.test(m)
+    const hasExplainIntent =
+      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(
+        m
+      )
+    const hasImperativeEditClause =
+      /(?:^|[.!?;:,]\s*|\band\s+)(?:edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/.test(
+        m
+      )
     if (
       /\b(hi|hello|hey|thanks|thank you|thx|good morning|good evening|how are you|what's up|sup)\b/.test(
         m
@@ -3000,11 +3019,7 @@ ${resolvedMessage}`
       )
     )
       return "create"
-    if (
-      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(
-        m
-      )
-    )
+    if (hasExplainIntent && !(hasApplyChangePhrase || hasImperativeEditClause))
       return "explain"
     if (hasApplyChangePhrase && hasImplementationContext) return "edit"
     if (hasExplicitEditVerb) return "edit"
@@ -3215,11 +3230,9 @@ Answer helpfully. Use FILE: or CMD: directives only when the user explicitly ask
 
   _shouldForceStructuredEdit(intent, userMessage) {
     if (intent === "create") return true
-    if (intent === "edit" && this._isEditRequest(userMessage)) return true
     if (
-      (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage) &&
-      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
+      this._shouldTreatAsEditIntent(intent, userMessage) &&
+      this._isEditRequest(userMessage)
     ) {
       return true
     }

@@ -109,6 +109,21 @@ describe("ChatPanel structured edit helpers", () => {
     ).toBe(false);
   });
 
+  test("delegates edit-like intent checks to the agent", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      _shouldTreatAsEditIntent: jest.fn(() => true)
+    };
+
+    expect(panel._isEditLikeIntent("refactor", "clean up this file for me")).toBe(
+      true
+    );
+    expect(panel.agent._shouldTreatAsEditIntent).toHaveBeenCalledWith(
+      "refactor",
+      "clean up this file for me"
+    );
+  });
+
   test("effective workspace follows the active editor workspace", () => {
     const panel = Object.create(ChatPanel.prototype);
     vscode.workspace.workspaceFolders = [
@@ -471,20 +486,38 @@ describe("ChatPanel structured edit helpers", () => {
         "```js",
         "next",
         "```"
-      ].join("\n"),
-      rawText: [
-        "Updating the active file.",
-        "",
-        "PATCH: src/app.js",
-        "SEARCH:",
-        "```js",
-        "old",
-        "```",
-        "REPLACE:",
-        "```js",
-        "next",
-        "```"
       ].join("\n")
+    });
+  });
+
+  test("skips redundant final replace when the full raw reply was already streamed", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._postMessage = jest.fn();
+
+    const controller = panel._createStreamDisplayController({
+      bufferStructuredActions: true
+    });
+    const fullReply = [
+      "Updating the active file.",
+      "",
+      "PATCH: src/app.js",
+      "SEARCH:",
+      "```js",
+      "old",
+      "```",
+      "REPLACE:",
+      "```js",
+      "next",
+      "```"
+    ].join("\n");
+
+    controller.push(fullReply);
+    controller.ensureFinalTextVisible(fullReply, { rawText: fullReply });
+
+    expect(panel._postMessage).toHaveBeenCalledTimes(1);
+    expect(panel._postMessage).toHaveBeenCalledWith({
+      type: "stream",
+      text: fullReply
     });
   });
 
