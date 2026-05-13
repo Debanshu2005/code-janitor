@@ -23,7 +23,13 @@ const MODELS_BY_PROVIDER = {
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 };
-const OLLAMA_FALLBACK_MODELS = ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"];
+const OLLAMA_FALLBACK_MODELS = [
+  "qwen2.5-coder:7b",
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
+];
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
@@ -2188,25 +2194,25 @@ class ChatPanel {
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "openrouter" && !openrouterApiKey) {
       console.log("[ChatPanel] CRITICAL: OpenRouter selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "anthropic" && !anthropicApiKey) {
       console.log("[ChatPanel] CRITICAL: Anthropic selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "nvidia" && !nvidiaApiKey) {
       console.log("[ChatPanel] CRITICAL: NVIDIA selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     }
 
     if (customProvider) {
@@ -4111,14 +4117,14 @@ ${trimmedText}`;
   }
 
   _getDefaultModelForProvider(provider) {
-    if (provider === "ollama") return "qwen2.5-coder:1.5b";
+    if (provider === "ollama") return OLLAMA_FALLBACK_MODELS[0];
     if (provider === "nvidia") return "meta/llama-3.1-8b-instruct";
     const customProvider = this._getCustomProviderById(provider);
     if (customProvider?.defaultModel) return customProvider.defaultModel;
     const providerModels = MODELS_BY_PROVIDER[provider];
     return Array.isArray(providerModels) && providerModels.length > 0
       ? providerModels[0]
-      : "qwen2.5-coder:1.5b";
+      : OLLAMA_FALLBACK_MODELS[0];
   }
 
   _getImageInputCapability(provider, model) {
@@ -4436,7 +4442,7 @@ ${trimmedText}`;
         }
         if (/^\/ollama$/i.test(trimmedText)) {
           await this._updateAiConfig("provider", "ollama");
-          await this._updateAiConfig("model", "qwen2.5-coder:1.5b");
+          await this._updateAiConfig("model", this._getDefaultModelForProvider("ollama"));
           this._postMessage({ type: "status", text: "Provider forced to Ollama. Reloading..." });
           await this._fetchAndSendModels("ollama");
           this._postMessage({ type: "done" });

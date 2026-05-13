@@ -19,6 +19,8 @@ const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
 const MAX_EDIT_TARGET_SNIPPET = 6_000;
 const MAX_FAST_EDIT_ACTIVE_FILE_CHARS = 4_000;
+const MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS = 12_000;
+const MAX_FULL_EDITABLE_TARGET_CHARS = 48_000;
 const MAX_RELEVANT_FILES = 3;
 const MAX_OPEN_TAB_SNIPPETS = 1;
 const MAX_HISTORY_ENTRIES = 3;
@@ -113,6 +115,19 @@ const NVIDIA_FALLBACK_MODELS = [
   "mistralai/mistral-nemotron",
   "meta/llama-3.1-70b-instruct",
   "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+];
+const OLLAMA_GENERAL_PREFERRED_MODELS = [
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
+];
+const OLLAMA_EDIT_PREFERRED_MODELS = [
+  "qwen2.5-coder:7b",
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
 ];
 
 class AIAgent {
@@ -555,6 +570,7 @@ class AIAgent {
       provider,
       ollamaUrl,
       model,
+      modelConfigured: genericModel.length > 0,
       nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
@@ -577,7 +593,7 @@ class AIAgent {
     }
     if (provider === "anthropic") return "claude-3-5-haiku-20241022";
     if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0];
-    return "qwen2.5-coder:1.5b";
+    return "qwen2.5-coder:7b";
   }
 
   _sanitizeNvidiaModel(model) {
@@ -828,17 +844,27 @@ class AIAgent {
     }
   }
 
-  _pickOllamaModel(models, currentModel) {
+  _pickOllamaModel(models, currentModel, options = {}) {
     if (!Array.isArray(models) || models.length === 0) return currentModel;
-    if (currentModel && models.includes(currentModel)) return currentModel;
+    const normalizedCurrent = String(currentModel || "").trim();
+    const preferHigherQuality = options.preferHigherQuality === true;
+    if (
+      normalizedCurrent &&
+      models.includes(normalizedCurrent) &&
+      !preferHigherQuality
+    ) {
+      return normalizedCurrent;
+    }
 
-    const preferredModels = [
-      "qwen2.5-coder:1.5b",
-      "codellama:latest",
-      "llama3:latest"
-    ];
+    const preferredModels = preferHigherQuality
+      ? OLLAMA_EDIT_PREFERRED_MODELS
+      : OLLAMA_GENERAL_PREFERRED_MODELS;
     for (const candidate of preferredModels) {
       if (models.includes(candidate)) return candidate;
+    }
+
+    if (normalizedCurrent && models.includes(normalizedCurrent)) {
+      return normalizedCurrent;
     }
 
     return models[0];
@@ -918,7 +944,24 @@ class AIAgent {
     return [];
   }
 
-  async _prepareRuntimeConfig(config, reportStatus) {
+  _shouldPreferHigherQualityOllamaModel(config, intent = "general") {
+    if (config?.provider !== "ollama") {
+      return false;
+    }
+
+    if (config?.modelConfigured) {
+      return false;
+    }
+
+    return (
+      intent === "edit" ||
+      intent === "debug" ||
+      intent === "refactor" ||
+      intent === "create"
+    );
+  }
+
+  async _prepareRuntimeConfig(config, reportStatus, intent = "general") {
     if (!config) {
       return config;
     }
@@ -979,10 +1022,18 @@ class AIAgent {
         ]);
         
         if (models.length > 0) {
-          const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
+          const preferredHigherQuality = this._shouldPreferHigherQualityOllamaModel(
+            baseConfig,
+            intent
+          );
+          const resolvedModel = this._pickOllamaModel(models, baseConfig.model, {
+            preferHigherQuality: preferredHigherQuality
+          });
           if (resolvedModel !== baseConfig.model) {
             reportStatus?.(
-              `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
+              preferredHigherQuality && models.includes(baseConfig.model)
+                ? `Using higher-quality Ollama edit model ${resolvedModel} for this request.`
+                : `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
             );
           }
           return {
@@ -1391,10 +1442,19 @@ class AIAgent {
     const isExecutionIntent = this._isExecutionLikeIntent(intent);
     const requestTemperature = isExecutionIntent ? 0.1 : 0.2;
     const requestTopP = isExecutionIntent ? 0.85 : 0.9;
-    const optimizedContextWindow = Math.max(
-      4096,
-      Math.min(8192, optimizedMaxTokens * 2)
-    );
+    const estimatedPromptTokens = Math.max(1024, Math.ceil(prompt.length / 4));
+    const optimizedContextWindow = isExecutionIntent
+      ? Math.max(
+          8192,
+          Math.min(
+            24576,
+            Math.max(
+              optimizedMaxTokens * 2,
+              estimatedPromptTokens + optimizedMaxTokens + 1024
+            )
+          )
+        )
+      : Math.max(4096, Math.min(8192, optimizedMaxTokens * 2));
 
     // Log key presence only; never print secrets or prefixes.
     console.log("[Agent] Building request for provider:", config.provider);
@@ -2225,6 +2285,7 @@ class AIAgent {
         ? options.systemOverlay.trim()
         : "";
     const skipHistory = options.skipHistory === true;
+    const earlyIntent = forcedIntent || this._detectIntent(userMessage);
 
     const runtimeConfig =
       options.runtimeConfig && typeof options.runtimeConfig === "object"
@@ -2236,7 +2297,8 @@ class AIAgent {
 
     const config = await this._prepareRuntimeConfig(
       runtimeConfig,
-      reportStatus
+      reportStatus,
+      earlyIntent
     );
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." };
@@ -2264,9 +2326,6 @@ class AIAgent {
       );
     }
     const isTabQuestion = this._isTabQuestion(userMessage);
-
-    // Detect intent early for knowledge graph decision
-    const earlyIntent = forcedIntent || this._detectIntent(userMessage);
     const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
@@ -2378,12 +2437,6 @@ class AIAgent {
             : "Preparing fast reply..."
       );
       const intent = earlyIntent;
-      const activeFileContext = this._getActiveFileContext(
-        effectiveWorkspace,
-        intent === "edit" || intent === "debug" || intent === "refactor"
-          ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS
-          : 1_200
-      );
       const editorState = this._getEditorState(effectiveWorkspace);
       let fastContext = "";
       // In audit/bugfix mode, skip repo-wide scanning. The model must focus
@@ -2419,6 +2472,20 @@ class AIAgent {
         effectiveWorkspace,
         editorState
       );
+      const isEditIntent =
+        intent === "edit" || intent === "debug" || intent === "refactor";
+      const focusedEditableTargetContext = isEditIntent
+        ? this._getFocusedEditableTargetContext(
+            editableTargets,
+            effectiveWorkspace,
+            MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+          )
+        : "";
+      const activeFileContext = focusedEditableTargetContext ||
+        this._getActiveFileContext(
+          effectiveWorkspace,
+          isEditIntent ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS : 1_200
+        );
       this.currentEditableTargets =
         intent !== "create" && editableTargets.paths.length
           ? new Set(editableTargets.paths)
@@ -2433,16 +2500,26 @@ class AIAgent {
         ? `${systemInstruction}\n\n${systemOverlay}`
         : systemInstruction;
       const isCreateIntent = intent === "create";
-      const isEditIntent =
-        intent === "edit" || intent === "debug" || intent === "refactor";
+      const editableTargetsContext = isCreateIntent
+        ? ""
+        : this._buildEditableTargetsContext(editableTargets);
+      const focusedEditLanguageHint =
+        isEditIntent && focusedEditableTargetContext
+          ? this._buildFocusedEditLanguageHint(
+              editableTargets,
+              effectiveWorkspace
+            )
+          : "";
       const contextToUse = isCreateIntent ? "" : fastContext;
       const activeCtx = isCreateIntent ? "" : activeFileContext;
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
+          ? focusedEditableTargetContext
+            ? "\nPrefer exactly one PATCH action for this file when making a small localized change. Preserve every untouched line. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and use FILE only if a PATCH would be unsafe or the user asked for a broader rewrite."
+            : "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
       const fastKnowledgeGraph = knowledgeGraphContext;
-      const promptPrefix = `${effectiveSystemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}`;
+      const promptPrefix = `${effectiveSystemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${editableTargetsContext ? `\n\n${editableTargetsContext}` : ""}${focusedEditLanguageHint ? `\n\n${focusedEditLanguageHint}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}`;
       prompt = `${promptPrefix}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
@@ -2463,12 +2540,20 @@ ${resolvedMessage}`;
         effectiveWorkspace,
         editorState
       );
+      const intent = this._detectIntent(userMessage);
+      const isEditIntent =
+        intent === "edit" || intent === "debug" || intent === "refactor";
+      const focusedEditableTargetContext = isEditIntent
+        ? this._getFocusedEditableTargetContext(
+            editableTargets,
+            effectiveWorkspace,
+            MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+          )
+        : "";
       const isScopedActiveFileEdit =
         this._isActiveFileScanRequest(userMessage) &&
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0;
-
-      const intent = this._detectIntent(userMessage);
 
       reportStatus?.(
         isScopedActiveFileEdit
@@ -2492,19 +2577,22 @@ ${resolvedMessage}`;
             maxResults: latencyProfile.relevantFileCount,
             snippetChars: latencyProfile.fileSnippetChars
           });
-      const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
+      const activeFileContext = focusedEditableTargetContext ||
+        this._getActiveFileContext(effectiveWorkspace);
       const editorStateContext = this._buildEditorStateContext(editorState);
-      const openTabSnippetContext = isScopedActiveFileEdit
-        ? this._getTargetSnippetContext(
-            editableTargets.paths,
-            effectiveWorkspace,
-            MAX_RELEVANT_FILES,
-            MAX_EDIT_TARGET_SNIPPET
-          )
-        : this._getOpenTabSnippetContext(
-            editorState.allOpenTabs,
-            effectiveWorkspace
-          );
+      const openTabSnippetContext = focusedEditableTargetContext
+        ? ""
+        : isScopedActiveFileEdit
+          ? this._getTargetSnippetContext(
+              editableTargets.paths,
+              effectiveWorkspace,
+              MAX_RELEVANT_FILES,
+              MAX_EDIT_TARGET_SNIPPET
+            )
+          : this._getOpenTabSnippetContext(
+              editorState.allOpenTabs,
+              effectiveWorkspace
+            );
       this.currentEditableTargets =
         intent !== "create" && editableTargets.paths.length
           ? new Set(editableTargets.paths)
@@ -2955,6 +3043,25 @@ ${resolvedMessage}`;
     );
   }
 
+  _findOpenDocumentByPath(filePath) {
+    if (!filePath) return null;
+
+    const openDocuments = Array.isArray(vscode.workspace.textDocuments)
+      ? vscode.workspace.textDocuments
+      : [];
+    const normalizedTarget = path.normalize(filePath);
+
+    return (
+      openDocuments.find(
+        (document) =>
+          document &&
+          !document.isUntitled &&
+          document.uri?.scheme === "file" &&
+          path.normalize(document.fileName) === normalizedTarget
+      ) || null
+    );
+  }
+
   _toWorkspaceRelativePath(filePath, workspaceFolder) {
     if (!filePath) {
       return null;
@@ -2995,6 +3102,239 @@ ${resolvedMessage}`;
     const content = document.getText().slice(0, maxChars);
 
     return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``;
+  }
+
+  _buildContentContext(label, displayPath, content, maxChars) {
+    const source = typeof content === "string" ? content : "";
+    if (!source) return "";
+
+    if (!Number.isFinite(maxChars) || maxChars <= 0 || source.length <= maxChars) {
+      return `${label}: ${displayPath}\n\`\`\`\n${source}\n\`\`\``;
+    }
+
+    const headChars = Math.max(1_600, Math.floor(maxChars * 0.65));
+    const tailChars = Math.max(1_200, maxChars - headChars);
+    const totalRetained = Math.min(source.length, headChars + tailChars);
+    const retainedHead = Math.min(headChars, totalRetained);
+    const retainedTail = Math.max(0, totalRetained - retainedHead);
+    const omittedChars = Math.max(0, source.length - retainedHead - retainedTail);
+    const head = source.slice(0, retainedHead);
+    const tail = retainedTail > 0 ? source.slice(-retainedTail) : "";
+
+    return `${label}: ${displayPath}\n\`\`\`\n${head}\n...\n[truncated ${omittedChars} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _getFocusedEditableTargetData(editableTargets, workspaceFolder) {
+    if (
+      !editableTargets ||
+      editableTargets.scope !== "restricted" ||
+      !Array.isArray(editableTargets.paths) ||
+      editableTargets.paths.length !== 1
+    ) {
+      return null;
+    }
+
+    const targetPath = editableTargets.paths[0];
+    const fullPath = workspaceFolder
+      ? path.join(workspaceFolder, targetPath)
+      : targetPath;
+    const openDocument = this._findOpenDocumentByPath(fullPath);
+
+    if (openDocument) {
+      return {
+        targetPath,
+        displayPath: this._formatContextPath(openDocument.fileName, workspaceFolder),
+        content: openDocument.getText(),
+        isDirty: openDocument.isDirty === true
+      };
+    }
+
+    const fileData = this.codebaseContext.get(targetPath);
+    if (!fileData || typeof fileData.content !== "string") {
+      return null;
+    }
+
+    return {
+      targetPath,
+      displayPath: targetPath,
+      content: fileData.content,
+      isDirty: false
+    };
+  }
+
+  _getStructuredEditLanguage(filePath = "") {
+    const ext = path.extname(String(filePath || "")).toLowerCase();
+    if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+      return "javascript";
+    }
+    if (ext === ".py") {
+      return "python";
+    }
+    if (ext === ".html" || ext === ".htm") {
+      return "html";
+    }
+    return "";
+  }
+
+  _findAnchorLine(content, patterns = []) {
+    const source = typeof content === "string" ? content : "";
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (match && match[0]) {
+        return match[0].split(/\r?\n/)[0].trim();
+      }
+    }
+    return "";
+  }
+
+  _quoteAnchor(anchor) {
+    const value = String(anchor || "").trim();
+    if (!value) return "";
+    const compact = value.replace(/\s+/g, " ");
+    return `\`${compact.slice(0, 120)}${compact.length > 120 ? "..." : ""}\``;
+  }
+
+  _buildFocusedEditLanguageHint(editableTargets, workspaceFolder) {
+    const data = this._getFocusedEditableTargetData(
+      editableTargets,
+      workspaceFolder
+    );
+    if (!data || !data.content) {
+      return "";
+    }
+
+    const language = this._getStructuredEditLanguage(data.targetPath);
+    if (!language) {
+      return "";
+    }
+
+    const quotedAnchors = [];
+    const pushAnchor = (anchor) => {
+      const quoted = this._quoteAnchor(anchor);
+      if (quoted && !quotedAnchors.includes(quoted)) {
+        quotedAnchors.push(quoted);
+      }
+    };
+
+    if (language === "html") {
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /<main\b[^\n>]*>/i,
+          /<section\b[^\n>]*>/i,
+          /<form\b[^\n>]*>/i,
+          /<div\b[^\n>]*class=["'][^"']+["'][^\n>]*>/i,
+          /<button\b[^\n>]*>/i,
+          /<\/main>/i,
+          /<\/body>/i
+        ])
+      );
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /<style\b[^\n>]*>/i,
+          /<script\b[^\n>]*>/i,
+          /<\/head>/i,
+          /<\/body>/i
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for HTML in ${data.displayPath}:`,
+        "- Patch the smallest enclosing element instead of rewriting the whole document.",
+        "- For a new button or small UI control, SEARCH should usually include the surrounding container and its closing tag.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- If adding styles, patch the existing `<style>` block or insert before `</head>`.",
+        "- If adding behavior, patch an existing `<script>` block or insert before `</body>`."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (language === "javascript") {
+      const importLines = data.content.match(/^import\s.+$/gm) || [];
+      pushAnchor(importLines[importLines.length - 1] || "");
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /export\s+default\s+[^\n]+/i,
+          /return\s*\(\s*$/m,
+          /function\s+[A-Za-z0-9_$]+\s*\([^)]*\)\s*\{/m,
+          /const\s+[A-Za-z0-9_$]+\s*=\s*\([^)]*\)\s*=>\s*\{/m
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for JavaScript in ${data.displayPath}:`,
+        "- Preserve braces, commas, and surrounding exports exactly.",
+        "- For import changes, SEARCH should anchor on the last nearby import line rather than the entire file header.",
+        "- For JSX or UI edits, patch the smallest returned markup container, not the whole component.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- For a new helper, anchor on the related function signature or insert before the nearest `export default`."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (language === "python") {
+      const importLines =
+        data.content.match(/^(?:from\s+\S+\s+import\s+.+|import\s+.+)$/gm) || [];
+      pushAnchor(importLines[importLines.length - 1] || "");
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /^def\s+[A-Za-z0-9_]+\s*\([^)]*\):/m,
+          /^async\s+def\s+[A-Za-z0-9_]+\s*\([^)]*\):/m,
+          /^class\s+[A-Za-z0-9_]+\s*(?:\([^)]*\))?:/m,
+          /^if __name__ == ["']__main__["']:/m
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for Python in ${data.displayPath}:`,
+        "- Preserve indentation exactly and patch whole logical blocks, not partial indented fragments.",
+        "- For import changes, anchor on the last existing import line.",
+        "- For a helper or function change, SEARCH should include the full `def` or `class` signature and enough surrounding lines to stay unique.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- If adding a helper, place it before `if __name__ == \"__main__\":` when that block exists."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return "";
+  }
+
+  _getFocusedEditableTargetContext(
+    editableTargets,
+    workspaceFolder,
+    maxChars = MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+  ) {
+    const data = this._getFocusedEditableTargetData(
+      editableTargets,
+      workspaceFolder
+    );
+    if (!data || !data.content) {
+      return "";
+    }
+
+    if (data.content.length <= MAX_FULL_EDITABLE_TARGET_CHARS) {
+      return this._buildContentContext(
+        "Editable target content (full file)",
+        `${data.displayPath}${data.isDirty ? " (unsaved changes)" : ""}`,
+        data.content,
+        data.content.length
+      );
+    }
+
+    return this._buildContentContext(
+      "Editable target content",
+      `${data.displayPath}${data.isDirty ? " (unsaved changes)" : ""}`,
+      data.content,
+      maxChars
+    );
   }
 
   _formatFileList(label, filePaths) {
@@ -4755,6 +5095,10 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       return "Editable targets: workspace-wide. You may edit any indexed workspace file only when the user clearly asks for it.\n";
     }
 
+    if (editableTargets.paths.length === 1) {
+      return `Editable targets (only edit this file):\nFile: ${editableTargets.paths[0]}\nPreserve all unrelated code in this file. Prefer one PATCH action for small localized changes.\n`;
+    }
+
     return `Editable targets (only edit these files):\n${editableTargets.paths
       .map((filePath) => `File: ${filePath}`)
       .join("\n")}\n`;
@@ -5239,6 +5583,14 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
 
     const editableTargetsContext =
       this._buildEditableTargetsContext(editableTargets);
+    const focusedEditLanguageHint =
+      (intent === "edit" || intent === "debug" || intent === "refactor") &&
+      editableTargets?.scope === "restricted"
+        ? this._buildFocusedEditLanguageHint(
+            editableTargets,
+            this.workspaceRoot
+          )
+        : "";
     const effectiveEditorState = isCreateIntent ? "" : editorStateContext;
     const effectiveActiveFile = isCreateIntent ? "" : activeFileContext;
     const effectiveTabContext = isCreateIntent ? "" : openTabSnippetContext;
@@ -5246,7 +5598,7 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
 
     return `${effectiveSystemInstruction}
 Indexed files: ${this.codebaseContext.size}
-${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
+${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${focusedEditLanguageHint ? `${focusedEditLanguageHint}\n\n` : ""}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
 ${history ? `${history}\n\n` : ""}
 ### USER_MESSAGE ###
 ${userMessage}`;

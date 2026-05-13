@@ -12,6 +12,7 @@ jest.mock(
     },
     workspace: {
       workspaceFolders: [],
+      textDocuments: [],
       getWorkspaceFolder: jest.fn()
     }
   }),
@@ -24,6 +25,7 @@ const AIAgent = require("../agent");
 describe("AIAgent structured edit parsing", () => {
   afterEach(() => {
     vscode.workspace.workspaceFolders = [];
+    vscode.workspace.textDocuments = [];
     vscode.workspace.getWorkspaceFolder.mockReset();
     vscode.window.activeTextEditor = null;
   });
@@ -621,6 +623,194 @@ describe("AIAgent structured edit parsing", () => {
     expect(prompt).toContain("Review the current auth plan");
   });
 
+  test("ollama defaults and edit-time preference favor stronger coder models", () => {
+    const agent = new AIAgent();
+
+    expect(agent._getDefaultModelForProvider("ollama")).toBe("qwen2.5-coder:7b");
+    expect(
+      agent._pickOllamaModel(
+        ["qwen2.5-coder:1.5b", "qwen2.5-coder:7b"],
+        "qwen2.5-coder:1.5b",
+        { preferHigherQuality: true }
+      )
+    ).toBe("qwen2.5-coder:7b");
+    expect(
+      agent._shouldPreferHigherQualityOllamaModel(
+        { provider: "ollama", modelConfigured: false },
+        "edit"
+      )
+    ).toBe(true);
+    expect(
+      agent._shouldPreferHigherQualityOllamaModel(
+        { provider: "ollama", modelConfigured: true },
+        "edit"
+      )
+    ).toBe(false);
+  });
+
+  test("single-file editable target instructions prefer a patch-first localized edit", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._buildEditableTargetsContext({
+        scope: "restricted",
+        paths: ["index.html"]
+      })
+    ).toContain("Prefer one PATCH action for small localized changes.");
+  });
+
+  test("focused editable target context includes the full open file when it stays within budget", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-edit-target-"));
+    const filePath = path.join(workspaceRoot, "index.html");
+    const fileContent = [
+      "<!DOCTYPE html>",
+      "<html>",
+      "<body>",
+      "  <main>",
+      "    <section>Existing content</section>",
+      "  </main>",
+      "</body>",
+      "</html>"
+    ].join("\n");
+
+    vscode.workspace.textDocuments = [
+      {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: true,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    ];
+
+    const context = agent._getFocusedEditableTargetContext(
+      { scope: "restricted", paths: ["index.html"] },
+      workspaceRoot
+    );
+
+    expect(context).toContain("Editable target content (full file): index.html (unsaved changes)");
+    expect(context).toContain("<section>Existing content</section>");
+    expect(context).not.toContain("[truncated");
+  });
+
+  test("focused HTML edit hints surface DOM-oriented patch anchors", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-html-hint-"));
+    const filePath = path.join(workspaceRoot, "index.html");
+    const fileContent = [
+      "<!DOCTYPE html>",
+      "<html>",
+      "<head>",
+      "  <style>",
+      "    .hero { display: grid; }",
+      "  </style>",
+      "</head>",
+      "<body>",
+      "  <main class=\"hero\">",
+      "    <section>",
+      "      <h1>Hello</h1>",
+      "    </section>",
+      "  </main>",
+      "</body>",
+      "</html>"
+    ].join("\n");
+
+    vscode.workspace.textDocuments = [
+      {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: false,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    ];
+
+    const hint = agent._buildFocusedEditLanguageHint(
+      { scope: "restricted", paths: ["index.html"] },
+      workspaceRoot
+    );
+
+    expect(hint).toContain("Language-aware PATCH helper for HTML");
+    expect(hint).toContain("smallest enclosing element");
+    expect(hint).toContain("`<main class=\"hero\">`");
+    expect(hint).toContain("`<style>`");
+  });
+
+  test("focused JavaScript edit hints surface import and export anchors", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-js-hint-"));
+    const filePath = path.join(workspaceRoot, "src", "app.js");
+    const fileContent = [
+      "import React from 'react';",
+      "import { Button } from './Button';",
+      "",
+      "function App() {",
+      "  return (",
+      "    <main><Button /></main>",
+      "  );",
+      "}",
+      "",
+      "export default App;"
+    ].join("\n");
+
+    vscode.workspace.textDocuments = [
+      {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: false,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    ];
+
+    const hint = agent._buildFocusedEditLanguageHint(
+      { scope: "restricted", paths: ["src/app.js"] },
+      workspaceRoot
+    );
+
+    expect(hint).toContain("Language-aware PATCH helper for JavaScript");
+    expect(hint).toContain("last nearby import line");
+    expect(hint).toContain("`import { Button } from './Button';`");
+    expect(hint).toContain("`export default App;`");
+  });
+
+  test("focused Python edit hints surface indentation and module anchors", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-py-hint-"));
+    const filePath = path.join(workspaceRoot, "app.py");
+    const fileContent = [
+      "import os",
+      "from pathlib import Path",
+      "",
+      "def greet(name):",
+      "    return f'Hello {name}'",
+      "",
+      "if __name__ == \"__main__\":",
+      "    print(greet('World'))"
+    ].join("\n");
+
+    vscode.workspace.textDocuments = [
+      {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: false,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    ];
+
+    const hint = agent._buildFocusedEditLanguageHint(
+      { scope: "restricted", paths: ["app.py"] },
+      workspaceRoot
+    );
+
+    expect(hint).toContain("Language-aware PATCH helper for Python");
+    expect(hint).toContain("Preserve indentation exactly");
+    expect(hint).toContain("`from pathlib import Path`");
+    expect(hint).toContain('`if __name__ == "__main__":`');
+  });
+
   test("latency profile respects configured token budgets and boosts edit requests", () => {
     const agent = new AIAgent();
     const config = {
@@ -694,6 +884,32 @@ describe("AIAgent structured edit parsing", () => {
     const body = JSON.parse(request.body);
 
     expect(body.options.num_predict).toBe(12288);
+  });
+
+  test("ollama edit requests expand num_ctx for long single-file prompts", () => {
+    const agent = new AIAgent();
+    const longPrompt = `System instructions\n\n### USER_MESSAGE ###\n${"x".repeat(42000)}`;
+    const request = agent._buildRequestOptions(
+      {
+        provider: "ollama",
+        model: "qwen2.5-coder",
+        ollamaUrl: "http://localhost:11434",
+        maxTokens: {
+          fast: 4096,
+          heavy: 8192,
+          deep: 12288,
+          create: 16384
+        }
+      },
+      longPrompt,
+      "heavy",
+      "edit"
+    );
+
+    const body = JSON.parse(request.body);
+
+    expect(body.options.num_ctx).toBeGreaterThan(8192);
+    expect(body.options.num_ctx).toBeLessThanOrEqual(24576);
   });
 
   test("skipHistory avoids persisting internal agent calls", async () => {

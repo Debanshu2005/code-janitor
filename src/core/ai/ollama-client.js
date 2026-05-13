@@ -35,7 +35,7 @@ let runtimeConfigOverride = null;
 class OllamaClient {
   constructor() {
     this.baseUrl = "http://localhost:11434";
-    this.model = "qwen2.5-coder:1.5b";
+    this.model = "qwen2.5-coder:7b";
     this._availabilityCache = null;
   }
 
