@@ -2,17 +2,21 @@
 
 const path = require("path");
 
+const { runAgentCli } = require("./agent-loop-cli");
 const { runChatCli } = require("./cli-chat");
+const { BUILT_IN_PROVIDERS } = require("./cli-runtime");
 const { analyzeTarget } = require("./core/janitor");
 
 function parseArgs(argv) {
   const options = {
     ai: false,
+    agentMessage: "",
     chatMessage: "",
     check: false,
     command: "fix",
     help: false,
     json: false,
+    maxSteps: null,
     model: "",
     mode: "fast",
     nvidiaApiKey: "",
@@ -89,8 +93,12 @@ function parseArgs(argv) {
 
     if (arg === "--provider") {
       const provider = readValue("--provider").trim().toLowerCase();
-      if (provider !== "ollama" && provider !== "nvidia") {
-        throw new Error("Option --provider must be either ollama or nvidia.");
+      if (!BUILT_IN_PROVIDERS.has(provider)) {
+        throw new Error(
+          `Option --provider must be one of: ${Array.from(BUILT_IN_PROVIDERS)
+            .sort()
+            .join(", ")}.`
+        );
       }
       options.provider = provider;
       options.ai = true;
@@ -120,17 +128,31 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === "--max-steps") {
+      const maxSteps = Number(readValue("--max-steps"));
+      if (!Number.isFinite(maxSteps) || maxSteps <= 0) {
+        throw new Error("Option --max-steps requires a positive number.");
+      }
+      options.maxSteps = maxSteps;
+      continue;
+    }
+
     if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     }
 
-    if (options.command === "chat") {
+    if (options.command === "chat" || options.command === "agent") {
       chatTokens.push(arg);
       continue;
     }
 
     if (arg === "chat" && positionals.length === 0) {
       options.command = "chat";
+      continue;
+    }
+
+    if (arg === "agent" && positionals.length === 0) {
+      options.command = "agent";
       continue;
     }
 
@@ -141,6 +163,14 @@ function parseArgs(argv) {
     return {
       ...options,
       chatMessage: chatTokens.join(" ").trim(),
+      targetPath: process.cwd()
+    };
+  }
+
+  if (options.command === "agent") {
+    return {
+      ...options,
+      agentMessage: chatTokens.join(" ").trim(),
       targetPath: process.cwd()
     };
   }
@@ -170,8 +200,9 @@ Options:
   --write           Apply fixes to disk (default)
   --json            Print the final report as JSON
   --mode NAME       Chat mode: fast, heavy, or deep
+  --max-steps N     Maximum model/tool loop rounds for the agent subcommand
   --ai              Allow AI-assisted fixes when a fixer supports them
-  --provider NAME   AI provider: ollama or nvidia
+  --provider NAME   AI provider: anthropic, groq, nvidia, ollama, or openrouter
   --model NAME      Model to use for the selected provider
   --ollama-url URL  Ollama base URL (default: http://localhost:11434)
   --nvidia-api-key  NVIDIA API key (or set NVIDIA_API_KEY / CODE_JANITOR_NVIDIA_API_KEY)
@@ -181,6 +212,7 @@ Description:
   Default mode analyzes a supported file or directory and applies safe formatting
   and syntax fixes. If no path is provided, the current working directory is used.
   Use the chat subcommand for a read-only terminal chat experience.
+  Use the agent subcommand for a narrated tool loop that can inspect, edit, and verify.
 
 Examples:
   code-janitor
@@ -188,6 +220,8 @@ Examples:
   code-janitor src/app.js --check
   code-janitor chat
   code-janitor chat explain src/extension.js --mode heavy
+  code-janitor agent fix the CLI help text in src/cli.js
+  code-janitor agent debug npm test failure --provider anthropic --max-steps 8
   code-janitor . --json
   code-janitor src/broken.py --ai --model qwen2.5-coder:1.5b
   code-janitor src/broken.js --ai --provider nvidia --model meta/llama-3.1-8b-instruct
@@ -256,6 +290,10 @@ async function runCli(argv, io = console) {
   if (options.version) {
     io.log(`code-janitor v${getVersion()}`);
     return 0;
+  }
+
+  if (options.command === "agent") {
+    return runAgentCli(options, io);
   }
 
   if (options.command === "chat") {

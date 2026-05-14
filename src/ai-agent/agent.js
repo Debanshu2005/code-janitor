@@ -2278,6 +2278,8 @@ class AIAgent {
         ? options.intentOverride.trim().toLowerCase()
         : null;
     const forceStructuredEdits = options.forceStructuredEdits === true;
+    const interactionStyle =
+      options.interactionStyle === "agent_loop" ? "agent_loop" : "default";
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null;
     const systemOverlay =
@@ -2494,7 +2496,8 @@ class AIAgent {
         intent,
         effectiveWorkspace,
         mode,
-        this.showThinking
+        this.showThinking,
+        interactionStyle
       );
       const effectiveSystemInstruction = systemOverlay
         ? `${systemInstruction}\n\n${systemOverlay}`
@@ -2607,7 +2610,10 @@ ${resolvedMessage}`;
         editableTargets,
         mode,
         knowledgeGraphContext,
-        systemOverlay
+        systemOverlay,
+        {
+          interactionStyle
+        }
       );
       if (
         forceStructuredEdits ||
@@ -2626,7 +2632,8 @@ ${resolvedMessage}`;
           systemOverlay,
           {
             includeHistory: false,
-            intentOverride: intent
+            intentOverride: intent,
+            interactionStyle
           }
         );
       }
@@ -4146,7 +4153,13 @@ ${resolvedMessage}`;
     ].join("\n");
   }
 
-  _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
+  _buildSystemInstruction(
+    intent,
+    workspaceFolder,
+    mode = "fast",
+    showThinking = false,
+    interactionStyle = "default"
+  ) {
     const silentPreamble = this._buildSilentAuditGatePreamble() + "\n\n";
     // Audit is NOT a separate mode — the silent preamble already runs the
     // mandatory malicious-pattern scan on every request, automatically and
@@ -4239,6 +4252,10 @@ ${resolvedMessage}`;
       mode === "fast" && !this._isExecutionLikeIntent(intent)
         ? fastRules
         : operatingPrinciples;
+    const isAgentLoop = interactionStyle === "agent_loop";
+    const loopPreamble = isAgentLoop
+      ? "Agent loop mode: brief narration is allowed before structured actions. Put each action on its own line. After tool results come back, continue from that evidence. When done, stop emitting actions and answer plainly."
+      : "";
     switch (intent) {
       case "greeting":
         return `${base}
@@ -4266,7 +4283,7 @@ Opening the codebase graph visualization panel. You'll be able to see the depend
         return `${base}
 ${rules}
 ${loc}
-Write PRODUCTION-GRADE code by default:
+${loopPreamble ? `${loopPreamble}\n` : ""}Write PRODUCTION-GRADE code by default:
 - Enterprise-level error handling with proper try-catch, error boundaries, and graceful failures
 - Input validation and sanitization for all user inputs and external data
 - Security: XSS prevention, CSRF tokens, SQL injection protection, secure headers
@@ -4290,7 +4307,9 @@ You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
 - MKDIR: to create directories
 - CMD: to run one workspace shell command per line for inspection, package scripts, npm checks, syntax checks, or verification when that materially helps
-Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences.
+${isAgentLoop
+  ? "You may narrate briefly, then emit executable FILE:, MKDIR:, or CMD: actions. Keep narration outside the code fences."
+  : "Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences."}
 Format:
 FILE: folder/file.ext
 \`\`\`
@@ -4411,7 +4430,7 @@ Use FILE: directives only if the user explicitly asks you to apply changes.`;
       case "command":
         return `${base}
 ${rules}
-The user is asking to run or provide command-oriented actions.
+${loopPreamble ? `${loopPreamble}\n` : ""}The user is asking to run or provide command-oriented actions.
 - Prefer the smallest workspace-scoped command that satisfies the request.
 - Use CMD: only when command execution is actually requested or clearly necessary.
 - You may emit multiple CMD: lines when you need separate inspect, run, and verify steps, but each CMD line must contain exactly one command.
@@ -4427,11 +4446,13 @@ FILE: <exact file path>
 (complete updated file content)
 \`\`\`
 MKDIR: folder/subfolder
-Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+${isAgentLoop
+  ? "You may add a short narration line before the actions. Keep the executable actions exact."
+  : "Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
       case "edit":
         return `${base}
 ${rules}
-The user wants to edit a file. Write PRODUCTION-GRADE code by default:
+${loopPreamble ? `${loopPreamble}\n` : ""}The user wants to edit a file. Write PRODUCTION-GRADE code by default:
  - Do the work directly. Do not narrate a plan before the executable actions.
 - Preserve existing architecture and style unless changes are required
 - Apply all production-level standards: error handling, validation, security, performance, accessibility
@@ -4525,7 +4546,9 @@ READ: src/path/to/file.js
 GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+${isAgentLoop
+  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -5603,7 +5626,8 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       intent,
       this.workspaceRoot,
       mode,
-      this.showThinking
+      this.showThinking,
+      options.interactionStyle === "agent_loop" ? "agent_loop" : "default"
     );
     const effectiveSystemInstruction = systemOverlay
       ? `${systemInstruction}\n\n${systemOverlay}`

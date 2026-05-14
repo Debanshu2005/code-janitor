@@ -1,48 +1,14 @@
 const readline = require("readline");
 
 const AIAgent = require("./ai-agent/agent");
+const { getDefaultCliConfigPath, resolveCliAiConfig } = require("./utils/cli-config");
 const {
-  getDefaultCliConfigPath,
-  resolveCliAiConfig
-} = require("./utils/cli-config");
-const DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:1.5b";
-const DEFAULT_NVIDIA_MODEL = "meta/llama-3.1-8b-instruct";
-
-function buildChatRuntimeConfig(options = {}) {
-  const resolved = resolveCliAiConfig(options);
-  const provider = String(resolved.provider || "ollama").trim().toLowerCase();
-  const runtimeConfig = {
-    enabled: true,
-    provider: provider === "nvidia" ? "nvidia" : "ollama"
-  };
-
-  if (resolved.model) {
-    runtimeConfig.model = resolved.model;
-  }
-
-  if (resolved.ollamaUrl) {
-    runtimeConfig.ollamaUrl = resolved.ollamaUrl;
-  }
-
-  if (Number.isFinite(resolved.timeout) && resolved.timeout > 0) {
-    runtimeConfig.timeout = resolved.timeout;
-  }
-
-  if (resolved.nvidiaApiKey) {
-    runtimeConfig.nvidiaApiKey = resolved.nvidiaApiKey;
-  }
-  if (resolved.groqApiKey) {
-    runtimeConfig.groqApiKey = resolved.groqApiKey;
-  }
-  if (resolved.openrouterApiKey) {
-    runtimeConfig.openrouterApiKey = resolved.openrouterApiKey;
-  }
-  if (resolved.anthropicApiKey) {
-    runtimeConfig.anthropicApiKey = resolved.anthropicApiKey;
-  }
-
-  return runtimeConfig;
-}
+  buildChatRuntimeConfig,
+  createDefaultIo,
+  getDefaultModelForProvider,
+  isLikelyNvidiaModel,
+  normalizeIo
+} = require("./cli-runtime");
 
 function getReadOnlyOverlay() {
   return [
@@ -51,40 +17,6 @@ function getReadOnlyOverlay() {
     "Answer in plain text only.",
     "If the user asks for code changes, explain the change or provide a patch as prose, but do not execute it."
   ].join("\n");
-}
-
-function createDefaultIo() {
-  return {
-    log: (...args) => console.log(...args),
-    error: (...args) => console.error(...args),
-    write: (text) => process.stdout.write(String(text || ""))
-  };
-}
-
-function normalizeIo(io = null) {
-  const base = io && typeof io === "object" ? io : {};
-  return {
-    log:
-      typeof base.log === "function"
-        ? (...args) => base.log(...args)
-        : (...args) => console.log(...args),
-    error:
-      typeof base.error === "function"
-        ? (...args) => base.error(...args)
-        : (...args) => console.error(...args),
-    write:
-      typeof base.write === "function"
-        ? (text) => base.write(text)
-        : (text) => process.stdout.write(String(text || ""))
-  };
-}
-
-function getDefaultModelForProvider(provider) {
-  return provider === "nvidia" ? DEFAULT_NVIDIA_MODEL : DEFAULT_OLLAMA_MODEL;
-}
-
-function isLikelyNvidiaModel(model) {
-  return /^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(String(model || "").trim());
 }
 
 async function runSingleChatTurn(agent, message, options = {}, io = createDefaultIo()) {
@@ -180,7 +112,7 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
       if (/^\/nvidia$/i.test(trimmed)) {
         provider = "nvidia";
         if (!isLikelyNvidiaModel(model)) {
-          model = DEFAULT_NVIDIA_MODEL;
+          model = getDefaultModelForProvider(provider);
         }
         const activeConfig = resolveCliAiConfig({
           ...options,
@@ -201,7 +133,7 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
       if (/^\/ollama$/i.test(trimmed)) {
         provider = "ollama";
         if (isLikelyNvidiaModel(model) || !String(model || "").trim()) {
-          model = DEFAULT_OLLAMA_MODEL;
+          model = getDefaultModelForProvider(provider);
         }
         normalizedIo.log(`Provider switched to Ollama (${model}).`);
         rl.prompt();

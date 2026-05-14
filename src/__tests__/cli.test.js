@@ -1,9 +1,14 @@
 /* eslint-env jest */
 const mockAnalyzeTarget = jest.fn();
+const mockRunAgentCli = jest.fn();
 const mockRunChatCli = jest.fn();
 
 jest.mock("../core/janitor", () => ({
   analyzeTarget: (...args) => mockAnalyzeTarget(...args)
+}));
+
+jest.mock("../agent-loop-cli", () => ({
+  runAgentCli: (...args) => mockRunAgentCli(...args)
 }));
 
 jest.mock("../cli-chat", () => ({
@@ -82,6 +87,35 @@ describe("cli", () => {
       provider: "nvidia",
       model: "meta/llama-3.1-8b-instruct",
       nvidiaApiKey: "secret-token"
+    });
+  });
+
+  test("parses agent subcommand with free-form task", () => {
+    expect(
+      parseArgs(["agent", "fix", "src/cli.js", "--mode", "heavy", "--max-steps", "8"])
+    ).toMatchObject({
+      command: "agent",
+      agentMessage: "fix src/cli.js",
+      mode: "heavy",
+      maxSteps: 8
+    });
+  });
+
+  test("parses non-nvidia provider options", () => {
+    expect(
+      parseArgs([
+        "agent",
+        "debug",
+        "tests",
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-sonnet-4-5"
+      ])
+    ).toMatchObject({
+      command: "agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5"
     });
   });
 
@@ -245,6 +279,27 @@ describe("cli", () => {
         command: "chat",
         chatMessage: "hello there",
         mode: "deep"
+      }),
+      io
+    );
+  });
+
+  test("delegates agent subcommand to agent runner", async () => {
+    const io = createIo();
+    mockRunAgentCli.mockResolvedValue(0);
+
+    const exitCode = await runCli(
+      ["agent", "fix", "src/cli.js", "--mode", "deep", "--max-steps", "5"],
+      io
+    );
+
+    expect(exitCode).toBe(0);
+    expect(mockRunAgentCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "agent",
+        agentMessage: "fix src/cli.js",
+        mode: "deep",
+        maxSteps: 5
       }),
       io
     );
