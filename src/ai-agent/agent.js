@@ -2737,13 +2737,11 @@ ${resolvedMessage}`;
         requiresFileActions &&
         !shouldAllowClarification &&
         (
-          (forceStructuredEdits
-            ? !this._hasEditActions(parsedResponse.actions)
-            : !this._hasRequiredActions(
-                finalIntent,
-                userMessage,
-                parsedResponse.actions
-              )) ||
+          !this._hasStructuredEditPipelineActions(
+            finalIntent,
+            userMessage,
+            parsedResponse.actions
+          ) ||
           firstPassHadIncompleteStructuredEdits
         ) &&
         !abortSignal?.aborted
@@ -2798,7 +2796,11 @@ ${resolvedMessage}`;
       if (
         requiresFileActions &&
         !shouldAllowClarificationAfterRetry &&
-        (!this._hasEditActions(parsedResponse.actions) ||
+        (!this._hasStructuredEditPipelineActions(
+          finalIntent,
+          userMessage,
+          parsedResponse.actions
+        ) ||
           retryHadIncompleteStructuredEdits) &&
         !abortSignal?.aborted
       ) {
@@ -4207,6 +4209,9 @@ ${resolvedMessage}`;
       "- If the user wants a live preview of the active previewable file, use `PREVIEW: open`.",
       "- If the user wants you to inspect/study/analyze the live preview, detect render/runtime issues, or fix problems found from the preview, use `PREVIEW: inspect`.",
       "- If the user asks for the extension's AI performance report or self-healing/performance diagnostics, use `PERFORMANCE: show`.",
+      "- For edit requests, prefer a grounded tool loop: inspect the real file/workspace state, make the smallest correct PATCH or FILE change, then verify with focused checks.",
+      "- Use `READ: <path>` when you need the exact current contents of a workspace file before editing.",
+      "- Use `GREP: <query>` when you need symbol, string, or call-site search across indexed workspace files before editing.",
       "- You have FULL internet access via FETCH: action. Use it when:",
       "  * User asks about current events, news, politics, wars, conflicts, or any time-sensitive topics",
       "  * Output FETCH: URL on its own line, then CONTINUE your response",
@@ -4438,6 +4443,10 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Ensure backward compatibility unless breaking changes are explicitly requested
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
+- Follow a grounded edit loop when needed:
+  1. Inspect the real file or workspace state first when context is incomplete.
+  2. Make the smallest correct PATCH or FILE change.
+  3. Add focused verification when it materially proves the fix.
 
 **CRITICAL: Choose the right edit format:**
 
@@ -4507,12 +4516,16 @@ function greet(name) {
 }
 \`\`\`
 
-You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
-When the current file state is unclear, use CMD inspection first. When the fix should be proven, include focused CMD verification after the edit.
+You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
+When the current file state is unclear, inspect first instead of guessing.
+Use READ for exact file contents, GREP for workspace symbol/text search, and focused CMD checks when they directly confirm the fix.
+After edits, include focused verification CMDs when they materially prove the change.
 Safe high-value CMD patterns include project search/read commands and targeted verification such as npm run lint, npm test, node --check, python -m py_compile, or similar project-local checks.
+READ: src/path/to/file.js
+GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
       case "scan":
         return `${base}
 ${rules}
@@ -4568,8 +4581,10 @@ Rules:
 - Work like Codex: do the work directly and do not restate the plan.
 - Do not continue, quote, or paraphrase the previous reply.
 - If the user asked you to change code/files, include at least one PATCH: or FILE: action.
+- If you genuinely need more ground truth before editing, you may instead return READ:, GREP:, or focused inspection CMD: actions only.
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
+- Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
@@ -4682,16 +4697,37 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
     return this._hasPatchActions(actions) || this._hasFileActions(actions);
   }
 
-  _hasRequiredActions(intent, userMessage, actions) {
+  _hasGroundingActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || typeof action.type !== "string") return false;
+      if (action.type === "read") {
+        return typeof action.path === "string" && action.path.trim().length > 0;
+      }
+      if (action.type === "grep") {
+        return typeof action.query === "string" && action.query.trim().length > 0;
+      }
+      if (action.type === "cmd") {
+        return typeof action.command === "string" && action.command.trim().length > 0;
+      }
+      return false;
+    });
+  }
+
+  _hasStructuredEditPipelineActions(intent, userMessage, actions) {
     if (!this._hasMeaningfulActions(actions)) {
       return false;
     }
 
     if (this._shouldForceStructuredEdit(intent, userMessage)) {
-      return this._hasEditActions(actions);
+      return this._hasEditActions(actions) || this._hasGroundingActions(actions);
     }
 
     return true;
+  }
+
+  _hasRequiredActions(intent, userMessage, actions) {
+    return this._hasStructuredEditPipelineActions(intent, userMessage, actions);
   }
 
   _hasIncompleteStructuredEditWarning(warnings) {
@@ -4740,6 +4776,12 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
         return (
           typeof action.content === "string" && action.content.trim().length > 0
         );
+      }
+      if (action.type === "read") {
+        return typeof action.path === "string" && action.path.trim().length > 0;
+      }
+      if (action.type === "grep") {
+        return typeof action.query === "string" && action.query.trim().length > 0;
       }
       return action.type === "mkdir" || action.type === "cmd";
     });
@@ -5752,6 +5794,33 @@ ${userMessage}`;
         path: normalizedPath,
         language: "text",
         content
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    const readRegex = /^READ:\s*(.+)$/gm;
+    while ((match = readRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+
+      actions.push({
+        type: "read",
+        path: normalizedPath
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    const grepRegex = /^GREP:\s*(.+)$/gm;
+    while ((match = grepRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const query = String(match[1] || "").trim();
+      if (!query) continue;
+
+      actions.push({
+        type: "grep",
+        query
       });
       markConsumedRange(match.index, match[0]);
     }

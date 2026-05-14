@@ -267,6 +267,30 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("parses READ and GREP actions as grounding steps for edit flows", () => {
+    const agent = new AIAgent();
+    const response = [
+      "READ: src/app.js",
+      "GREP: handleSubmit"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "read",
+        path: "src/app.js"
+      },
+      {
+        type: "grep",
+        query: "handleSubmit"
+      }
+    ]);
+    expect(
+      agent._hasRequiredActions("edit", "fix src/app.js for me", parsed.actions)
+    ).toBe(true);
+  });
+
   test("prefers source files over generated copies when matching path hints", () => {
     const agent = new AIAgent();
     agent.codebaseContext = new Map([

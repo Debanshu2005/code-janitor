@@ -991,6 +991,75 @@ describe("ChatPanel structured edit helpers", () => {
     ).toBe(false);
   });
 
+  test("detects inspection-only action sets for the grounded edit loop", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._hasOnlyInspectionActions([
+        { type: "read", path: "src/app.js" },
+        { type: "grep", query: "handleSubmit" }
+      ])
+    ).toBe(true);
+    expect(
+      panel._hasOnlyInspectionActions([
+        { type: "read", path: "src/app.js" },
+        { type: "patch", path: "src/app.js", search: "a", replace: "b" }
+      ])
+    ).toBe(false);
+  });
+
+  test("inspection round reads real file contents and re-prompts for executable edits", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-inspect-loop-"));
+    const relativePath = "src/app.js";
+    const fullPath = path.join(workspaceRoot, relativePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, "const answer = 41;\n", "utf8");
+
+    panel.agent = {
+      chat: jest.fn().mockResolvedValue({
+        text: "PATCH: src/app.js",
+        actions: [
+          {
+            type: "patch",
+            path: "src/app.js",
+            search: "const answer = 41;\n",
+            replace: "const answer = 42;\n"
+          }
+        ]
+      })
+    };
+    panel._postMessage = jest.fn();
+    panel._shouldSuppressInternalStatus = jest.fn(() => false);
+
+    const response = await panel._runAgenticInspectionRound(
+      "fix src/app.js",
+      [{ type: "read", path: relativePath }],
+      workspaceRoot,
+      { provider: "custom:test", model: "gpt-like" },
+      "fast"
+    );
+
+    expect(panel.agent.chat).toHaveBeenCalledTimes(1);
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("Inspection results:");
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("READ: src/app.js");
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("const answer = 41;");
+    expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
+      mode: "heavy",
+      intentOverride: "edit",
+      runtimeConfig: { provider: "custom:test", model: "gpt-like" },
+      skipHistory: true
+    });
+    expect(response.actions).toEqual([
+      {
+        type: "patch",
+        path: "src/app.js",
+        search: "const answer = 41;\n",
+        replace: "const answer = 42;\n"
+      }
+    ]);
+  });
+
   test("recovers a failed patch by requesting a broader patch and applying it", async () => {
     const panel = Object.create(ChatPanel.prototype);
     panel.chatMode = "fast";

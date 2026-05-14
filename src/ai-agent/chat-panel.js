@@ -16,6 +16,9 @@ const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
+const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
+const MAX_INSPECTION_RESULT_CHARS = 16000;
+const MAX_INSPECTION_MATCHES = 25;
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -121,7 +124,7 @@ class ChatPanel {
 
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -215,6 +218,7 @@ class ChatPanel {
     }
 
     const linePatterns = [
+      /^\s*(READ|GREP)\s*:\s*.+$/gim,
       /^\s*(CMD|MKDIR)\s*:\s*.+$/gim,
       /^\s*GRAPHIFY\s*:\s*open\s*$/gim,
       /^\s*LINT\s*:\s*active\s*$/gim,
@@ -248,6 +252,8 @@ class ChatPanel {
     const counts = {
       patch: 0,
       file: 0,
+      read: 0,
+      grep: 0,
       mkdir: 0,
       cmd: 0,
       other: 0
@@ -268,6 +274,12 @@ class ChatPanel {
     }
     if (counts.file) {
       parts.push(`${counts.file} file update${counts.file === 1 ? "" : "s"}`);
+    }
+    if (counts.read) {
+      parts.push(`${counts.read} file read${counts.read === 1 ? "" : "s"}`);
+    }
+    if (counts.grep) {
+      parts.push(`${counts.grep} workspace search${counts.grep === 1 ? "" : "es"}`);
     }
     if (counts.mkdir) {
       parts.push(`${counts.mkdir} folder change${counts.mkdir === 1 ? "" : "s"}`);
@@ -293,6 +305,10 @@ class ChatPanel {
         lines.push(`- Patch ${action.path || "the active file"}`);
       } else if (action.type === "file") {
         lines.push(`- Update ${action.path || "a file"}`);
+      } else if (action.type === "read") {
+        lines.push(`- Read ${action.path || "a file"}`);
+      } else if (action.type === "grep") {
+        lines.push(`- Search ${action.query || "the workspace"}`);
       } else if (action.type === "mkdir") {
         lines.push(`- Create folder ${action.path || "(unnamed)"}`);
       } else if (action.type === "cmd") {
@@ -3120,6 +3136,351 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     );
   }
 
+  _isInspectionAction(action) {
+    if (!action || typeof action.type !== "string") {
+      return false;
+    }
+
+    if (action.type === "read") {
+      return typeof action.path === "string" && action.path.trim().length > 0;
+    }
+
+    if (action.type === "grep") {
+      return typeof action.query === "string" && action.query.trim().length > 0;
+    }
+
+    if (action.type === "cmd") {
+      return this._isContextInspectionCommand(action.command);
+    }
+
+    return false;
+  }
+
+  _hasOnlyInspectionActions(actions = []) {
+    return Array.isArray(actions) &&
+      actions.length > 0 &&
+      actions.every((action) => this._isInspectionAction(action));
+  }
+
+  _formatInspectionTranscript(label, content, language = "") {
+    const source = String(content || "");
+    if (!source.trim()) {
+      return `${label}\n\`\`\`${language}\n[no output]\n\`\`\``;
+    }
+
+    if (source.length <= MAX_INSPECTION_RESULT_CHARS) {
+      return `${label}\n\`\`\`${language}\n${source}\n\`\`\``;
+    }
+
+    const headChars = Math.max(6000, Math.floor(MAX_INSPECTION_RESULT_CHARS * 0.6));
+    const tailChars = Math.max(3000, MAX_INSPECTION_RESULT_CHARS - headChars);
+    const head = source.slice(0, headChars);
+    const tail = source.slice(-tailChars);
+    const omitted = Math.max(0, source.length - head.length - tail.length);
+
+    return `${label}\n\`\`\`${language}\n${head}\n...\n[truncated ${omitted} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _buildInspectionMatcher(query) {
+    const raw = String(query || "").trim();
+    if (!raw) {
+      return {
+        description: "",
+        test: () => false
+      };
+    }
+
+    const regexMatch = raw.match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
+    if (regexMatch) {
+      try {
+        const flags = regexMatch[2].replace(/g/g, "");
+        const regex = new RegExp(regexMatch[1], flags);
+        return {
+          description: raw,
+          test: (line) => regex.test(line)
+        };
+      } catch {
+        // Fall back to literal matching below.
+      }
+    }
+
+    const lowered = raw.toLowerCase();
+    return {
+      description: raw,
+      test: (line) => String(line || "").toLowerCase().includes(lowered)
+    };
+  }
+
+  _displayInspectionPath(workspaceFolder, fullPath, fallbackPath = "") {
+    if (!fullPath) {
+      return String(fallbackPath || "");
+    }
+    if (!workspaceFolder) {
+      return fullPath.replace(/\\/g, "/");
+    }
+
+    const relativePath = path.relative(workspaceFolder, fullPath);
+    if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      return fullPath.replace(/\\/g, "/");
+    }
+
+    return relativePath.replace(/\\/g, "/");
+  }
+
+  async _runReadInspectionAction(action, workspaceFolder) {
+    const targetPath = String(action?.path || "").trim();
+    if (!targetPath) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "READ: [invalid path]",
+          "Error: READ path was empty."
+        )
+      };
+    }
+
+    const fullPath = this._resolveActionFilePath(workspaceFolder, targetPath);
+    const editor = this._findEditorForFile(fullPath) || this._getCurrentFileEditor();
+    let content = "";
+
+    try {
+      if (
+        editor?.document?.uri?.scheme === "file" &&
+        path.resolve(editor.document.fileName) === path.resolve(fullPath)
+      ) {
+        content = editor.document.getText();
+      } else {
+        content = await fs.readFile(fullPath, "utf8");
+      }
+    } catch (error) {
+      const displayPath = this._displayInspectionPath(
+        workspaceFolder,
+        fullPath,
+        targetPath
+      );
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `READ: ${displayPath}`,
+          `Error: ${error.message}`
+        )
+      };
+    }
+
+    const displayPath = this._displayInspectionPath(
+      workspaceFolder,
+      fullPath,
+      targetPath
+    );
+    const language = path.extname(displayPath).replace(/^\./, "");
+    return {
+      success: true,
+      transcript: this._formatInspectionTranscript(
+        `READ: ${displayPath}`,
+        content,
+        language
+      )
+    };
+  }
+
+  async _runGrepInspectionAction(action, workspaceFolder) {
+    const query = String(action?.query || "").trim();
+    if (!query) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "GREP: [empty query]",
+          "Error: GREP query was empty."
+        )
+      };
+    }
+
+    if (!workspaceFolder) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `GREP: ${query}`,
+          "Error: GREP requires an open workspace."
+        )
+      };
+    }
+
+    await this.agent.ensureCodebaseScanned(workspaceFolder);
+    const matcher = this._buildInspectionMatcher(query);
+    const matches = [];
+
+    for (const [relativePath, fileData] of this.agent.codebaseContext.entries()) {
+      const content = String(fileData?.content || "");
+      if (!content) continue;
+
+      const lines = content.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        if (!matcher.test(line)) continue;
+
+        matches.push(
+          `${relativePath}:${index + 1}: ${String(line || "").trim().slice(0, 220)}`
+        );
+        if (matches.length >= MAX_INSPECTION_MATCHES) {
+          break;
+        }
+      }
+
+      if (matches.length >= MAX_INSPECTION_MATCHES) {
+        break;
+      }
+    }
+
+    const output = matches.length > 0
+      ? matches.join("\n")
+      : "No matches found in indexed workspace files.";
+
+    return {
+      success: matches.length > 0,
+      transcript: this._formatInspectionTranscript(
+        `GREP: ${matcher.description || query}`,
+        output,
+        "text"
+      )
+    };
+  }
+
+  async _runInspectionCommandAction(action, workspaceFolder) {
+    const command = String(action?.command || "").trim();
+    if (!command) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "CMD: [empty command]",
+          "Error: inspection command was empty."
+        )
+      };
+    }
+
+    if (!this._isContextInspectionCommand(command)) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `CMD: ${command}`,
+          "Error: only read-only inspection commands can run in the grounding phase."
+        )
+      };
+    }
+
+    const validation = this.agent.validateCommand(command);
+    if (!validation.allowed) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `CMD: ${command}`,
+          `Error: ${validation.reason}`
+        )
+      };
+    }
+
+    const result = await this.agent.executeCommand(command, workspaceFolder);
+    const output = result.success
+      ? result.output || "Done."
+      : `${result.error || "Command failed"}${result.output ? `\n${result.output}` : ""}`;
+    return {
+      success: result.success,
+      transcript: this._formatInspectionTranscript(
+        `CMD: ${command}`,
+        output,
+        "text"
+      )
+    };
+  }
+
+  async _runInspectionAction(action, workspaceFolder) {
+    if (action?.type === "read") {
+      return this._runReadInspectionAction(action, workspaceFolder);
+    }
+    if (action?.type === "grep") {
+      return this._runGrepInspectionAction(action, workspaceFolder);
+    }
+    if (action?.type === "cmd") {
+      return this._runInspectionCommandAction(action, workspaceFolder);
+    }
+    return {
+      success: false,
+      transcript: this._formatInspectionTranscript(
+        `UNKNOWN: ${action?.type || "action"}`,
+        "Error: unsupported inspection action."
+      )
+    };
+  }
+
+  _buildInspectionFollowUpPrompt(originalRequest, inspectionResults = []) {
+    const transcript = inspectionResults
+      .map((result) => String(result?.transcript || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+    return `You are continuing an edit request after a real workspace inspection round.
+Return executable structured actions only.
+
+Original user request:
+${originalRequest}
+
+Inspection results:
+${transcript || "[no inspection output]"}
+
+Now continue the professional edit loop:
+- Use the inspection results above as ground truth.
+- If you now have enough evidence, return PATCH: or FILE: actions to make the change.
+- Prefer PATCH for existing files and keep SEARCH blocks unique.
+- Preserve unrelated code, comments, formatting, and behavior.
+- Add focused verification CMD: only when it materially proves the fix.
+- Do not repeat the same READ:, GREP:, or inspection CMD: actions unless the earlier result failed or was insufficient.
+- Do not output explanations.`;
+  }
+
+  async _runAgenticInspectionRound(
+    originalRequest,
+    actions,
+    workspaceFolder,
+    runtimeConfig,
+    requestMode
+  ) {
+    const inspectionActions = Array.isArray(actions)
+      ? actions.filter((action) => this._isInspectionAction(action))
+      : [];
+    if (inspectionActions.length === 0) {
+      return {
+        error: "No inspection actions were available to run."
+      };
+    }
+
+    const inspectionResults = [];
+    for (const action of inspectionActions) {
+      inspectionResults.push(await this._runInspectionAction(action, workspaceFolder));
+    }
+
+    const nextMode = requestMode === "fast" ? "heavy" : requestMode;
+    return this.agent.chat(
+      this._buildInspectionFollowUpPrompt(originalRequest, inspectionResults),
+      workspaceFolder,
+      null,
+      null,
+      {
+        mode: nextMode,
+        intentOverride: "edit",
+        runtimeConfig,
+        skipHistory: true,
+        onStatus: (text) => {
+          if (this._shouldSuppressInternalStatus(text)) {
+            return;
+          }
+          this._postMessage({
+            type: "status",
+            text: `Inspection follow-up: ${text}`
+          });
+        }
+      }
+    );
+  }
+
   _shouldSuppressGeneratedCommand(
     isEditLikeIntent,
     hasExplicitCommandRequest,
@@ -4909,13 +5270,44 @@ ${trimmedText}`;
           const actionSummary = response.actions.map(a => {
             if (a.type === "graphify") return "graphify:open";
             if (a.type === "preview_inspect") return "preview:inspect";
-            return `${a.type}:${a.path || a.command || ""}`;
+            return `${a.type}:${a.path || a.query || a.command || ""}`;
           }).join(", ");
           this._postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
         }
 
         if (response.actions && response.actions.length > 0) {
-          if (!hasDirectStructuredActions && isEditLikeIntent) {
+          let inspectionRounds = 0;
+          while (
+            isEditLikeIntent &&
+            this._hasOnlyInspectionActions(response.actions) &&
+            inspectionRounds < MAX_AGENTIC_INSPECTION_ROUNDS
+          ) {
+            inspectionRounds += 1;
+            this._postMessage({
+              type: "status",
+              text: `Inspection round ${inspectionRounds}: gathering workspace evidence before editing...`
+            });
+            response = await this._runAgenticInspectionRound(
+              requestText,
+              response.actions,
+              workspaceFolder,
+              activeRuntimeConfig || (await this._getEffectiveAiConfig()),
+              requestMode
+            );
+            if (!response || response.error) {
+              this._postMessage({
+                type: "error",
+                text: response?.error || "Inspection follow-up failed."
+              });
+              return;
+            }
+          }
+
+          if (
+            !hasDirectStructuredActions &&
+            isEditLikeIntent &&
+            !this._hasOnlyInspectionActions(response.actions)
+          ) {
             const gateResult = await this._runGStackEditGate(
               requestText,
               response,
