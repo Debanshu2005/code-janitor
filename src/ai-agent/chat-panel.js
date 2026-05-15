@@ -13,6 +13,7 @@ const {
 const { registry: toolRegistry } = require("./tools");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
+const { analyzeFile } = require("./review-quality-analyzer");
 const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
@@ -57,6 +58,10 @@ class ChatPanel {
     this._userStoppedGeneration = false;
     this._undoStack = [];
     this._undoIdCounter = 0;
+    
+    // Initialize review diagnostic collection
+    this.reviewDiagnosticCollection = vscode.languages.createDiagnosticCollection("bobReview");
+    context.subscriptions.push(this.reviewDiagnosticCollection);
 
     this.agent.setActiveEditor(this.lastActiveEditor);
     this.agent.showThinking = this.showThinking;
@@ -6260,6 +6265,93 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "error",
                   text: `Error analyzing code definitions: ${error.message}`
+                });
+              }
+            } else if (action.type === "submit_review_findings") {
+              // Submit review findings to the Bob Findings panel
+              this._postMessage({ type: "status", text: "Submitting review findings..." });
+              try {
+                const result = await toolRegistry.executeTool(
+                  "submit_review_findings",
+                  { issues: action.issues || [] },
+                  workspaceFolder,
+                  { reviewDiagnosticCollection: this.reviewDiagnosticCollection }
+                );
+                
+                if (result.success) {
+                  const summary = result.summary;
+                  const severityText = [
+                    summary.bySeverity.critical > 0 ? `${summary.bySeverity.critical} critical` : null,
+                    summary.bySeverity.high > 0 ? `${summary.bySeverity.high} high` : null,
+                    summary.bySeverity.medium > 0 ? `${summary.bySeverity.medium} medium` : null,
+                    summary.bySeverity.low > 0 ? `${summary.bySeverity.low} low` : null
+                  ].filter(Boolean).join(", ");
+                  
+                  this._postMessage({
+                    type: "applied",
+                    text: `✅ Submitted ${summary.totalIssues} review finding(s) across ${summary.filesAffected} file(s): ${severityText}. Check the Problems panel for details.`
+                  });
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to submit review findings: ${result.error || "Unknown error"}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error submitting review findings: ${error.message}`
+                });
+              }
+            } else if (action.type === "analyze_file_quality") {
+              // Analyze file quality and submit findings
+              const filePath = action.path || (this.lastActiveEditor?.document?.uri?.fsPath
+                ? path.relative(workspaceFolder, this.lastActiveEditor.document.uri.fsPath)
+                : null);
+              
+              if (!filePath) {
+                this._postMessage({
+                  type: "error",
+                  text: "No file specified for quality analysis. Please specify a file path or open a file."
+                });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Analyzing code quality for ${filePath}...` });
+              try {
+                const analysisResult = await analyzeFile(filePath, workspaceFolder, action.options || {});
+                
+                if (analysisResult.success && analysisResult.issues.length > 0) {
+                  // Submit the findings
+                  const submitResult = await toolRegistry.executeTool(
+                    "submit_review_findings",
+                    { issues: analysisResult.issues },
+                    workspaceFolder,
+                    { reviewDiagnosticCollection: this.reviewDiagnosticCollection }
+                  );
+                  
+                  if (submitResult.success) {
+                    const summary = analysisResult.summary;
+                    this._postMessage({
+                      type: "applied",
+                      text: `✅ Quality analysis complete for ${filePath}. Found ${summary.total} issue(s): ${summary.critical} critical, ${summary.high} high, ${summary.medium} medium, ${summary.low} low. Check the Problems panel.`
+                    });
+                  }
+                } else if (analysisResult.success) {
+                  this._postMessage({
+                    type: "applied",
+                    text: `✅ Quality analysis complete for ${filePath}. No issues found.`
+                  });
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to analyze ${filePath}: ${analysisResult.error}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error analyzing file quality: ${error.message}`
                 });
               }
             } else if (action.type === "graphify") {

@@ -12,6 +12,7 @@ const { listCodeDefinitionNames } = require("./list-code-definition-names");
 const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
 const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-question");
 const { attemptCompletion, validateAttemptCompletion } = require("./attempt-completion");
+const { submitReviewFindings, validateIssues, MAX_ISSUES_PER_SUBMISSION } = require("./submit-review-findings");
 
 /**
  * Tool definitions with metadata
@@ -250,6 +251,52 @@ const y = 4;
 })`
       }
     ]
+  },
+
+  submit_review_findings: {
+    name: "submit_review_findings",
+    description: "Create multiple formal review issues in a single call that will appear in the Bob Findings panel",
+    handler: submitReviewFindings,
+    validator: validateIssues,
+    params: {
+      issues: {
+        type: "array",
+        required: true,
+        description: "Array of issue objects with category, type, severity, title, message, path, line, issueScope, and optional column, endLine, endColumn, suggestion",
+        maxItems: MAX_ISSUES_PER_SUBMISSION
+      }
+    },
+    examples: [
+      {
+        description: "Submit multiple review findings",
+        usage: `submit_review_findings([
+  {
+    category: "maintainability",
+    type: "magic-numbers-strings",
+    severity: "medium",
+    title: "Magic number should be constant",
+    message: "The magic number 42 should be extracted to a named constant",
+    path: "src/utils/calculator.ts",
+    line: 15,
+    column: 4,
+    endLine: 16,
+    endColumn: 5,
+    issueScope: "Single File"
+  },
+  {
+    category: "security",
+    type: "sensitive-data-logging",
+    severity: "critical",
+    title: "Hardcoded API key",
+    message: "API key hardcoded in source code",
+    path: "src/config/api.ts",
+    line: 8,
+    suggestion: "Move to environment variables",
+    issueScope: "Single File"
+  }
+])`
+      }
+    ]
   }
 };
 
@@ -387,6 +434,8 @@ class ToolRegistry {
         result = await tool.handler(params, workspaceRoot, executionContext);
       } else if (toolName === "attempt_completion") {
         result = await tool.handler(params, workspaceRoot, executionContext);
+      } else if (toolName === "submit_review_findings") {
+        result = await tool.handler(params.issues, workspaceRoot, executionContext);
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);
       }

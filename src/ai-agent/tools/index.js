@@ -32,6 +32,15 @@ const {
   validateAttemptCompletion
 } = require("./attempt-completion");
 const { registry, ToolRegistry, TOOL_DEFINITIONS } = require("./tool-registry");
+const {
+  submitReviewFindings,
+  validateIssues: validateReviewIssues,
+  VALID_CATEGORIES,
+  VALID_TYPES,
+  VALID_SEVERITIES,
+  VALID_SCOPES,
+  MAX_ISSUES_PER_SUBMISSION
+} = require("./submit-review-findings");
 
 module.exports = {
   // Apply Diff
@@ -73,6 +82,15 @@ module.exports = {
   // Attempt Completion
   attemptCompletion,
   validateAttemptCompletion,
+  
+  // Review Findings
+  submitReviewFindings,
+  validateReviewIssues,
+  VALID_CATEGORIES,
+  VALID_TYPES,
+  VALID_SEVERITIES,
+  VALID_SCOPES,
+  MAX_ISSUES_PER_SUBMISSION,
   
   // Tool Registry
   registry,
