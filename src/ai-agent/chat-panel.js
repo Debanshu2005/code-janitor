@@ -137,7 +137,7 @@ class ChatPanel {
     return match.index + (match[1] ? match[1].length : 0);
   }
 
-  _createStreamDisplayController(options = {}) {
+  _createStreamDisplayController() {
     let bufferedText = "";
     let emittedContent = false;
     let visibleText = "";
@@ -331,7 +331,7 @@ class ChatPanel {
     return lines.join("\n");
   }
 
-  _buildVisibleAssistantText(response, options = {}) {
+  _buildVisibleAssistantText(response) {
     return String(response?.text || "");
   }
 
@@ -356,7 +356,7 @@ class ChatPanel {
     return "Code Janitor hid a partial response because the AI stream ended before completion. Retry the request to get a complete answer.";
   }
 
-  _handleChatStreamFailure(error, streamController) {
+  _handleChatStreamFailure(error) {
     const userStopped = this._userStoppedGeneration === true;
     this._userStoppedGeneration = false;
 
@@ -741,7 +741,11 @@ class ChatPanel {
           }
         } finally {
           if (tempPath) {
-            try { fsSync.unlinkSync(tempPath); } catch (_) {}
+            try {
+              fsSync.unlinkSync(tempPath);
+            } catch (_) {
+              // Ignore temp cleanup errors after syntax validation.
+            }
           }
         }
       } else {
@@ -4181,7 +4185,7 @@ ${trimmedText}`;
     if (gitStatus?.success && gitStatus.output.trim()) {
       const status = gitStatus.output.trim();
       // Only report if file has uncommitted changes
-      if (status.startsWith('M ') || status.startsWith('A ') || status.startsWith('D ')) {
+      if (status.startsWith("M ") || status.startsWith("A ") || status.startsWith("D ")) {
         results.diagnostics.push({
           type: "git",
           status: status,
@@ -4191,7 +4195,7 @@ ${trimmedText}`;
     }
 
     // Run syntax check only for code files
-    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.html', '.htm'].includes(ext)) {
+    if ([".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".html", ".htm"].includes(ext)) {
       const syntaxCheck = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
       if (syntaxCheck && !syntaxCheck.skipped && !syntaxCheck.success) {
         // Only report syntax errors, not successes
@@ -4231,7 +4235,7 @@ ${trimmedText}`;
 
     // Run syntax checks for each file type and auto-repair when we can.
     for (const [lang, files] of Object.entries(fileTypes)) {
-      if (files.length === 0 || lang === 'c') continue; // Skip C/C++ (needs compiler)
+      if (files.length === 0 || lang === "c") continue; // Skip C/C++ (needs compiler)
       
       for (const file of files) {
         const fullPath = path.join(workspaceFolder, file);
@@ -4505,7 +4509,7 @@ ${trimmedText}`;
       });
       
     } catch (err) {
-      console.error(`[ChatPanel] Critical error in _fetchAndSendModels:`, err);
+      console.error("[ChatPanel] Critical error in _fetchAndSendModels:", err);
       // Still send defaults even if config fails
       const defaultModels = this._getFallbackModelsForProvider(provider);
       
@@ -6354,7 +6358,7 @@ ${trimmedText}`;
               });
             }
           }).catch(err => {
-            console.warn('[ChatPanel] Background key presence check failed:', err);
+            console.warn("[ChatPanel] Background key presence check failed:", err);
           });
         }
         
@@ -6445,7 +6449,6 @@ ${trimmedText}`;
           }
           
           // Send provider/key state immediately; live models are discovered below.
-          const customProvider = this._getCustomProviderById(message.provider);
           const defaultModels = this._getModelsForInitialProviderState(message.provider);
           
           if (this.panel) {
@@ -6480,7 +6483,7 @@ ${trimmedText}`;
               });
             }
           }).catch(err => {
-            console.warn('[ChatPanel] Background key presence check failed:', err);
+            console.warn("[ChatPanel] Background key presence check failed:", err);
           });
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);

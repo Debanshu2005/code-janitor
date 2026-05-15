@@ -181,16 +181,16 @@ class BaseFixer {
    */
   debug() {
     console.log("BaseFixer, Debug:");
-    console.log(`  Code, length: ${this.code.length}`);
-    console.log(`  File, path: ${this.filePath || "(none)"}`);
-    console.log(`  Fixes: ${this.getFixCount()}`);
+    console.log(`  Code length: ${this.code.length}`);
+    console.log(`  File path: ${this.filePath || "(none)"}`);
+    console.log(`  Fixes: ${this.getFixCount()}`);
 
     if (this.hasFixes()) {
       this.fixes.forEach((fix, i) => {
         const [start, end] = fix.range;
         const preview =
           fix.text.substring(0, 50) + (fix.text.length > 50 ? "..." : "");
-        console.log(`    Fix ${i}: [${start}, ${end}] -> "${preview}"`);
+        console.log(`    Fix ${i}: [${start}, ${end}] -> "${preview}"`);
       });
     }
   }

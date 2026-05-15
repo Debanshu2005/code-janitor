@@ -44,7 +44,7 @@ function countCommentLines(lines, family) {
     if (family === "python") {
       if (
         trimmed.startsWith("#") ||
-        trimmed.startsWith('"""') ||
+        trimmed.startsWith("\"\"\"") ||
         trimmed.startsWith("'''")
       ) {
         count += 1;

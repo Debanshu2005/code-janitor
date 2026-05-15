@@ -1086,8 +1086,8 @@ describe("ChatPanel structured edit helpers", () => {
           {
             type: "patch",
             path: "package.json",
-            search: '"version": "1.16.5"',
-            replace: '"version": "1.16.6"'
+            search: "\"version\": \"1.16.5\"",
+            replace: "\"version\": \"1.16.6\""
           }
         ]
       }),
@@ -1107,10 +1107,10 @@ describe("ChatPanel structured edit helpers", () => {
       {
         type: "patch",
         path: "package.json",
-        search: '"version": "1.16.4"',
-        replace: '"version": "1.16.6"'
+        search: "\"version\": \"1.16.4\"",
+        replace: "\"version\": \"1.16.6\""
       },
-      '{\n  "version": "1.16.5"\n}\n',
+      "{\n  \"version\": \"1.16.5\"\n}\n",
       false,
       {},
       runtimeConfig
@@ -1125,7 +1125,7 @@ describe("ChatPanel structured edit helpers", () => {
     });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",
-      '{\n  "version": "1.16.6"\n}\n',
+      "{\n  \"version\": \"1.16.6\"\n}\n",
       false,
       { workspaceRoot: "/workspace" }
     );
@@ -1152,8 +1152,8 @@ describe("ChatPanel structured edit helpers", () => {
             {
               type: "patch",
               path: "package.json",
-              search: '"version": "9.9.9"',
-              replace: '"version": "1.16.6"'
+              search: "\"version\": \"9.9.9\"",
+              replace: "\"version\": \"1.16.6\""
             }
           ]
         })
@@ -1163,7 +1163,7 @@ describe("ChatPanel structured edit helpers", () => {
             {
               type: "file",
               path: "package.json",
-              content: '{\n  "version": "1.16.6"\n}\n'
+              content: "{\n  \"version\": \"1.16.6\"\n}\n"
             }
           ]
         }),
@@ -1183,10 +1183,10 @@ describe("ChatPanel structured edit helpers", () => {
       {
         type: "patch",
         path: "package.json",
-        search: '"version": "1.16.4"',
-        replace: '"version": "1.16.6"'
+        search: "\"version\": \"1.16.4\"",
+        replace: "\"version\": \"1.16.6\""
       },
-      '{\n  "version": "1.16.5"\n}\n',
+      "{\n  \"version\": \"1.16.5\"\n}\n",
       false,
       {},
       runtimeConfig
@@ -1206,7 +1206,7 @@ describe("ChatPanel structured edit helpers", () => {
     });
     expect(panel.agent.applyChanges).toHaveBeenCalledWith(
       "package.json",
-      '{\n  "version": "1.16.6"\n}\n',
+      "{\n  \"version\": \"1.16.6\"\n}\n",
       false,
       { workspaceRoot: "/workspace" }
     );
@@ -1289,7 +1289,7 @@ describe("ChatPanel structured edit helpers", () => {
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(
       fullPath,
-      '<!DOCTYPE html><html><head><link rel="stylesheet" href="./missing.css"></head><body></body></html>',
+      "<!DOCTYPE html><html><head><link rel=\"stylesheet\" href=\"./missing.css\"></head><body></body></html>",
       "utf8"
     );
 

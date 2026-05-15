@@ -487,7 +487,7 @@ describe("AIAgent structured edit parsing", () => {
   test("blocks interpreter escape hatches and mutating git commands", () => {
     const agent = new AIAgent();
 
-    expect(agent.validateCommand('node -e "console.log(process.env)"')).toEqual({
+    expect(agent.validateCommand("node -e \"console.log(process.env)\"")).toEqual({
       allowed: false,
       reason: "Blocked unsafe, global, or network command"
     });
@@ -508,11 +508,11 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     await expect(
-      agent._runSyntaxCheck("settings.json", null, '{"ok":true}')
+      agent._runSyntaxCheck("settings.json", null, "{\"ok\":true}")
     ).resolves.toEqual({ success: true, output: "" });
 
     await expect(
-      agent._runSyntaxCheck("settings.json", null, '{"ok": }')
+      agent._runSyntaxCheck("settings.json", null, "{\"ok\": }")
     ).resolves.toMatchObject({
       success: false,
       error: expect.stringContaining("JSON parse error")
@@ -596,7 +596,7 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     expect(
-      agent._extractPathHints('find "chat-panel" and inspect `COMMIT_EDITMSG` alongside graph-loader')
+      agent._extractPathHints("find \"chat-panel\" and inspect `COMMIT_EDITMSG` alongside graph-loader")
     ).toEqual(
       expect.arrayContaining(["chat-panel", "commit_editmsg", "graph-loader"])
     );
@@ -701,8 +701,8 @@ describe("AIAgent structured edit parsing", () => {
 
     const instruction = agent._buildSystemInstruction("scan", "", "fast", true);
 
-    expect(instruction).toContain('heading titled "Thinking"');
-    expect(instruction).toContain('heading titled "Answer"');
+    expect(instruction).toContain("heading titled \"Thinking\"");
+    expect(instruction).toContain("heading titled \"Answer\"");
     expect(instruction).toContain("Do not expose hidden internal chain-of-thought");
   });
 
@@ -711,8 +711,8 @@ describe("AIAgent structured edit parsing", () => {
 
     const instruction = agent._buildSystemInstruction("edit", "", "fast", true);
 
-    expect(instruction).not.toContain('heading titled "Thinking"');
-    expect(instruction).not.toContain('heading titled "Answer"');
+    expect(instruction).not.toContain("heading titled \"Thinking\"");
+    expect(instruction).not.toContain("heading titled \"Answer\"");
   });
 
   test("fast mode uses full execution rules for create requests", () => {
@@ -769,7 +769,7 @@ describe("AIAgent structured edit parsing", () => {
 
     const prompt = agent._buildFileOnlyRetryPrompt("FILE: index.html");
 
-    expect(prompt).toContain('Do not omit sections or replace them with placeholders');
+    expect(prompt).toContain("Do not omit sections or replace them with placeholders");
     expect(prompt).toContain("Do not truncate the file mid-tag, mid-block, or mid-function.");
     expect(prompt).toContain(
       "Preserve required closing tags, braces, and imports so the file is complete from start to finish."
@@ -982,7 +982,7 @@ describe("AIAgent structured edit parsing", () => {
     expect(hint).toContain("Language-aware PATCH helper for Python");
     expect(hint).toContain("Preserve indentation exactly");
     expect(hint).toContain("`from pathlib import Path`");
-    expect(hint).toContain('`if __name__ == "__main__":`');
+    expect(hint).toContain("`if __name__ == \"__main__\":`");
   });
 
   test("latency profile respects configured token budgets and boosts edit requests", () => {
@@ -1357,8 +1357,8 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
     const encoder = new TextEncoder();
     const chunks = [
-      encoder.encode('data: {"choices":[{"delta":{"content":"Hel'),
-      encoder.encode('lo"}}]}\n\ndata: {"choices":[{"delta":{"content":" world"}}]}\n\n')
+      encoder.encode("data: {\"choices\":[{\"delta\":{\"content\":\"Hel"),
+      encoder.encode("lo\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n")
     ];
     let index = 0;
 

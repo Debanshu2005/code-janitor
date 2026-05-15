@@ -1090,7 +1090,7 @@ class AIAgent {
           };
         }
       } catch (err) {
-        console.warn('[Agent] NVIDIA model discovery failed, using configured model:', err.message);
+        console.warn("[Agent] NVIDIA model discovery failed, using configured model:", err.message);
       }
       
       // Fallback: use configured model without discovery
@@ -1130,7 +1130,7 @@ class AIAgent {
           };
         }
       } catch (err) {
-        console.warn('[Agent] Ollama model discovery failed, using configured model:', err.message);
+        console.warn("[Agent] Ollama model discovery failed, using configured model:", err.message);
       }
       
       // Fallback: use configured model without discovery
@@ -2006,7 +2006,9 @@ class AIAgent {
       if (abortSignal?.aborted || shouldStop?.()) {
         try {
           reader.cancel();
-        } catch {}
+        } catch {
+          // Ignore cancellation errors while shutting down the stream.
+        }
         break;
       }
 
@@ -2031,7 +2033,9 @@ class AIAgent {
           if (shouldStop?.()) {
             try {
               reader.cancel();
-            } catch {}
+            } catch {
+              // Ignore cancellation errors while shutting down the stream.
+            }
             streamDone = true;
             break;
           }
@@ -5331,7 +5335,9 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
               .replace(/\\/g, "/")
           );
         }
-      } catch {}
+      } catch {
+        // Ignore filesystem races while probing optional path matches.
+      }
     }
 
     return Array.from(matches).sort();
@@ -5685,7 +5691,11 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
         fsSync.writeFileSync(tempPath, fileContent, "utf8");
         const tempCmd = this._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"));
         const result = await this.executeCommand(tempCmd, workspaceFolder);
-        try { fsSync.unlinkSync(tempPath); } catch (_) {}
+        try {
+          fsSync.unlinkSync(tempPath);
+        } catch (_) {
+          // Ignore temp cleanup errors after the syntax check completes.
+        }
         
         // FIXED: Only consider it an error if the command failed (non-zero exit)
         // Don't treat stdout/stderr output as errors - many tools print to stdout on success
@@ -5695,7 +5705,11 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
           error: result.success ? null : (result.error || result.output || "Syntax check failed")
         };
       } catch (err) {
-        try { fsSync.unlinkSync(tempPath); } catch (_) {}
+        try {
+          fsSync.unlinkSync(tempPath);
+        } catch (_) {
+          // Ignore temp cleanup errors after a syntax check failure.
+        }
         return { success: false, error: `Temp file syntax check failed: ${err.message}`, output: err.message };
       }
     }
@@ -6527,100 +6541,95 @@ ${userMessage}`;
       workspaceRoot: workspaceRootOverride
     } = context;
     
-    try {
-      const { workspaceRoot, fullPath, outsideWorkspace } =
-        this._resolveWorkspacePath(filePath, workspaceRootOverride);
+    const { workspaceRoot, fullPath, outsideWorkspace } =
+      this._resolveWorkspacePath(filePath, workspaceRootOverride);
 
-      // If outside workspace and not explicitly allowed, ask for permission
-      if (outsideWorkspace && !allowOutsideWorkspace) {
-        return { success: false, error: "outside_workspace", path: fullPath };
-      }
-
-      let oldContent = "";
-      let created = false;
-      try {
-        const stat = await fs.stat(fullPath);
-        if (stat.isDirectory()) {
-          return {
-            success: false,
-            error: `Target path resolves to a directory, not a file: ${filePath}`
-          };
-        }
-        oldContent = await fs.readFile(fullPath, "utf8");
-      } catch (e) {
-        if (e.code !== "ENOENT") throw e;
-        created = true;
-      }
-
-      const isReadme =
-        typeof fullPath === "string" &&
-        path.basename(fullPath).toLowerCase() === "readme.md";
-      const trimmedNewContent = (newContent || "").trim();
-
-      if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
-        return {
-          success: false,
-          error: "Refusing to empty an existing file without explicit user request."
-        };
-      }
-
-      if (isReadme && trimmedNewContent.length === 0) {
-        return {
-          success: false,
-          error: "Refusing to delete or empty README.md without explicit user request."
-        };
-      }
-
-      if (!created && this._isDocFile(fullPath) && !allowDocTruncate) {
-        const oldTrimmedLength = (oldContent || "").trim().length;
-        const newTrimmedLength = trimmedNewContent.length;
-        const looksLikeMajorTruncate =
-          oldTrimmedLength > 240 &&
-          newTrimmedLength < Math.max(120, Math.floor(oldTrimmedLength * 0.2));
-
-        if (looksLikeMajorTruncate) {
-          return {
-            success: false,
-            error:
-              "Refusing to heavily truncate documentation without explicit user request."
-          };
-        }
-      }
-
-      const changeSummary = this._summarizeLineChanges(oldContent, newContent);
-      await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(fullPath, newContent, "utf8");
-
-      const relativePath = workspaceRoot
-        ? path.relative(workspaceRoot, fullPath)
-        : fullPath;
-
-      if (workspaceRoot && !outsideWorkspace) {
-        this.codebaseContext.set(relativePath, {
-          content: newContent,
-          fullPath,
-          fileName: path.basename(relativePath).toLowerCase(),
-          directory: path.dirname(relativePath).toLowerCase()
-        });
-      }
-
-      return {
-        success: true,
-        path: fullPath,
-        relativePath,
-        created,
-        previousContent: created ? null : oldContent,
-        newContent,
-        changeSummary: changeSummary.summary,
-        changed: changeSummary.changed,
-        syntaxCheckCmd: this._getSyntaxCheckCommand(
-          relativePath.replace(/\\/g, "/")
-        )
-      };
-    } catch (error) {
-      // Let error handler diagnose
-      throw error;
+    // If outside workspace and not explicitly allowed, ask for permission
+    if (outsideWorkspace && !allowOutsideWorkspace) {
+      return { success: false, error: "outside_workspace", path: fullPath };
     }
+
+    let oldContent = "";
+    let created = false;
+    try {
+      const stat = await fs.stat(fullPath);
+      if (stat.isDirectory()) {
+        return {
+          success: false,
+          error: `Target path resolves to a directory, not a file: ${filePath}`
+        };
+      }
+      oldContent = await fs.readFile(fullPath, "utf8");
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      created = true;
+    }
+
+    const isReadme =
+      typeof fullPath === "string" &&
+      path.basename(fullPath).toLowerCase() === "readme.md";
+    const trimmedNewContent = (newContent || "").trim();
+
+    if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
+      return {
+        success: false,
+        error: "Refusing to empty an existing file without explicit user request."
+      };
+    }
+
+    if (isReadme && trimmedNewContent.length === 0) {
+      return {
+        success: false,
+        error: "Refusing to delete or empty README.md without explicit user request."
+      };
+    }
+
+    if (!created && this._isDocFile(fullPath) && !allowDocTruncate) {
+      const oldTrimmedLength = (oldContent || "").trim().length;
+      const newTrimmedLength = trimmedNewContent.length;
+      const looksLikeMajorTruncate =
+        oldTrimmedLength > 240 &&
+        newTrimmedLength < Math.max(120, Math.floor(oldTrimmedLength * 0.2));
+
+      if (looksLikeMajorTruncate) {
+        return {
+          success: false,
+          error:
+            "Refusing to heavily truncate documentation without explicit user request."
+        };
+      }
+    }
+
+    const changeSummary = this._summarizeLineChanges(oldContent, newContent);
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.writeFile(fullPath, newContent, "utf8");
+
+    const relativePath = workspaceRoot
+      ? path.relative(workspaceRoot, fullPath)
+      : fullPath;
+
+    if (workspaceRoot && !outsideWorkspace) {
+      this.codebaseContext.set(relativePath, {
+        content: newContent,
+        fullPath,
+        fileName: path.basename(relativePath).toLowerCase(),
+        directory: path.dirname(relativePath).toLowerCase()
+      });
+    }
+
+    return {
+      success: true,
+      path: fullPath,
+      relativePath,
+      created,
+      previousContent: created ? null : oldContent,
+      newContent,
+      changeSummary: changeSummary.summary,
+      changed: changeSummary.changed,
+      syntaxCheckCmd: this._getSyntaxCheckCommand(
+        relativePath.replace(/\\/g, "/")
+      )
+    };
   }
 
   async createFolder(folderPath, allowOutsideWorkspace = false, options = {}) {
@@ -6646,43 +6655,38 @@ ${userMessage}`;
       workspaceRoot: workspaceRootOverride
     } = context;
     
-    try {
-      const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim();
-      let targetPath = normalizedFolderPath;
+    const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim();
+    let targetPath = normalizedFolderPath;
 
-      // If model gives MKDIR for a file path (e.g., "src/app.js"), use parent directory.
-      if (path.extname(normalizedFolderPath)) {
-        targetPath = path.dirname(normalizedFolderPath);
-      }
-
-      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(
-        targetPath,
-        workspaceRootOverride
-      );
-      
-      // If outside workspace and not explicitly allowed, return error for chat panel to handle
-      if (outsideWorkspace && !allowOutsideWorkspace) {
-        return { success: false, error: "outside_workspace", path: fullPath };
-      }
-      if (!fullPath) {
-        return { success: false, error: "Invalid folder path" };
-      }
-
-      try {
-        const stat = await fs.stat(fullPath);
-        if (stat.isFile()) {
-          return { success: true, path: path.dirname(fullPath), skipped: true };
-        }
-      } catch (e) {
-        if (e.code !== "ENOENT") throw e;
-      }
-
-      await fs.mkdir(fullPath, { recursive: true });
-      return { success: true, path: fullPath, skipped: false };
-    } catch (error) {
-      // Let error handler diagnose
-      throw error;
+    // If model gives MKDIR for a file path (e.g., "src/app.js"), use parent directory.
+    if (path.extname(normalizedFolderPath)) {
+      targetPath = path.dirname(normalizedFolderPath);
     }
+
+    const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(
+      targetPath,
+      workspaceRootOverride
+    );
+    
+    // If outside workspace and not explicitly allowed, return error for chat panel to handle
+    if (outsideWorkspace && !allowOutsideWorkspace) {
+      return { success: false, error: "outside_workspace", path: fullPath };
+    }
+    if (!fullPath) {
+      return { success: false, error: "Invalid folder path" };
+    }
+
+    try {
+      const stat = await fs.stat(fullPath);
+      if (stat.isFile()) {
+        return { success: true, path: path.dirname(fullPath), skipped: true };
+      }
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+
+    await fs.mkdir(fullPath, { recursive: true });
+    return { success: true, path: fullPath, skipped: false };
   }
 
   _shouldUsePowerShellForCommand(command) {

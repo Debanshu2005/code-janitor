@@ -476,7 +476,7 @@ class HtmlFixer {
     // 2. Remove semicolons directly following an open parenthesis or closing parenthesis/brace.
     // This fixes errors like 'L.map(', and, '});'.
     cleanedJS = cleanedJS.replace(/\(\s*;/g, "(");
-    cleanedJS = cleanedJS.replace(/;(\s*[\)\}])/g, "$1");
+    cleanedJS = cleanedJS.replace(/;(\s*[)}])/g, "$1");
 
     if (!prettier) {
       console.warn("prettier not available, returning pre-cleaned JS");
@@ -619,7 +619,7 @@ ${wrapped}
     return voidElements.has(tagName.toLowerCase());
   }
 
-  fixNestingIssues(parent, child, index) {
+  fixNestingIssues(parent, child) {
     if (!child.tagName || !parent.tagName) {
       return false;
     }
