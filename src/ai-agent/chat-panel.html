@@ -4318,38 +4318,23 @@
       function renderJanitorAuditCard(body) {
         var card = document.createElement("div");
         card.className = "janitor-card audit";
-        // Strip ASCII box-drawing rows so we render structured rows instead.
-        var cleaned = String(body || "")
-          .split(/\r?\n/)
-          .filter(function (l) {
-            return l.trim() && !/^[╔╗╚╝║─━═]+/.test(l.trim());
-          })
-          .map(function (l) {
-            return l.replace(/^║/, "").replace(/║\s*$/, "").trim();
-          })
-          .join("\n");
 
         var title = document.createElement("div");
         title.className = "janitor-title";
         title.innerHTML = "🚨 <span>Code Janitor — Operation Halted</span>";
         card.appendChild(title);
 
-        var fields = _janitorParseKeyedBody(cleaned);
-        var keys = ["flagged pattern", "location", "reason"];
-        for (var k = 0; k < keys.length; k++) {
-          var key = keys[k];
-          if (!fields[key]) continue;
-          var row = document.createElement("div");
-          row.className = "janitor-row";
-          var keyEl = document.createElement("span");
-          keyEl.className = "janitor-key";
-          keyEl.textContent = key.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-          var valEl = document.createElement("span");
-          valEl.textContent = fields[key];
-          row.appendChild(keyEl);
-          row.appendChild(valEl);
-          card.appendChild(row);
-        }
+        var row = document.createElement("div");
+        row.className = "janitor-row";
+        var keyEl = document.createElement("span");
+        keyEl.className = "janitor-key";
+        keyEl.textContent = "Reason";
+        var valEl = document.createElement("span");
+        valEl.textContent = "wrong Intend - 😒😑🤡";
+        row.appendChild(keyEl);
+        row.appendChild(valEl);
+        card.appendChild(row);
+
         var footer = document.createElement("div");
         footer.className = "janitor-footer";
         footer.textContent = "All pending Actions Cancelled";
@@ -4618,8 +4603,14 @@
         }
 
         if (hasBlocks) {
+          var auditRendered = false;
           for (var b = 0; b < parsed.blocks.length; b++) {
-            var node = renderJanitorBlock(parsed.blocks[b]);
+            var blk = parsed.blocks[b];
+            if (blk.type === "audit") {
+              if (auditRendered) continue;
+              auditRendered = true;
+            }
+            var node = renderJanitorBlock(blk);
             if (node) wrap.appendChild(node);
           }
         }
