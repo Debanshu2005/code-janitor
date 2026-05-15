@@ -83,6 +83,34 @@ describe("AIAgent structured edit parsing", () => {
     expect(message).toContain("http://localhost:11434");
   });
 
+  test("keeps full assistant replies in active session history", () => {
+    const agent = new AIAgent();
+    const longReply = [
+      "Summary:",
+      "A".repeat(2500),
+      "",
+      "Details:",
+      "B".repeat(2600)
+    ].join("\n");
+
+    expect(agent._buildHistorySafeAssistantEntry(longReply)).toBe(longReply);
+  });
+
+  test("caps oversized persisted history entries with a storage notice", () => {
+    const agent = new AIAgent();
+    const oversized = "x".repeat(25_500);
+
+    const prepared = agent._prepareHistoryEntriesForPersistence([
+      { role: "assistant", content: oversized }
+    ]);
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].content.length).toBeLessThanOrEqual(24_000);
+    expect(prepared[0].content).toContain(
+      "[chat history truncated for storage]"
+    );
+  });
+
   test("normalizes multimodal mismatch errors into an image-support hint", () => {
     const agent = new AIAgent();
 

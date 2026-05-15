@@ -26,6 +26,7 @@ const MAX_OPEN_TAB_SNIPPETS = 1;
 const MAX_HISTORY_ENTRIES = 3;
 const MAX_SESSION_RECENT_ENTRIES = 8;
 const MAX_SESSION_PERSISTED_ENTRIES = 24;
+const MAX_PERSISTED_HISTORY_ENTRY_CHARS = 24_000;
 const MAX_SESSION_SUMMARY_CHARS = 2_400;
 const MAX_CHAT_SESSIONS = 12;
 const RELEVANT_FILE_CACHE_LIMIT = 30;
@@ -36,6 +37,8 @@ const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const MAX_FETCHED_URLS = 2;
 const MAX_FETCHED_CONTENT_CHARS = 5_000;
+const PERSISTED_HISTORY_TRUNCATION_NOTICE =
+  "[chat history truncated for storage]";
 const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -290,7 +293,9 @@ class AIAgent {
       .map((session) =>
         this._createSessionRecord({
           ...session,
-          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          history: this._prepareHistoryEntriesForPersistence(
+            session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES)
+          ),
           summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
         })
       );
@@ -545,10 +550,32 @@ class AIAgent {
         : "";
     }
 
-    const capped = normalized.slice(0, repetitionDetected ? 1200 : 4000).trim();
-    return repetitionDetected
-      ? `${capped}\n\n[response truncated due to repetition]`
-      : capped;
+    if (!repetitionDetected) {
+      return normalized;
+    }
+
+    const capped = normalized.slice(0, 1200).trim();
+    return `${capped}\n\n[response truncated due to repetition]`;
+  }
+
+  _prepareHistoryEntriesForPersistence(history) {
+    return this._sanitizeHistoryEntries(history).map((entry) => {
+      const content = String(entry.content || "").trim();
+      if (content.length <= MAX_PERSISTED_HISTORY_ENTRY_CHARS) {
+        return entry;
+      }
+
+      const suffix = `\n\n${PERSISTED_HISTORY_TRUNCATION_NOTICE}`;
+      const headLimit = Math.max(
+        0,
+        MAX_PERSISTED_HISTORY_ENTRY_CHARS - suffix.length
+      );
+
+      return {
+        ...entry,
+        content: `${content.slice(0, headLimit).trimEnd()}${suffix}`
+      };
+    });
   }
 
   getConfig() {
