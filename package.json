@@ -160,8 +160,8 @@
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 300000,
-          "description": "AI request timeout in milliseconds (default: 5 minutes, increase if using slow models like MiniMax M2.7)"
+          "default": 0,
+          "description": "AI request timeout in milliseconds. Set to 0 to disable the timeout (default), or increase it if using slow models like MiniMax M2.7."
         },
         "codeJanitor.ai.showParsedActionsDebug": {
           "type": "boolean",

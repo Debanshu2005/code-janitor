@@ -84,6 +84,26 @@ describe("cli config", () => {
     });
   });
 
+  test("preserves a disabled timeout from config", () => {
+    const workspace = createTempDir();
+    tempDirs.push(workspace);
+    fs.writeFileSync(
+      path.join(workspace, ".code-janitor.json"),
+      JSON.stringify({
+        ai: {
+          provider: "ollama",
+          timeout: 0
+        }
+      }),
+      "utf8"
+    );
+
+    expect(resolveCliAiConfig({ cwd: workspace })).toMatchObject({
+      provider: "ollama",
+      timeout: 0
+    });
+  });
+
   test("cli options override config file values", () => {
     const workspace = createTempDir();
     tempDirs.push(workspace);

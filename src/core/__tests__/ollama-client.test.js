@@ -46,4 +46,25 @@ describe("OllamaClient runtime config", () => {
       timeout: 60000
     });
   });
+
+  test("allows runtime config to disable the timeout", () => {
+    OllamaClient.configureRuntime({
+      enabled: true,
+      provider: "ollama",
+      model: "qwen2.5-coder:7b",
+      timeout: 0
+    });
+
+    const client = new OllamaClient();
+
+    expect(client.getConfig()).toEqual({
+      enabled: true,
+      provider: "ollama",
+      baseUrl: "http://localhost:11434",
+      model: "qwen2.5-coder:7b",
+      nvidiaApiKey: "",
+      timeout: 0
+    });
+    expect(client._createTimeoutSignal(0)).toBeUndefined();
+  });
 });

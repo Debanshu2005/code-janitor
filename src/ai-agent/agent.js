@@ -603,7 +603,7 @@ class AIAgent {
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
-      timeout: config.get("timeout", 300_000),
+      timeout: this._normalizeTimeoutMs(config.get("timeout", 0), 0),
       maxTokens: {
         fast: Math.max(512, Math.min(4096, config.get("maxTokens.fast", 2048))),
         heavy: Math.max(1024, Math.min(8192, config.get("maxTokens.heavy", 4096))),
@@ -621,6 +621,16 @@ class AIAgent {
     if (provider === "anthropic") return "claude-3-5-haiku-20241022";
     if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0];
     return "qwen2.5-coder:7b";
+  }
+
+  _normalizeTimeoutMs(timeoutMs, fallback = 0) {
+    const parsed = Number(timeoutMs);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  }
+
+  _withMinimumTimeoutMs(timeoutMs, minimumMs) {
+    const normalizedTimeout = this._normalizeTimeoutMs(timeoutMs, 0);
+    return normalizedTimeout === 0 ? 0 : Math.max(normalizedTimeout, minimumMs);
   }
 
   _sanitizeNvidiaModel(model) {
@@ -995,7 +1005,7 @@ class AIAgent {
 
     const baseConfig = {
       ...config,
-      timeout: Math.max(config.timeout || 0, 300_000)
+      timeout: this._withMinimumTimeoutMs(config.timeout, 300_000)
     };
 
     // Skip model discovery for non-Ollama/NVIDIA providers
@@ -1770,17 +1780,23 @@ class AIAgent {
   }
 
   _createRequestSignal(abortSignal, timeoutMs) {
+    const normalizedTimeout = this._normalizeTimeoutMs(timeoutMs, 0);
+
+    if (!(normalizedTimeout > 0)) {
+      return abortSignal || undefined;
+    }
+
     if (!abortSignal) {
-      return AbortSignal.timeout(timeoutMs);
+      return AbortSignal.timeout(normalizedTimeout);
     }
 
     if (typeof AbortSignal.any === "function") {
-      return AbortSignal.any([abortSignal, AbortSignal.timeout(timeoutMs)]);
+      return AbortSignal.any([abortSignal, AbortSignal.timeout(normalizedTimeout)]);
     }
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), normalizedTimeout);
 
     abortSignal.addEventListener("abort", onAbort, { once: true });
     controller.signal.addEventListener(
@@ -1819,7 +1835,9 @@ class AIAgent {
     const errorCode = String(error?.code || error?.cause?.code || "").toUpperCase();
 
     if (error?.name === "AbortError") {
-      return "The AI request timed out. Try a faster model or increase the timeout in Code Janitor settings.";
+      return this._normalizeTimeoutMs(config.timeout, 0) > 0
+        ? "The AI request timed out. Try a faster model or increase the timeout in Code Janitor settings."
+        : "The AI request was cancelled before completion.";
     }
 
     if (
@@ -2685,8 +2703,8 @@ ${resolvedMessage}`;
         reqIntent === "edit" ||
         reqIntent === "debug" ||
         reqIntent === "refactor"
-          ? Math.max(config.timeout || 0, 360_000)
-          : config.timeout;
+          ? this._withMinimumTimeoutMs(config.timeout, 360_000)
+          : this._normalizeTimeoutMs(config.timeout, 0);
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,

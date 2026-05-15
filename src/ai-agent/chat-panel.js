@@ -4929,7 +4929,12 @@ ${trimmedText}`;
                 this._postMessage({ type: "error", text: `Ollama returned status ${res.status}` });
               }
             } else {
-              this._postMessage({ type: "stream", text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
+              this._postMessage({
+                type: "stream",
+                text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${
+                  config.timeout > 0 ? `${config.timeout}ms` : "disabled"
+                }`
+              });
             }
           } catch (err) {
             this._postMessage({ type: "error", text: `Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
@@ -5116,7 +5121,7 @@ ${trimmedText}`;
           // Add timeout warning for slow models
           const config = await this._getEffectiveAiConfig();
           activeRuntimeConfig = config;
-          const timeoutMs = config.timeout || 300000;
+          const timeoutMs = Number.isFinite(config.timeout) ? config.timeout : 0;
           
           // Warn immediately for known slow models
           if (config.model === "minimaxai/minimax-m2.7") {

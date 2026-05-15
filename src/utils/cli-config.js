@@ -6,14 +6,14 @@ function toTrimmedString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function toPositiveNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+function toNonNegativeNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
 
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value.trim());
-    if (Number.isFinite(parsed) && parsed > 0) {
+    if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed;
     }
   }
@@ -87,7 +87,7 @@ function normalizeCliConfig(rawConfig) {
     ollamaUrl:
       toTrimmedString(base.ollamaUrl) ||
       toTrimmedString(ollama.url),
-    timeout: toPositiveNumber(base.timeout),
+    timeout: toNonNegativeNumber(base.timeout),
     nvidiaApiKey:
       toTrimmedString(base.nvidiaApiKey) ||
       toTrimmedString(nvidia.apiKey),
@@ -159,9 +159,9 @@ function resolveCliAiConfig(options = {}) {
       toTrimmedString(process.env.CODE_JANITOR_OLLAMA_URL) ||
       toTrimmedString(fileConfig.ollamaUrl),
     timeout:
-      toPositiveNumber(options.timeout) ||
-      toPositiveNumber(process.env.CODE_JANITOR_TIMEOUT) ||
-      toPositiveNumber(fileConfig.timeout),
+      toNonNegativeNumber(options.timeout) ??
+      toNonNegativeNumber(process.env.CODE_JANITOR_TIMEOUT) ??
+      toNonNegativeNumber(fileConfig.timeout),
     nvidiaApiKey:
       toTrimmedString(options.nvidiaApiKey) ||
       toTrimmedString(process.env.CODE_JANITOR_NVIDIA_API_KEY) ||

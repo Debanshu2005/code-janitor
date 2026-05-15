@@ -77,10 +77,20 @@ class OllamaClient {
         config?.get("nvidiaApiKey", "") ||
         "",
       timeout:
-        Number.isFinite(timeoutValue) && timeoutValue > 0
+        Number.isFinite(timeoutValue) && timeoutValue >= 0
           ? timeoutValue
-          : config?.get("timeout", 20_000) || 20_000
+          : this._normalizeTimeout(config?.get("timeout", 0), 0)
     };
+  }
+
+  _normalizeTimeout(timeoutMs, fallback = 0) {
+    const parsed = Number(timeoutMs);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  }
+
+  _createTimeoutSignal(timeoutMs) {
+    const normalizedTimeout = this._normalizeTimeout(timeoutMs, 0);
+    return normalizedTimeout > 0 ? AbortSignal.timeout(normalizedTimeout) : undefined;
   }
 
   async isAvailable(forceRefresh = false) {
@@ -114,17 +124,19 @@ class OllamaClient {
         }
       }
 
+      const availabilityTimeout =
+        config.timeout > 0 ? Math.min(config.timeout, 5_000) : 0;
       const response = config.provider === "nvidia"
         ? await fetch("https://integrate.api.nvidia.com/v1/models", {
             method: "GET",
             headers: {
               Authorization: `Bearer ${config.nvidiaApiKey}`
             },
-            signal: AbortSignal.timeout(Math.min(config.timeout, 5_000))
+            signal: this._createTimeoutSignal(availabilityTimeout)
           })
         : await fetch(`${config.baseUrl}/api/tags`, {
             method: "GET",
-            signal: AbortSignal.timeout(Math.min(config.timeout, 5_000))
+            signal: this._createTimeoutSignal(availabilityTimeout)
           });
 
       const available = response.ok;
@@ -508,7 +520,7 @@ Final fixed code:`;
     const response = await fetch(`${config.baseUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(config.timeout),
+      signal: this._createTimeoutSignal(config.timeout),
       body: JSON.stringify({
         model: config.model,
         prompt: this.buildPrompt(originalCode, ruleBasedFix, language),
@@ -537,7 +549,7 @@ Final fixed code:`;
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.nvidiaApiKey}`
       },
-      signal: AbortSignal.timeout(config.timeout),
+      signal: this._createTimeoutSignal(config.timeout),
       body: JSON.stringify({
         model: this._sanitizeNvidiaModel(config.model),
         messages: [

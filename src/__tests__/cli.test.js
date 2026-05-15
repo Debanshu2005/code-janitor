@@ -59,6 +59,14 @@ describe("cli", () => {
     });
   });
 
+  test("allows disabling the AI timeout from the CLI", () => {
+    expect(parseArgs(["src/broken.py", "--ai", "--timeout", "0"])).toMatchObject({
+      targetPath: "src/broken.py",
+      ai: true,
+      timeout: 0
+    });
+  });
+
   test("parses chat subcommand with free-form message", () => {
     expect(
       parseArgs(["chat", "explain", "src/extension.js", "--mode", "heavy"])

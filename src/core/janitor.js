@@ -33,7 +33,7 @@ function buildAiRuntimeConfig(options = {}) {
     config.nvidiaApiKey = resolved.nvidiaApiKey;
   }
 
-  if (Number.isFinite(resolved.timeout) && resolved.timeout > 0) {
+  if (Number.isFinite(resolved.timeout) && resolved.timeout >= 0) {
     config.timeout = resolved.timeout;
   }
 

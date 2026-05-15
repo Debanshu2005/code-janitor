@@ -120,8 +120,10 @@ function parseArgs(argv) {
 
     if (arg === "--timeout") {
       const timeoutValue = Number(readValue("--timeout"));
-      if (!Number.isFinite(timeoutValue) || timeoutValue <= 0) {
-        throw new Error("Option --timeout requires a positive number.");
+      if (!Number.isFinite(timeoutValue) || timeoutValue < 0) {
+        throw new Error(
+          "Option --timeout requires a non-negative number. Use 0 to disable the timeout."
+        );
       }
       options.timeout = timeoutValue;
       options.ai = true;
@@ -206,7 +208,7 @@ Options:
   --model NAME      Model to use for the selected provider
   --ollama-url URL  Ollama base URL (default: http://localhost:11434)
   --nvidia-api-key  NVIDIA API key (or set NVIDIA_API_KEY / CODE_JANITOR_NVIDIA_API_KEY)
-  --timeout MS      AI request timeout in milliseconds
+  --timeout MS      AI request timeout in milliseconds (0 disables timeout)
 
 Description:
   Default mode analyzes a supported file or directory and applies safe formatting

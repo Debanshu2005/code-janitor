@@ -313,7 +313,7 @@ async function getPreferredSyntaxFixRuntimeConfig(context) {
   }
   
   const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434");
-  const timeout = config.get("timeout", 90_000);
+  const timeout = config.get("timeout", 0);
 
   if (nvidiaApiKey) {
     return {

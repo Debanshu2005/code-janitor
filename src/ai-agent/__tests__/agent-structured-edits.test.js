@@ -111,6 +111,17 @@ describe("AIAgent structured edit parsing", () => {
     expect(message).toContain("http://localhost:11434");
   });
 
+  test("preserves a disabled timeout during runtime config preparation", async () => {
+    const agent = new AIAgent();
+
+    await expect(
+      agent._prepareRuntimeConfig({ provider: "groq", timeout: 0 }, null, "general")
+    ).resolves.toMatchObject({
+      provider: "groq",
+      timeout: 0
+    });
+  });
+
   test("keeps full assistant replies in active session history", () => {
     const agent = new AIAgent();
     const longReply = [
