@@ -14,6 +14,11 @@ const {
   VALID_TODO_STATUSES,
   MAX_TODO_ITEMS
 } = require("./update-todo-list");
+const {
+  askFollowupQuestion,
+  normalizeSuggestions,
+  MAX_SUGGESTIONS
+} = require("./ask-followup-question");
 const { registry, ToolRegistry, TOOL_DEFINITIONS } = require("./tool-registry");
 
 module.exports = {
@@ -39,6 +44,11 @@ module.exports = {
   buildTodoSummary,
   VALID_TODO_STATUSES,
   MAX_TODO_ITEMS,
+
+  // Ask Followup Question
+  askFollowupQuestion,
+  normalizeSuggestions,
+  MAX_SUGGESTIONS,
   
   // Tool Registry
   registry,

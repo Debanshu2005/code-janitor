@@ -385,6 +385,66 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("parses ASK_FOLLOWUP_QUESTION actions with suggestions", () => {
+    const agent = new AIAgent();
+    const response = [
+      "ASK_FOLLOWUP_QUESTION:",
+      "```json",
+      "{",
+      '  "question": "Which file should I modify?",',
+      '  "suggestions": [',
+      '    { "text": "src/app.js" },',
+      '    { "text": "src/utils.js" },',
+      '    { "text": "src/config.js" }',
+      "  ]",
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "ask_followup_question",
+        question: "Which file should I modify?",
+        suggestions: [
+          { text: "src/app.js" },
+          { text: "src/utils.js" },
+          { text: "src/config.js" }
+        ]
+      }
+    ]);
+  });
+
+  test("parses ASK_FOLLOWUP_QUESTION with mode-switching suggestions", () => {
+    const agent = new AIAgent();
+    const response = [
+      "ASK_FOLLOWUP_QUESTION:",
+      "```json",
+      "{",
+      '  "question": "How would you like to proceed?",',
+      '  "suggestions": [',
+      '    { "text": "Review the code first", "mode": "ask" },',
+      '    { "text": "Make the changes now", "mode": "code" }',
+      "  ]",
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "ask_followup_question",
+        question: "How would you like to proceed?",
+        suggestions: [
+          { text: "Review the code first", mode: "ask" },
+          { text: "Make the changes now", mode: "code" }
+        ]
+      }
+    ]);
+  });
+
   test("prefers source files over generated copies when matching path hints", () => {
     const agent = new AIAgent();
     agent.codebaseContext = new Map([

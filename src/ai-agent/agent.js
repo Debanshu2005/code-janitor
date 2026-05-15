@@ -6319,6 +6319,35 @@ ${userMessage}`;
       }
     }
 
+    // Match ASK_FOLLOWUP_QUESTION: actions for gathering user input with suggestions
+    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = askFollowupRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+
+        if (!data.question || typeof data.question !== "string") {
+          continue;
+        }
+
+        if (!Array.isArray(data.suggestions) || data.suggestions.length === 0) {
+          continue;
+        }
+
+        actions.push({
+          type: "ask_followup_question",
+          question: data.question,
+          suggestions: data.suggestions
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
     const incompleteStructuredEditWarning =
       "Structured edit output appears incomplete; retrying may recover missing edits.";
 
