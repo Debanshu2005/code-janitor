@@ -5,26 +5,26 @@
  * Manages tool definitions, validation, and execution.
  */
 
-const { applyDiff, validateDiff } = require('./apply-diff');
-const { insertContent, validateInsert } = require('./insert-content');
-const { readFiles, formatResults } = require('./read-file');
+const { applyDiff, validateDiff } = require("./apply-diff");
+const { insertContent, validateInsert } = require("./insert-content");
+const { readFiles, formatResults } = require("./read-file");
 
 /**
  * Tool definitions with metadata
  */
 const TOOL_DEFINITIONS = {
   apply_diff: {
-    name: 'apply_diff',
-    description: 'Apply SEARCH/REPLACE diff blocks to a file for surgical edits',
+    name: "apply_diff",
+    description: "Apply SEARCH/REPLACE diff blocks to a file for surgical edits",
     handler: applyDiff,
     validator: validateDiff,
     params: {
-      path: { type: 'string', required: true, description: 'File path relative to workspace' },
-      diff: { type: 'string', required: true, description: 'SEARCH/REPLACE diff blocks' }
+      path: { type: "string", required: true, description: "File path relative to workspace" },
+      diff: { type: "string", required: true, description: "SEARCH/REPLACE diff blocks" }
     },
     examples: [
       {
-        description: 'Single diff block',
+        description: "Single diff block",
         usage: `apply_diff('src/app.js', \`
 :start_line: 10
 -------
@@ -37,7 +37,7 @@ function newName() {
 \`)`
       },
       {
-        description: 'Multiple diff blocks',
+        description: "Multiple diff blocks",
         usage: `apply_diff('src/app.js', \`
 :start_line: 10
 -------
@@ -54,26 +54,26 @@ const y = 4;
   },
   
   insert_content: {
-    name: 'insert_content',
-    description: 'Insert lines of content at a specific line number or append to end',
+    name: "insert_content",
+    description: "Insert lines of content at a specific line number or append to end",
     handler: insertContent,
     validator: validateInsert,
     params: {
-      path: { type: 'string', required: true, description: 'File path relative to workspace' },
-      line: { type: 'number', required: true, description: 'Line number (1-based) or 0 to append' },
-      content: { type: 'string', required: true, description: 'Content to insert' }
+      path: { type: "string", required: true, description: "File path relative to workspace" },
+      line: { type: "number", required: true, description: "Line number (1-based) or 0 to append" },
+      content: { type: "string", required: true, description: "Content to insert" }
     },
     examples: [
       {
-        description: 'Insert at beginning',
-        usage: `insert_content('src/app.js', 1, '// New comment at top')`
+        description: "Insert at beginning",
+        usage: "insert_content('src/app.js', 1, '// New comment at top')"
       },
       {
-        description: 'Append to end',
-        usage: `insert_content('src/app.js', 0, '\\n// End of file')`
+        description: "Append to end",
+        usage: "insert_content('src/app.js', 0, '\\n// End of file')"
       },
       {
-        description: 'Insert multiple lines',
+        description: "Insert multiple lines",
         usage: `insert_content('src/app.js', 10, \`
 // Multi-line comment
 // explaining the code below
@@ -83,31 +83,31 @@ const y = 4;
   },
   
   read_file: {
-    name: 'read_file',
-    description: 'Read one or more files with optional line ranges (max 5 files)',
+    name: "read_file",
+    description: "Read one or more files with optional line ranges (max 5 files)",
     handler: async (fileSpecs, workspaceRoot) => {
       const results = await readFiles(fileSpecs, workspaceRoot);
       return formatResults(results);
     },
     params: {
       files: {
-        type: 'array',
+        type: "array",
         required: true,
-        description: 'Array of file specs: [{ path: string, lineRanges?: string[] }]',
+        description: "Array of file specs: [{ path: string, lineRanges?: string[] }]",
         maxItems: 5
       }
     },
     examples: [
       {
-        description: 'Read single file',
-        usage: `read_file([{ path: 'src/app.js' }])`
+        description: "Read single file",
+        usage: "read_file([{ path: 'src/app.js' }])"
       },
       {
-        description: 'Read with line ranges',
-        usage: `read_file([{ path: 'src/app.js', lineRanges: ['1-50', '100-150'] }])`
+        description: "Read with line ranges",
+        usage: "read_file([{ path: 'src/app.js', lineRanges: ['1-50', '100-150'] }])"
       },
       {
-        description: 'Read multiple files',
+        description: "Read multiple files",
         usage: `read_file([
   { path: 'src/app.js', lineRanges: ['1-100'] },
   { path: 'src/utils.js', lineRanges: ['50-75'] },
@@ -138,7 +138,7 @@ class ToolRegistry {
    */
   registerTool(toolDef) {
     if (!toolDef.name || !toolDef.handler) {
-      throw new Error('Tool must have name and handler');
+      throw new Error("Tool must have name and handler");
     }
     
     this.tools.set(toolDef.name, toolDef);
@@ -181,7 +181,7 @@ class ToolRegistry {
       
       if (paramName in params) {
         const value = params[paramName];
-        const actualType = Array.isArray(value) ? 'array' : typeof value;
+        const actualType = Array.isArray(value) ? "array" : typeof value;
         
         if (actualType !== paramDef.type) {
           errors.push(
@@ -190,7 +190,7 @@ class ToolRegistry {
         }
         
         // Check array constraints
-        if (paramDef.type === 'array' && paramDef.maxItems && value.length > paramDef.maxItems) {
+        if (paramDef.type === "array" && paramDef.maxItems && value.length > paramDef.maxItems) {
           errors.push(
             `Parameter ${paramName} exceeds maximum items (${paramDef.maxItems}). Got ${value.length} items.`
           );
@@ -217,7 +217,7 @@ class ToolRegistry {
     // Validate parameters
     const validation = this.validateParams(toolName, params);
     if (!validation.valid) {
-      throw new Error(`Invalid parameters: ${validation.errors?.join(', ') || validation.error}`);
+      throw new Error(`Invalid parameters: ${validation.errors?.join(", ") || validation.error}`);
     }
     
     // Execute tool
@@ -227,11 +227,11 @@ class ToolRegistry {
     
     try {
       // Call handler with appropriate parameters
-      if (toolName === 'read_file') {
+      if (toolName === "read_file") {
         result = await tool.handler(params.files, workspaceRoot);
-      } else if (toolName === 'insert_content') {
+      } else if (toolName === "insert_content") {
         result = await tool.handler(params.path, params.line, params.content, workspaceRoot);
-      } else if (toolName === 'apply_diff') {
+      } else if (toolName === "apply_diff") {
         result = await tool.handler(params.path, params.diff, workspaceRoot);
       } else {
         result = await tool.handler(params, workspaceRoot);
@@ -336,11 +336,11 @@ class ToolRegistry {
     const sanitized = { ...params };
     
     if (sanitized.content && sanitized.content.length > 100) {
-      sanitized.content = sanitized.content.substring(0, 100) + '... [truncated]';
+      sanitized.content = sanitized.content.substring(0, 100) + "... [truncated]";
     }
     
     if (sanitized.diff && sanitized.diff.length > 200) {
-      sanitized.diff = sanitized.diff.substring(0, 200) + '... [truncated]';
+      sanitized.diff = sanitized.diff.substring(0, 200) + "... [truncated]";
     }
     
     return sanitized;
@@ -357,13 +357,13 @@ class ToolRegistry {
     
     const lines = [];
     lines.push(`# ${tool.name}`);
-    lines.push('');
+    lines.push("");
     lines.push(tool.description);
-    lines.push('');
-    lines.push('## Parameters');
+    lines.push("");
+    lines.push("## Parameters");
     
     for (const [paramName, paramDef] of Object.entries(tool.params)) {
-      const required = paramDef.required ? ' (required)' : ' (optional)';
+      const required = paramDef.required ? " (required)" : " (optional)";
       lines.push(`- **${paramName}**${required}: ${paramDef.description}`);
       lines.push(`  Type: ${paramDef.type}`);
       if (paramDef.maxItems) {
@@ -372,19 +372,19 @@ class ToolRegistry {
     }
     
     if (tool.examples && tool.examples.length > 0) {
-      lines.push('');
-      lines.push('## Examples');
+      lines.push("");
+      lines.push("## Examples");
       
       for (const example of tool.examples) {
-        lines.push('');
+        lines.push("");
         lines.push(`### ${example.description}`);
-        lines.push('```javascript');
+        lines.push("```javascript");
         lines.push(example.usage);
-        lines.push('```');
+        lines.push("```");
       }
     }
     
-    return lines.join('\n');
+    return lines.join("\n");
   }
 }
 

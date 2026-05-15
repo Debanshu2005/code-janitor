@@ -5,8 +5,8 @@
  * Supports multiple diff blocks in a single operation for efficient editing.
  */
 
-const fs = require('fs').promises;
-const path = require('path');
+const fs = require("fs").promises;
+const path = require("path");
 
 /**
  * Parse diff string into structured blocks
@@ -33,7 +33,7 @@ function parseDiffBlocks(diffString) {
   }
   
   if (blocks.length === 0) {
-    throw new Error('No valid SEARCH/REPLACE blocks found in diff');
+    throw new Error("No valid SEARCH/REPLACE blocks found in diff");
   }
   
   return blocks;
@@ -60,7 +60,7 @@ function matchesBlock(lines, startIndex, searchLines) {
  * Normalize line endings for consistent matching
  */
 function normalizeLineEndings(text) {
-  return text.replace(/\r\n/g, '\n');
+  return text.replace(/\r\n/g, "\n");
 }
 
 /**
@@ -73,8 +73,8 @@ function applySingleDiff(lines, block, prefersCrlf) {
   const searchNormalized = normalizeLineEndings(search);
   const replaceNormalized = normalizeLineEndings(replace);
   
-  const searchLines = searchNormalized.split('\n');
-  const replaceLines = replaceNormalized.split('\n');
+  const searchLines = searchNormalized.split("\n");
+  const replaceLines = replaceNormalized.split("\n");
   
   // Try exact match at specified line (1-based to 0-based)
   const searchStart = startLine - 1;
@@ -115,7 +115,7 @@ function applySingleDiff(lines, block, prefersCrlf) {
   
   throw new Error(
     `Search block not found at line ${startLine} or nearby.\n` +
-    `Expected:\n${searchLines.slice(0, 3).join('\n')}${searchLines.length > 3 ? '\n...' : ''}`
+    `Expected:\n${searchLines.slice(0, 3).join("\n")}${searchLines.length > 3 ? "\n..." : ""}`
   );
 }
 
@@ -132,17 +132,17 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
   // Read file content
   let content;
   try {
-    content = await fs.readFile(absolutePath, 'utf8');
+    content = await fs.readFile(absolutePath, "utf8");
   } catch (error) {
     throw new Error(`Failed to read file ${filePath}: ${error.message}`);
   }
   
   // Detect line ending preference
-  const prefersCrlf = content.includes('\r\n');
+  const prefersCrlf = content.includes("\r\n");
   
   // Normalize and split into lines
   const normalizedContent = normalizeLineEndings(content);
-  const lines = normalizedContent.split('\n');
+  const lines = normalizedContent.split("\n");
   
   // Parse diff blocks
   const blocks = parseDiffBlocks(diffString);
@@ -162,16 +162,16 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
   }
   
   // Reconstruct file content
-  let newContent = lines.join('\n');
+  let newContent = lines.join("\n");
   
   // Restore original line endings if needed
   if (prefersCrlf) {
-    newContent = newContent.replace(/\n/g, '\r\n');
+    newContent = newContent.replace(/\n/g, "\r\n");
   }
   
   // Write back to file
   try {
-    await fs.writeFile(absolutePath, newContent, 'utf8');
+    await fs.writeFile(absolutePath, newContent, "utf8");
   } catch (error) {
     throw new Error(`Failed to write file ${filePath}: ${error.message}`);
   }
@@ -197,7 +197,7 @@ function validateDiff(diffString) {
     for (let i = 0; i < sortedBlocks.length - 1; i++) {
       const current = sortedBlocks[i];
       const next = sortedBlocks[i + 1];
-      const currentSearchLines = current.search.split('\n').length;
+      const currentSearchLines = current.search.split("\n").length;
       
       if (current.startLine + currentSearchLines > next.startLine) {
         return {

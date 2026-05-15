@@ -25,7 +25,7 @@ class SmartRetryStrategy {
 
     // Don't retry if max attempts reached
     if (attempt >= this.maxRetries) {
-      return { shouldRetry: false, reason: 'max_attempts' };
+      return { shouldRetry: false, reason: "max_attempts" };
     }
 
     // Check if response has incomplete structured edits
@@ -34,15 +34,15 @@ class SmartRetryStrategy {
     );
 
     // Check if response is prose when actions expected
-    const isProse = intent === 'edit' && 
+    const isProse = intent === "edit" && 
       (!actions || actions.length === 0) &&
       text && text.length > 100;
 
     // Check if actions are malformed
     const hasMalformedActions = actions?.some(a => 
       !a.type || 
-      (a.type === 'patch' && (!a.search || !a.replace)) ||
-      (a.type === 'file' && !a.content)
+      (a.type === "patch" && (!a.search || !a.replace)) ||
+      (a.type === "file" && !a.content)
     );
 
     // Determine retry strategy
@@ -50,8 +50,8 @@ class SmartRetryStrategy {
       this.retryCount++;
       return {
         shouldRetry: true,
-        reason: 'incomplete_edits',
-        strategy: 'structured_format',
+        reason: "incomplete_edits",
+        strategy: "structured_format",
         confidence: 0.7
       };
     }
@@ -60,8 +60,8 @@ class SmartRetryStrategy {
       this.retryCount++;
       return {
         shouldRetry: true,
-        reason: 'prose_response',
-        strategy: 'strict_format',
+        reason: "prose_response",
+        strategy: "strict_format",
         confidence: 0.8
       };
     }
@@ -70,13 +70,13 @@ class SmartRetryStrategy {
       this.retryCount++;
       return {
         shouldRetry: true,
-        reason: 'malformed_actions',
-        strategy: 'file_only',
+        reason: "malformed_actions",
+        strategy: "file_only",
         confidence: 0.6
       };
     }
 
-    return { shouldRetry: false, reason: 'success' };
+    return { shouldRetry: false, reason: "success" };
   }
 
   /**
@@ -86,13 +86,13 @@ class SmartRetryStrategy {
     const basePrompt = originalPrompt;
 
     switch (strategy) {
-      case 'structured_format':
+      case "structured_format":
         return `${basePrompt}\n\n${this._buildStructuredFormatPrompt(response)}`;
       
-      case 'strict_format':
+      case "strict_format":
         return `${basePrompt}\n\n${this._buildStrictFormatPrompt()}`;
       
-      case 'file_only':
+      case "file_only":
         return `${basePrompt}\n\n${this._buildFileOnlyPrompt(response)}`;
       
       default:
@@ -152,7 +152,7 @@ No placeholders, no truncation, no "rest of code unchanged" comments.`;
    * Record retry outcome for learning
    */
   recordOutcome(strategy, success, context = {}) {
-    const key = `${strategy}:${context.intent || 'unknown'}`;
+    const key = `${strategy}:${context.intent || "unknown"}`;
     
     if (!this.retryHistory.has(key)) {
       this.retryHistory.set(key, { attempts: 0, successes: 0 });
@@ -185,8 +185,8 @@ No placeholders, no truncation, no "rest of code unchanged" comments.`;
       totalRetries: this.retryCount,
       totalFailures: this.failureCount,
       successRate: totalAttempts > 0 
-        ? ((totalSuccesses / totalAttempts) * 100).toFixed(2) + '%'
-        : '0%',
+        ? ((totalSuccesses / totalAttempts) * 100).toFixed(2) + "%"
+        : "0%",
       strategies: Object.fromEntries(this.retryHistory)
     };
   }
@@ -216,14 +216,14 @@ class InspectionLoopOptimizer {
 
     // Don't inspect if max rounds reached
     if (round >= this.maxRounds) {
-      return { shouldInspect: false, reason: 'max_rounds' };
+      return { shouldInspect: false, reason: "max_rounds" };
     }
 
     // Check if actions are inspection-only
     const isInspectionOnly = this._isInspectionOnly(actions);
 
     if (!isInspectionOnly) {
-      return { shouldInspect: false, reason: 'has_edits' };
+      return { shouldInspect: false, reason: "has_edits" };
     }
 
     // Check if we have cached results for similar inspection
@@ -236,7 +236,7 @@ class InspectionLoopOptimizer {
       if (age < 30000) {
         return {
           shouldInspect: false,
-          reason: 'cached',
+          reason: "cached",
           cachedResult: cached.result
         };
       }
@@ -245,7 +245,7 @@ class InspectionLoopOptimizer {
     this.inspectionCount++;
     return {
       shouldInspect: true,
-      reason: 'needs_context',
+      reason: "needs_context",
       round: round + 1
     };
   }
@@ -253,15 +253,15 @@ class InspectionLoopOptimizer {
   _isInspectionOnly(actions) {
     if (!actions || actions.length === 0) return false;
 
-    const inspectionTypes = new Set(['read', 'grep', 'cmd', 'preview_inspect']);
+    const inspectionTypes = new Set(["read", "grep", "cmd", "preview_inspect"]);
     return actions.every(a => inspectionTypes.has(a.type));
   }
 
   _buildCacheKey(actions) {
     return actions
-      .map(a => `${a.type}:${a.path || a.command || ''}`)
+      .map(a => `${a.type}:${a.path || a.command || ""}`)
       .sort()
-      .join('|');
+      .join("|");
   }
 
   /**
@@ -314,38 +314,38 @@ class RecoveryLoopOptimizer {
    */
   selectRecoveryStrategy(patchAction, currentContent, failureReason) {
     // Strategy 1: Broader context (if search block is small)
-    const searchLines = (patchAction.search || '').split('\n').length;
-    if (searchLines < 5 && failureReason !== 'ambiguous') {
+    const searchLines = (patchAction.search || "").split("\n").length;
+    if (searchLines < 5 && failureReason !== "ambiguous") {
       return {
-        strategy: 'broader_context',
+        strategy: "broader_context",
         priority: 1,
-        description: 'Expand search block to include more surrounding lines'
+        description: "Expand search block to include more surrounding lines"
       };
     }
 
     // Strategy 2: Fuzzy matching (if exact match failed)
-    if (failureReason === 'no_match') {
+    if (failureReason === "no_match") {
       return {
-        strategy: 'fuzzy_match',
+        strategy: "fuzzy_match",
         priority: 2,
-        description: 'Try fuzzy matching with whitespace normalization'
+        description: "Try fuzzy matching with whitespace normalization"
       };
     }
 
     // Strategy 3: File rewrite (if ambiguous or large change)
-    if (failureReason === 'ambiguous' || searchLines > 50) {
+    if (failureReason === "ambiguous" || searchLines > 50) {
       return {
-        strategy: 'file_rewrite',
+        strategy: "file_rewrite",
         priority: 3,
-        description: 'Fall back to complete file rewrite'
+        description: "Fall back to complete file rewrite"
       };
     }
 
     // Default: broader context
     return {
-      strategy: 'broader_context',
+      strategy: "broader_context",
       priority: 1,
-      description: 'Default recovery with broader context'
+      description: "Default recovery with broader context"
     };
   }
 
@@ -354,13 +354,13 @@ class RecoveryLoopOptimizer {
    */
   buildRecoveryPrompt(strategy, patchAction, currentContent, originalRequest) {
     switch (strategy.strategy) {
-      case 'broader_context':
+      case "broader_context":
         return this._buildBroaderContextPrompt(patchAction, currentContent, originalRequest);
       
-      case 'fuzzy_match':
+      case "fuzzy_match":
         return this._buildFuzzyMatchPrompt(patchAction, currentContent, originalRequest);
       
-      case 'file_rewrite':
+      case "file_rewrite":
         return this._buildFileRewritePrompt(patchAction, currentContent, originalRequest);
       
       default:
@@ -373,7 +373,7 @@ class RecoveryLoopOptimizer {
 
 \`\`\`
 ${content.slice(0, 2000)}
-${content.length > 2000 ? '\n... (file continues)' : ''}
+${content.length > 2000 ? "\n... (file continues)" : ""}
 \`\`\`
 
 Original request: ${request}
@@ -419,7 +419,7 @@ FILE: ${action.path}
 
 Original request: ${request}
 
-The file currently has ${content.split('\n').length} lines. Your FILE: action must include ALL of them with your changes applied.`;
+The file currently has ${content.split("\n").length} lines. Your FILE: action must include ALL of them with your changes applied.`;
   }
 
   /**
@@ -451,8 +451,8 @@ The file currently has ${content.split('\n').length} lines. Your FILE: action mu
       totalAttempts: this.recoveryAttempts,
       totalSuccesses: this.recoverySuccesses,
       successRate: this.recoveryAttempts > 0
-        ? ((this.recoverySuccesses / this.recoveryAttempts) * 100).toFixed(2) + '%'
-        : '0%',
+        ? ((this.recoverySuccesses / this.recoveryAttempts) * 100).toFixed(2) + "%"
+        : "0%",
       strategies: Object.fromEntries(this.recoveryStrategies)
     };
   }

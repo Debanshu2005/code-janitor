@@ -3,8 +3,8 @@
  * Provides drop-in replacements for existing methods with optimizations
  */
 
-const { PerformanceOptimizer } = require('./performance-optimizer');
-const { FeedbackLoopOptimizer } = require('./feedback-loop-optimizer');
+const { PerformanceOptimizer } = require("./performance-optimizer");
+const { FeedbackLoopOptimizer } = require("./feedback-loop-optimizer");
 
 /**
  * Create optimized version of agent methods
@@ -203,14 +203,14 @@ function createOptimizedChatPanel(chatPanel) {
 
   // Fast-path execution for simple edits
   chatPanel._executeFastPath = async function(action, workspaceFolder, writeOptions) {
-    const filePath = require('path').join(workspaceFolder, action.path);
+    const filePath = require("path").join(workspaceFolder, action.path);
     
     // Read file with caching
     const currentContent = await optimizer.fileCache.get(
       filePath,
       async (path) => {
-        const fs = require('fs').promises;
-        return await fs.readFile(path, 'utf8');
+        const fs = require("fs").promises;
+        return await fs.readFile(path, "utf8");
       }
     );
 
@@ -223,18 +223,19 @@ function createOptimizedChatPanel(chatPanel) {
 
     if (result.matched) {
       // Apply changes
-      await chatPanel.agent.applyChanges(
+      const applyResult = await chatPanel.agent.applyChanges(
         action.path,
         result.content,
         false,
         writeOptions
       );
 
-      // Invalidate cache
-      optimizer.fileCache.invalidate(filePath);
+      if (applyResult.success) {
+        optimizer.fileCache.invalidate(filePath);
+      }
 
       return {
-        success: true,
+        ...applyResult,
         strategy: result.strategy,
         fastPath: true
       };
@@ -259,7 +260,7 @@ function createOptimizedChatPanel(chatPanel) {
       actions,
       async (action) => {
         // Execute individual action
-        if (action.type === 'patch') {
+        if (action.type === "patch") {
           // Check for fast-path eligibility
           const fastPathCheck = optimizer.fastPathDetector.isFastPathEligible([action]);
           
@@ -287,7 +288,7 @@ function createOptimizedChatPanel(chatPanel) {
         completed = 0;
         if (onProgress) {
           onProgress({
-            type: 'start',
+            type: "start",
             total
           });
         }
@@ -296,7 +297,7 @@ function createOptimizedChatPanel(chatPanel) {
         completed++;
         if (onProgress) {
           onProgress({
-            type: 'progress',
+            type: "progress",
             completed,
             total,
             action,
@@ -308,7 +309,7 @@ function createOptimizedChatPanel(chatPanel) {
       complete: (results) => {
         if (onProgress) {
           onProgress({
-            type: 'complete',
+            type: "complete",
             results,
             total: completed
           });
@@ -339,7 +340,7 @@ function createOptimizedChatPanel(chatPanel) {
 
   // Optimized recovery strategy
   chatPanel._selectRecoveryStrategy = function(patchAction, currentContent, failureReason) {
-    if (!feedbackOptimizer) return { strategy: 'broader_context' };
+    if (!feedbackOptimizer) return { strategy: "broader_context" };
     
     return feedbackOptimizer.recoveryOptimizer.selectRecoveryStrategy(
       patchAction,

@@ -5,8 +5,8 @@
  * Supports reading up to 5 files in a single operation with optional line ranges.
  */
 
-const fs = require('fs').promises;
-const path = require('path');
+const fs = require("fs").promises;
+const path = require("path");
 
 const MAX_FILES_PER_REQUEST = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -38,11 +38,11 @@ function parseLineRange(rangeStr) {
  * Extract lines from content based on ranges
  */
 function extractLines(content, ranges) {
-  const lines = content.split('\n');
+  const lines = content.split("\n");
   
   if (!ranges || ranges.length === 0) {
     // Return all lines with line numbers
-    return lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+    return lines.map((line, idx) => `${idx + 1} | ${line}`).join("\n");
   }
   
   // Extract specified ranges
@@ -64,11 +64,11 @@ function extractLines(content, ranges) {
     
     // Add separator between ranges if there are multiple
     if (ranges.length > 1 && rangeStr !== ranges[ranges.length - 1]) {
-      result.push('...');
+      result.push("...");
     }
   }
   
-  return result.join('\n');
+  return result.join("\n");
 }
 
 /**
@@ -115,20 +115,20 @@ async function readSingleFile(fileSpec, workspaceRoot) {
     if (isBinaryFile(buffer)) {
       return {
         path: filePath,
-        error: 'Binary file detected. Cannot display content.',
+        error: "Binary file detected. Cannot display content.",
         size: stats.size,
         isBinary: true
       };
     }
     
     // Convert to string
-    const content = buffer.toString('utf8');
+    const content = buffer.toString("utf8");
     
     // Extract lines based on ranges
     const extractedContent = extractLines(content, lineRanges);
     
-    const totalLines = content.split('\n').length;
-    const displayedLines = extractedContent.split('\n').length;
+    const totalLines = content.split("\n").length;
+    const displayedLines = extractedContent.split("\n").length;
     
     return {
       path: filePath,
@@ -136,7 +136,7 @@ async function readSingleFile(fileSpec, workspaceRoot) {
       totalLines: totalLines,
       displayedLines: displayedLines,
       size: stats.size,
-      ranges: lineRanges || ['all']
+      ranges: lineRanges || ["all"]
     };
   } catch (error) {
     return {
@@ -157,7 +157,7 @@ async function readSingleFile(fileSpec, workspaceRoot) {
 async function readFiles(fileSpecs, workspaceRoot) {
   // Validate input
   if (!Array.isArray(fileSpecs) || fileSpecs.length === 0) {
-    throw new Error('fileSpecs must be a non-empty array');
+    throw new Error("fileSpecs must be a non-empty array");
   }
   
   if (fileSpecs.length > MAX_FILES_PER_REQUEST) {
@@ -169,7 +169,7 @@ async function readFiles(fileSpecs, workspaceRoot) {
   // Validate each file spec
   for (const spec of fileSpecs) {
     if (!spec.path) {
-      throw new Error('Each file spec must have a "path" property');
+      throw new Error("Each file spec must have a \"path\" property");
     }
   }
   
@@ -204,7 +204,7 @@ function formatResults(results) {
     lines.push(`Failed: ${results.filesFailed}`);
   }
   lines.push(`Total size: ${Math.round(results.totalSize / 1024)}KB`);
-  lines.push('');
+  lines.push("");
   
   for (const result of results.results) {
     lines.push(`# ${result.path}`);
@@ -213,19 +213,19 @@ function formatResults(results) {
       lines.push(`Error: ${result.error}`);
     } else {
       lines.push(`Lines: ${result.displayedLines}/${result.totalLines}`);
-      if (result.ranges && result.ranges[0] !== 'all') {
-        lines.push(`Ranges: ${result.ranges.join(', ')}`);
+      if (result.ranges && result.ranges[0] !== "all") {
+        lines.push(`Ranges: ${result.ranges.join(", ")}`);
       }
-      lines.push('');
+      lines.push("");
       lines.push(result.content);
     }
     
-    lines.push('');
-    lines.push('---');
-    lines.push('');
+    lines.push("");
+    lines.push("---");
+    lines.push("");
   }
   
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 module.exports = {

@@ -3,9 +3,6 @@
  * Provides caching, parallel execution, and smart recovery
  */
 
-const fs = require("fs").promises;
-const path = require("path");
-
 /**
  * LRU Cache for file content with TTL
  */
@@ -54,7 +51,7 @@ class FileContentCache {
     return {
       hits: this.hits,
       misses: this.misses,
-      hitRate: total > 0 ? (this.hits / total * 100).toFixed(2) + '%' : '0%',
+      hitRate: total > 0 ? (this.hits / total * 100).toFixed(2) + "%" : "0%",
       size: this.cache.size,
       maxSize: this.maxSize
     };
@@ -127,14 +124,14 @@ class ParallelActionExecutor {
     const commands = [];
 
     for (const action of actions) {
-      if (action.type === 'patch' || action.type === 'file') {
+      if (action.type === "patch" || action.type === "file") {
         if (!fileWrites.has(action.path)) {
           fileWrites.set(action.path, []);
         }
         fileWrites.get(action.path).push(action);
-      } else if (action.type === 'mkdir') {
+      } else if (action.type === "mkdir") {
         mkdirs.push(action);
-      } else if (action.type === 'cmd') {
+      } else if (action.type === "cmd") {
         commands.push(action);
       } else {
         independent.push(action);
@@ -189,7 +186,7 @@ class ParallelActionExecutor {
       );
 
       for (const result of parallelResults) {
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           results.push(...result.value);
         } else {
           results.push({ success: false, error: result.reason });
@@ -204,7 +201,7 @@ class ParallelActionExecutor {
       );
 
       for (const result of independentResults) {
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           results.push(result.value);
         } else {
           results.push({ success: false, error: result.reason });
@@ -219,7 +216,7 @@ class ParallelActionExecutor {
       );
 
       for (const result of commandResults) {
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           results.push(result.value);
         } else {
           results.push({ success: false, error: result.reason });
@@ -245,9 +242,9 @@ class ParallelActionExecutor {
     return {
       sequential: this.executionStats.sequential,
       parallel: this.executionStats.parallel,
-      avgSequentialTime: avgSequential.toFixed(2) + 'ms',
-      avgParallelTime: avgParallel.toFixed(2) + 'ms',
-      speedup: avgSequential > 0 ? (avgSequential / avgParallel).toFixed(2) + 'x' : 'N/A'
+      avgSequentialTime: avgSequential.toFixed(2) + "ms",
+      avgParallelTime: avgParallel.toFixed(2) + "ms",
+      speedup: avgSequential > 0 ? (avgSequential / avgParallel).toFixed(2) + "x" : "N/A"
     };
   }
 }
@@ -266,89 +263,98 @@ class SmartPatchMatcher {
   async tryMatch(content, search, replace) {
     // Strategy 1: Exact match
     const exact = this._tryExactMatch(content, search, replace);
-    if (exact.matched) return exact;
+    if (exact.matched || exact.reason === "ambiguous") return exact;
 
     // Strategy 2: Normalized line endings
     const normalized = this._tryNormalizedMatch(content, search, replace);
-    if (normalized.matched) return normalized;
+    if (normalized.matched || normalized.reason === "ambiguous") return normalized;
 
     // Strategy 3: Whitespace normalization
     const whitespace = this._tryWhitespaceMatch(content, search, replace);
-    if (whitespace.matched) return whitespace;
+    if (whitespace.matched || whitespace.reason === "ambiguous") return whitespace;
 
     // Strategy 4: Fuzzy match (if confidence > 85%)
     const fuzzy = this._tryFuzzyMatch(content, search, replace);
     if (fuzzy.matched && fuzzy.confidence > 0.85) return fuzzy;
 
-    return { matched: false, reason: 'no_match' };
+    return { matched: false, reason: "no_match" };
   }
 
   _tryExactMatch(content, search, replace) {
     if (content.includes(search)) {
       const count = this._countOccurrences(content, search);
       if (count !== 1) {
-        return { matched: false, reason: 'ambiguous', matchCount: count };
+        return { matched: false, reason: "ambiguous", matchCount: count };
       }
       return {
         matched: true,
         content: this._literalSplice(content, search, replace),
-        strategy: 'exact'
+        strategy: "exact"
       };
     }
     return { matched: false };
   }
 
   _tryNormalizedMatch(content, search, replace) {
-    const normalizeLineEndings = (text) => text.replace(/\r\n/g, '\n');
+    const normalizeLineEndings = (text) => text.replace(/\r\n/g, "\n");
     const contentUnix = normalizeLineEndings(content);
     const searchUnix = normalizeLineEndings(search);
     const replaceUnix = normalizeLineEndings(replace);
-    const prefersCrlf = content.includes('\r\n');
+    const prefersCrlf = content.includes("\r\n");
 
     if (contentUnix.includes(searchUnix)) {
       const count = this._countOccurrences(contentUnix, searchUnix);
       if (count !== 1) {
-        return { matched: false, reason: 'ambiguous', matchCount: count };
+        return { matched: false, reason: "ambiguous", matchCount: count };
       }
       let result = this._literalSplice(contentUnix, searchUnix, replaceUnix);
       if (prefersCrlf) {
-        result = result.replace(/\n/g, '\r\n');
+        result = result.replace(/\n/g, "\r\n");
       }
-      return { matched: true, content: result, strategy: 'normalized' };
+      return { matched: true, content: result, strategy: "normalized" };
     }
     return { matched: false };
   }
 
   _tryWhitespaceMatch(content, search, replace) {
-    const normalize = (s) => s.replace(/\s+/g, ' ').trim();
+    const normalize = (s) => s.replace(/\s+/g, " ").trim();
     const normalizedContent = normalize(content);
     const normalizedSearch = normalize(search);
 
-    if (normalizedContent.includes(normalizedSearch)) {
-      // Find the original position with whitespace
-      const lines = content.split('\n');
-      const searchLines = search.split('\n');
-      
-      for (let i = 0; i <= lines.length - searchLines.length; i++) {
-        const candidate = lines.slice(i, i + searchLines.length).join('\n');
-        if (normalize(candidate) === normalizedSearch) {
-          const before = lines.slice(0, i).join('\n');
-          const after = lines.slice(i + searchLines.length).join('\n');
-          return {
-            matched: true,
-            content: before + (before ? '\n' : '') + replace + (after ? '\n' : '') + after,
-            strategy: 'whitespace'
-          };
-        }
-      }
+    if (!normalizedSearch || !normalizedContent.includes(normalizedSearch)) {
+      return { matched: false };
     }
-    return { matched: false };
+
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const patternSource = escapedSearch.replace(/\s+/g, "\\s+");
+    const whitespaceAwarePattern = new RegExp(patternSource);
+    const whitespaceAwareMatches =
+      content.match(new RegExp(patternSource, "g")) || [];
+
+    if (whitespaceAwareMatches.length !== 1) {
+      return {
+        matched: false,
+        reason: "ambiguous",
+        matchCount: whitespaceAwareMatches.length
+      };
+    }
+
+    const nextContent = content.replace(whitespaceAwarePattern, () => replace);
+    if (nextContent === content) {
+      return { matched: false };
+    }
+
+    return {
+      matched: true,
+      content: nextContent,
+      strategy: "whitespace"
+    };
   }
 
   _tryFuzzyMatch(content, search, replace) {
     // Simple fuzzy matching using sliding window
-    const searchLines = search.split('\n');
-    const contentLines = content.split('\n');
+    const searchLines = search.split("\n");
+    const contentLines = content.split("\n");
     
     let bestMatch = { similarity: 0, startLine: -1 };
     
@@ -362,12 +368,12 @@ class SmartPatchMatcher {
     }
 
     if (bestMatch.similarity > 0.85) {
-      const before = contentLines.slice(0, bestMatch.startLine).join('\n');
-      const after = contentLines.slice(bestMatch.startLine + searchLines.length).join('\n');
+      const before = contentLines.slice(0, bestMatch.startLine).join("\n");
+      const after = contentLines.slice(bestMatch.startLine + searchLines.length).join("\n");
       return {
         matched: true,
-        content: before + (before ? '\n' : '') + replace + (after ? '\n' : '') + after,
-        strategy: 'fuzzy',
+        content: before + (before ? "\n" : "") + replace + (after ? "\n" : "") + after,
+        strategy: "fuzzy",
         confidence: bestMatch.similarity
       };
     }
@@ -466,34 +472,34 @@ class FastPathDetector {
 
     if (!actions || actions.length !== 1) {
       this.slowPathCount++;
-      return { eligible: false, reason: 'multiple_actions' };
+      return { eligible: false, reason: "multiple_actions" };
     }
 
     const action = actions[0];
 
-    if (action.type !== 'patch') {
+    if (action.type !== "patch") {
       this.slowPathCount++;
-      return { eligible: false, reason: 'not_patch' };
+      return { eligible: false, reason: "not_patch" };
     }
 
-    const searchLines = (action.search || '').split('\n').length;
+    const searchLines = (action.search || "").split("\n").length;
     if (searchLines > 50) {
       this.slowPathCount++;
-      return { eligible: false, reason: 'large_change' };
+      return { eligible: false, reason: "large_change" };
     }
 
     // Check if it's a simple, safe edit
-    const isSafeEdit = this._isSafeEdit(action, context);
+    const isSafeEdit = this._isSafeEdit(action);
     if (!isSafeEdit) {
       this.slowPathCount++;
-      return { eligible: false, reason: 'unsafe_edit' };
+      return { eligible: false, reason: "unsafe_edit" };
     }
 
     this.fastPathCount++;
     return { eligible: true, action };
   }
 
-  _isSafeEdit(action, context) {
+  _isSafeEdit(action) {
     // Safe edits are:
     // - Adding/removing imports
     // - Fixing typos
@@ -501,23 +507,23 @@ class FastPathDetector {
     // - Simple variable renames
     // - Small function modifications
 
-    const search = (action.search || '').toLowerCase();
-    const replace = (action.replace || '').toLowerCase();
+    const search = (action.search || "").toLowerCase();
+    const replace = (action.replace || "").toLowerCase();
 
     // Check for import changes (usually safe)
-    if (search.includes('import') || replace.includes('import')) {
+    if (search.includes("import") || replace.includes("import")) {
       return true;
     }
 
     // Check for comment changes (safe)
-    if (search.includes('//') || search.includes('/*') || 
-        replace.includes('//') || replace.includes('/*')) {
+    if (search.includes("//") || search.includes("/*") || 
+        replace.includes("//") || replace.includes("/*")) {
       return true;
     }
 
     // Check for small changes (< 10 lines difference)
-    const searchLineCount = search.split('\n').length;
-    const replaceLineCount = replace.split('\n').length;
+    const searchLineCount = search.split("\n").length;
+    const replaceLineCount = replace.split("\n").length;
     if (Math.abs(searchLineCount - replaceLineCount) < 10) {
       return true;
     }
@@ -530,7 +536,7 @@ class FastPathDetector {
     return {
       fastPath: this.fastPathCount,
       slowPath: this.slowPathCount,
-      fastPathRate: total > 0 ? (this.fastPathCount / total * 100).toFixed(2) + '%' : '0%'
+      fastPathRate: total > 0 ? (this.fastPathCount / total * 100).toFixed(2) + "%" : "0%"
     };
   }
 }
@@ -549,31 +555,31 @@ class SmartEditGate {
    */
   shouldRunGate(actions, context = {}) {
     const confidence = this.calculateConfidence(actions, context);
-    const risk = this.assessRisk(actions, context);
+    const risk = this.assessRisk(actions);
 
     // Always gate high-risk operations
-    if (risk === 'high') {
+    if (risk === "high") {
       this.gateExecuted++;
-      return { skip: false, reason: 'high_risk', confidence, risk };
+      return { skip: false, reason: "high_risk", confidence, risk };
     }
 
     // Skip gate for high-confidence, low-risk edits
-    if (confidence > 0.9 && risk === 'low') {
+    if (confidence > 0.9 && risk === "low") {
       this.gateSkipped++;
-      return { skip: true, reason: 'high_confidence_low_risk', confidence, risk };
+      return { skip: true, reason: "high_confidence_low_risk", confidence, risk };
     }
 
     // Skip gate for medium-confidence, low-risk edits
-    if (confidence > 0.75 && risk === 'low') {
+    if (confidence > 0.75 && risk === "low") {
       this.gateSkipped++;
-      return { skip: true, reason: 'medium_confidence_low_risk', confidence, risk };
+      return { skip: true, reason: "medium_confidence_low_risk", confidence, risk };
     }
 
     this.gateExecuted++;
-    return { skip: false, reason: 'default', confidence, risk };
+    return { skip: false, reason: "default", confidence, risk };
   }
 
-  calculateConfidence(actions, context) {
+  calculateConfidence(actions, context = {}) {
     let score = 1.0;
 
     // Reduce confidence for multiple actions
@@ -582,7 +588,7 @@ class SmartEditGate {
 
     // Reduce confidence for large changes
     const totalLines = actions.reduce((sum, action) => {
-      const searchLines = (action.search || '').split('\n').length;
+      const searchLines = (action.search || "").split("\n").length;
       return sum + searchLines;
     }, 0);
 
@@ -602,25 +608,25 @@ class SmartEditGate {
     return Math.max(0, Math.min(score, 1.0));
   }
 
-  assessRisk(actions, context) {
+  assessRisk(actions) {
     // High risk indicators
     const hasMultipleFiles = new Set(actions.map(a => a.path)).size > 3;
     const hasLargeChanges = actions.some(a => 
-      (a.search || '').split('\n').length > 100
+      (a.search || "").split("\n").length > 100
     );
     const hasCriticalFiles = actions.some(a => 
-      /package\.json|tsconfig\.json|webpack\.config/i.test(a.path || '')
+      /package\.json|tsconfig\.json|webpack\.config/i.test(a.path || "")
     );
 
     if (hasLargeChanges || hasCriticalFiles) {
-      return 'high';
+      return "high";
     }
 
     if (hasMultipleFiles) {
-      return 'medium';
+      return "medium";
     }
 
-    return 'low';
+    return "low";
   }
 
   getStats() {
@@ -628,7 +634,7 @@ class SmartEditGate {
     return {
       skipped: this.gateSkipped,
       executed: this.gateExecuted,
-      skipRate: total > 0 ? (this.gateSkipped / total * 100).toFixed(2) + '%' : '0%'
+      skipRate: total > 0 ? (this.gateSkipped / total * 100).toFixed(2) + "%" : "0%"
     };
   }
 }

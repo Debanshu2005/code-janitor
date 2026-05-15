@@ -5,14 +5,14 @@
  * Supports inserting at specific line numbers or appending to end.
  */
 
-const fs = require('fs').promises;
-const path = require('path');
+const fs = require("fs").promises;
+const path = require("path");
 
 /**
  * Normalize line endings for consistent handling
  */
 function normalizeLineEndings(text) {
-  return text.replace(/\r\n/g, '\n');
+  return text.replace(/\r\n/g, "\n");
 }
 
 /**
@@ -26,7 +26,7 @@ function normalizeLineEndings(text) {
  */
 async function insertContent(filePath, lineNumber, content, workspaceRoot) {
   // Validate line number
-  if (typeof lineNumber !== 'number' || lineNumber < 0) {
+  if (typeof lineNumber !== "number" || lineNumber < 0) {
     throw new Error(`Invalid line number: ${lineNumber}. Must be 0 (append) or positive integer.`);
   }
   
@@ -38,20 +38,20 @@ async function insertContent(filePath, lineNumber, content, workspaceRoot) {
   // Read file content
   let fileContent;
   try {
-    fileContent = await fs.readFile(absolutePath, 'utf8');
+    fileContent = await fs.readFile(absolutePath, "utf8");
   } catch (error) {
     throw new Error(`Failed to read file ${filePath}: ${error.message}`);
   }
   
   // Detect line ending preference
-  const prefersCrlf = fileContent.includes('\r\n');
+  const prefersCrlf = fileContent.includes("\r\n");
   
   // Normalize content
   const normalizedFile = normalizeLineEndings(fileContent);
   const normalizedContent = normalizeLineEndings(content);
   
   // Split into lines
-  const lines = normalizedFile.split('\n');
+  const lines = normalizedFile.split("\n");
   
   // Validate line number is within range
   if (lineNumber > lines.length) {
@@ -62,7 +62,7 @@ async function insertContent(filePath, lineNumber, content, workspaceRoot) {
   }
   
   // Prepare content to insert (ensure it doesn't have trailing newline)
-  const contentLines = normalizedContent.split('\n');
+  const contentLines = normalizedContent.split("\n");
   
   // Insert content
   let insertPosition;
@@ -78,16 +78,16 @@ async function insertContent(filePath, lineNumber, content, workspaceRoot) {
   }
   
   // Reconstruct file content
-  let newContent = lines.join('\n');
+  let newContent = lines.join("\n");
   
   // Restore original line endings if needed
   if (prefersCrlf) {
-    newContent = newContent.replace(/\n/g, '\r\n');
+    newContent = newContent.replace(/\n/g, "\r\n");
   }
   
   // Write back to file
   try {
-    await fs.writeFile(absolutePath, newContent, 'utf8');
+    await fs.writeFile(absolutePath, newContent, "utf8");
   } catch (error) {
     throw new Error(`Failed to write file ${filePath}: ${error.message}`);
   }
@@ -98,7 +98,7 @@ async function insertContent(filePath, lineNumber, content, workspaceRoot) {
     insertedAt: insertPosition,
     linesInserted: contentLines.length,
     finalLineCount: lines.length,
-    operation: lineNumber === 0 ? 'append' : 'insert'
+    operation: lineNumber === 0 ? "append" : "insert"
   };
 }
 
@@ -111,13 +111,13 @@ async function validateInsert(filePath, lineNumber, workspaceRoot) {
     : path.join(workspaceRoot, filePath);
   
   try {
-    const fileContent = await fs.readFile(absolutePath, 'utf8');
-    const lines = normalizeLineEndings(fileContent).split('\n');
+    const fileContent = await fs.readFile(absolutePath, "utf8");
+    const lines = normalizeLineEndings(fileContent).split("\n");
     
     if (lineNumber < 0) {
       return {
         valid: false,
-        error: 'Line number must be 0 (append) or positive integer'
+        error: "Line number must be 0 (append) or positive integer"
       };
     }
     
@@ -131,7 +131,7 @@ async function validateInsert(filePath, lineNumber, workspaceRoot) {
     return {
       valid: true,
       fileLineCount: lines.length,
-      operation: lineNumber === 0 ? 'append' : 'insert'
+      operation: lineNumber === 0 ? "append" : "insert"
     };
   } catch (error) {
     return {

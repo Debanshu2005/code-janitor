@@ -5962,7 +5962,7 @@ ${trimmedText}`;
               this._postMessage({ type: "status", text: `Applying diff to ${action.path}...` });
               
               try {
-                const result = await toolRegistry.executeTool('apply_diff', {
+                const result = await toolRegistry.executeTool("apply_diff", {
                   path: action.path,
                   diff: action.diff
                 }, workspaceFolder);
@@ -5998,7 +5998,7 @@ ${trimmedText}`;
                 } else {
                   this._postMessage({
                     type: "error",
-                    text: `Failed to apply diff to ${action.path}: ${result.error || 'Unknown error'}`
+                    text: `Failed to apply diff to ${action.path}: ${result.error || "Unknown error"}`
                   });
                 }
               } catch (error) {
@@ -6017,7 +6017,7 @@ ${trimmedText}`;
               this._postMessage({ type: "status", text: `Inserting content into ${action.path} at line ${action.line}...` });
               
               try {
-                const result = await toolRegistry.executeTool('insert_content', {
+                const result = await toolRegistry.executeTool("insert_content", {
                   path: action.path,
                   line: action.line,
                   content: action.content
@@ -6039,7 +6039,7 @@ ${trimmedText}`;
                     label: "insert_content"
                   });
                   
-                  const operationText = result.operation === 'append' ? 'Appended' : 'Inserted';
+                  const operationText = result.operation === "append" ? "Appended" : "Inserted";
                   this._postMessage({
                     type: "applied",
                     filePath: fullPath,
@@ -6052,7 +6052,7 @@ ${trimmedText}`;
                 } else {
                   this._postMessage({
                     type: "error",
-                    text: `Failed to insert content into ${action.path}: ${result.error || 'Unknown error'}`
+                    text: `Failed to insert content into ${action.path}: ${result.error || "Unknown error"}`
                   });
                 }
               } catch (error) {
@@ -6066,7 +6066,7 @@ ${trimmedText}`;
               this._postMessage({ type: "status", text: `Reading ${action.files.length} file(s)...` });
               
               try {
-                const result = await toolRegistry.executeTool('read_file', {
+                const result = await toolRegistry.executeTool("read_file", {
                   files: action.files
                 }, workspaceFolder);
                 

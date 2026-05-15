@@ -2,19 +2,19 @@
  * Tests for apply-diff tool
  */
 
-const { applyDiff, validateDiff, parseDiffBlocks } = require('../apply-diff');
-const fs = require('fs').promises;
-const path = require('path');
-const os = require('os');
+const { applyDiff, validateDiff, parseDiffBlocks } = require("../apply-diff");
+const fs = require("fs").promises;
+const path = require("path");
+const os = require("os");
 
-describe('apply-diff tool', () => {
+describe("apply-diff tool", () => {
   let tempDir;
   let testFile;
   
   beforeEach(async () => {
     // Create temp directory
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'apply-diff-test-'));
-    testFile = path.join(tempDir, 'test.js');
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "apply-diff-test-"));
+    testFile = path.join(tempDir, "test.js");
   });
   
   afterEach(async () => {
@@ -26,8 +26,8 @@ describe('apply-diff tool', () => {
     }
   });
   
-  describe('parseDiffBlocks', () => {
-    test('parses single diff block', () => {
+  describe("parseDiffBlocks", () => {
+    test("parses single diff block", () => {
       const diff = `<<<<<<< SEARCH
 :start_line: 10
 -------
@@ -41,12 +41,12 @@ new code
       expect(blocks).toHaveLength(1);
       expect(blocks[0]).toEqual({
         startLine: 10,
-        search: 'old code',
-        replace: 'new code'
+        search: "old code",
+        replace: "new code"
       });
     });
     
-    test('parses multiple diff blocks', () => {
+    test("parses multiple diff blocks", () => {
       const diff = `<<<<<<< SEARCH
 :start_line: 5
 -------
@@ -70,15 +70,15 @@ second new
       expect(blocks[1].startLine).toBe(15);
     });
     
-    test('throws on invalid format', () => {
-      const diff = 'invalid diff format';
+    test("throws on invalid format", () => {
+      const diff = "invalid diff format";
       
-      expect(() => parseDiffBlocks(diff)).toThrow('No valid SEARCH/REPLACE blocks');
+      expect(() => parseDiffBlocks(diff)).toThrow("No valid SEARCH/REPLACE blocks");
     });
   });
   
-  describe('validateDiff', () => {
-    test('validates correct diff', () => {
+  describe("validateDiff", () => {
+    test("validates correct diff", () => {
       const diff = `<<<<<<< SEARCH
 :start_line: 10
 -------
@@ -93,7 +93,7 @@ new code
       expect(result.blockCount).toBe(1);
     });
     
-    test('detects overlapping blocks', () => {
+    test("detects overlapping blocks", () => {
       const diff = `<<<<<<< SEARCH
 :start_line: 10
 -------
@@ -115,12 +115,12 @@ new
       const result = validateDiff(diff);
       
       expect(result.valid).toBe(false);
-      expect(result.error).toContain('Overlapping');
+      expect(result.error).toContain("Overlapping");
     });
   });
   
-  describe('applyDiff', () => {
-    test('applies single diff block', async () => {
+  describe("applyDiff", () => {
+    test("applies single diff block", async () => {
       const content = `line 1
 line 2
 line 3
@@ -144,12 +144,12 @@ modified line 3
       expect(result.success).toBe(true);
       expect(result.blocksApplied).toBe(1);
       
-      const newContent = await fs.readFile(testFile, 'utf8');
-      expect(newContent).toContain('modified line 2');
-      expect(newContent).toContain('modified line 3');
+      const newContent = await fs.readFile(testFile, "utf8");
+      expect(newContent).toContain("modified line 2");
+      expect(newContent).toContain("modified line 3");
     });
     
-    test('applies multiple diff blocks in reverse order', async () => {
+    test("applies multiple diff blocks in reverse order", async () => {
       const content = `line 1
 line 2
 line 3
@@ -179,13 +179,13 @@ new line 4
       expect(result.success).toBe(true);
       expect(result.blocksApplied).toBe(2);
       
-      const newContent = await fs.readFile(testFile, 'utf8');
-      expect(newContent).toContain('new line 2');
-      expect(newContent).toContain('new line 4');
+      const newContent = await fs.readFile(testFile, "utf8");
+      expect(newContent).toContain("new line 2");
+      expect(newContent).toContain("new line 4");
     });
     
-    test('handles CRLF line endings', async () => {
-      const content = 'line 1\r\nline 2\r\nline 3';
+    test("handles CRLF line endings", async () => {
+      const content = "line 1\r\nline 2\r\nline 3";
       
       await fs.writeFile(testFile, content);
       
@@ -201,13 +201,13 @@ modified
       
       expect(result.success).toBe(true);
       
-      const newContent = await fs.readFile(testFile, 'utf8');
-      expect(newContent).toContain('\r\n'); // CRLF preserved
-      expect(newContent).toContain('modified');
+      const newContent = await fs.readFile(testFile, "utf8");
+      expect(newContent).toContain("\r\n"); // CRLF preserved
+      expect(newContent).toContain("modified");
     });
     
-    test('throws on search not found', async () => {
-      const content = 'line 1\nline 2\nline 3';
+    test("throws on search not found", async () => {
+      const content = "line 1\nline 2\nline 3";
       
       await fs.writeFile(testFile, content);
       
@@ -219,11 +219,11 @@ nonexistent line
 new line
 >>>>>>> REPLACE`;
       
-      await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow('Search block not found');
+      await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow("Search block not found");
     });
     
-    test('throws on invalid line number', async () => {
-      const content = 'line 1\nline 2';
+    test("throws on invalid line number", async () => {
+      const content = "line 1\nline 2";
       
       await fs.writeFile(testFile, content);
       
@@ -235,7 +235,7 @@ line
 new
 >>>>>>> REPLACE`;
       
-      await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow('out of range');
+      await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow("out of range");
     });
   });
 });
