@@ -30,6 +30,7 @@ const MAX_SESSION_PERSISTED_ENTRIES = 24;
 const MAX_PERSISTED_HISTORY_ENTRY_CHARS = 24_000;
 const MAX_SESSION_SUMMARY_CHARS = 2_400;
 const MAX_CHAT_SESSIONS = 12;
+const MAX_TODO_ITEMS = 12;
 const RELEVANT_FILE_CACHE_LIMIT = 30;
 const REPETITION_WINDOW = 150;
 const REPETITION_WINDOW_HEAVY = 300;
@@ -133,6 +134,7 @@ const OLLAMA_EDIT_PREFERRED_MODELS = [
   "codellama:latest",
   "llama3:latest"
 ];
+const VALID_TODO_STATUSES = new Set(["pending", "in_progress", "completed"]);
 
 class AIAgent {
   constructor(context = null) {
@@ -197,6 +199,56 @@ class AIAgent {
       .slice(-MAX_SESSION_PERSISTED_ENTRIES);
   }
 
+  _sanitizeTodoList(todoList) {
+    if (!Array.isArray(todoList)) return [];
+
+    const sanitized = [];
+    let hasInProgress = false;
+
+    for (const item of todoList) {
+      const text = String(
+        item?.text || item?.task || item?.title || ""
+      ).trim();
+      const status = String(item?.status || "")
+        .trim()
+        .toLowerCase();
+
+      if (!text || !VALID_TODO_STATUSES.has(status)) {
+        continue;
+      }
+
+      if (status === "in_progress") {
+        if (hasInProgress) {
+          continue;
+        }
+        hasInProgress = true;
+      }
+
+      sanitized.push({ text, status });
+      if (sanitized.length >= MAX_TODO_ITEMS) {
+        break;
+      }
+    }
+
+    return sanitized;
+  }
+
+  _buildTodoCounts(todoList = []) {
+    return todoList.reduce(
+      (counts, item) => {
+        if (counts[item.status] !== undefined) {
+          counts[item.status] += 1;
+        }
+        return counts;
+      },
+      {
+        pending: 0,
+        in_progress: 0,
+        completed: 0
+      }
+    );
+  }
+
   _createSessionId() {
     return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
@@ -227,7 +279,8 @@ class AIAgent {
         Number.isFinite(overrides.compactedCount) && overrides.compactedCount > 0
           ? overrides.compactedCount
           : 0,
-      history: this._sanitizeHistoryEntries(overrides.history || [])
+      history: this._sanitizeHistoryEntries(overrides.history || []),
+      todoList: this._sanitizeTodoList(overrides.todoList || [])
     };
   }
 
@@ -429,7 +482,18 @@ class AIAgent {
       currentSessionTitle: currentSession.title,
       compactedCount: currentSession.compactedCount || 0,
       sessions,
-      history: currentSession.history.slice()
+      history: currentSession.history.slice(),
+      todoList: this._sanitizeTodoList(currentSession.todoList || [])
+    };
+  }
+
+  updateTodoList(todoList = []) {
+    const session = this._touchCurrentSession();
+    session.todoList = this._sanitizeTodoList(todoList);
+    this._persistChatState();
+    return {
+      todoList: session.todoList.slice(),
+      counts: this._buildTodoCounts(session.todoList)
     };
   }
 
@@ -4366,7 +4430,7 @@ ${resolvedMessage}`;
       : "";
     const base =
       silentPreamble +
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Session-scoped todo tracking via `UPDATE_TODO_LIST:` with `pending`, `in_progress`, and `completed` task states\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
       thinkingInstruction;
     const fastRules = [
       "Operational rules (fast):",
@@ -4775,12 +4839,30 @@ Use READ_FILES when:
 - Working with large files (use line ranges)
 - Want to see specific sections only
 
+**UPDATE_TODO_LIST** - Track the current multi-step plan for this chat session:
+Format:
+UPDATE_TODO_LIST:
+\`\`\`json
+[
+  { "text": "Inspect the current wiring", "status": "completed" },
+  { "text": "Add todo state persistence", "status": "in_progress" },
+  { "text": "Run focused tests", "status": "pending" }
+]
+\`\`\`
+
+Rules:
+- Replace the full todo list each time you use this action
+- Allowed statuses: \`pending\`, \`in_progress\`, \`completed\`
+- Keep at most one item \`in_progress\`
+- Use this for substantial multi-step tasks when keeping visible progress helps
+
 **When to use each tool:**
 - PATCH: Simple find/replace, no line anchoring needed
 - APPLY_DIFF: Precise edits with line numbers, multiple changes
 - FILE: New files or complete rewrites
 - INSERT_CONTENT: Adding lines without modifying existing content
 - READ_FILES: Efficient multi-file context gathering
+- UPDATE_TODO_LIST: Keep a short working checklist with status tracking for the current chat
 
 You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
 When the current file state is unclear, inspect first instead of guessing.
@@ -4792,8 +4874,8 @@ GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
 ${isAgentLoop
-  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. Keep actions exact and easy to parse."
-  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
+  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, or UPDATE_TODO_LIST: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, or UPDATE_TODO_LIST: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -4850,6 +4932,7 @@ Rules:
 - Do not continue, quote, or paraphrase the previous reply.
 - If the user asked you to change code/files, include at least one PATCH: or FILE: action.
 - If you genuinely need more ground truth before editing, you may instead return READ:, GREP:, or focused inspection CMD: actions only.
+- You may include UPDATE_TODO_LIST: when a multi-step edit/debug task benefits from tracked progress.
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
@@ -6100,6 +6183,22 @@ ${userMessage}`;
       }
       return false;
     };
+    const parseTodoListPayload = (rawPayload) => {
+      const trimmed = String(rawPayload || "").trim();
+      if (!trimmed) {
+        throw new Error("Empty todo payload");
+      }
+
+      const fencedMatch = trimmed.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+      const jsonText = fencedMatch ? fencedMatch[1] : trimmed;
+      const items = JSON.parse(jsonText);
+
+      if (!Array.isArray(items)) {
+        throw new Error("Todo payload must be a JSON array");
+      }
+
+      return items;
+    };
 
     // Match PATCH: actions for targeted edits
     const patchRegex = /PATCH:\s*([^\r\n`]+)\r?\nSEARCH:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```\s*\r?\nREPLACE:\s*\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
@@ -6157,7 +6256,7 @@ ${userMessage}`;
     }
 
     // Match INSERT_CONTENT: actions for Bob-style line insertion
-    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|UPDATE_TODO_LIST|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = insertContentRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6200,6 +6299,22 @@ ${userMessage}`;
         }
       } catch (error) {
         // Invalid JSON, skip this match
+        continue;
+      }
+    }
+
+    // Match UPDATE_TODO_LIST: actions for session-scoped task tracking
+    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = updateTodoRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const items = parseTodoListPayload(match[1]);
+        actions.push({
+          type: "update_todo_list",
+          items
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
         continue;
       }
     }
@@ -6303,7 +6418,8 @@ ${userMessage}`;
       warnings.push(incompleteStructuredEditWarning);
     } else if (
       hasStandaloneToken(/PATCH:\s*[^\r\n`]+/i) ||
-      hasStandaloneToken(/FILE:\s*[^\r\n`]+/i)
+      hasStandaloneToken(/FILE:\s*[^\r\n`]+/i) ||
+      hasStandaloneToken(/UPDATE_TODO_LIST:\s*$/im)
     ) {
       warnings.push(incompleteStructuredEditWarning);
     }
@@ -7065,6 +7181,7 @@ ${userMessage}`;
     session.history = [];
     session.summary = "";
     session.compactedCount = 0;
+    session.todoList = [];
     this._syncCurrentSessionReferences();
     this._persistChatState();
   }

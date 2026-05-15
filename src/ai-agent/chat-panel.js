@@ -133,7 +133,7 @@ class ChatPanel {
 
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -219,7 +219,8 @@ class ChatPanel {
 
     const blockPatterns = [
       /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
-      /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi
+      /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
+      /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
     ];
 
     for (const pattern of blockPatterns) {
@@ -265,6 +266,7 @@ class ChatPanel {
       grep: 0,
       mkdir: 0,
       cmd: 0,
+      update_todo_list: 0,
       other: 0
     };
 
@@ -296,6 +298,13 @@ class ChatPanel {
     if (counts.cmd) {
       parts.push(`${counts.cmd} command${counts.cmd === 1 ? "" : "s"}`);
     }
+    if (counts.update_todo_list) {
+      parts.push(
+        `${counts.update_todo_list} todo update${
+          counts.update_todo_list === 1 ? "" : "s"
+        }`
+      );
+    }
     if (counts.other) {
       parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
     }
@@ -322,6 +331,8 @@ class ChatPanel {
         lines.push(`- Create folder ${action.path || "(unnamed)"}`);
       } else if (action.type === "cmd") {
         lines.push(`- Run ${action.command || "a command"}`);
+      } else if (action.type === "update_todo_list") {
+        lines.push("- Update the task list");
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -2138,6 +2149,40 @@ class ChatPanel {
     });
   }
 
+  _getTodoState() {
+    const sessionState = this.agent.getSessionState();
+    const todoList = Array.isArray(sessionState.todoList)
+      ? sessionState.todoList
+      : [];
+    const counts = todoList.reduce(
+      (summary, item) => {
+        if (summary[item.status] !== undefined) {
+          summary[item.status] += 1;
+        }
+        return summary;
+      },
+      {
+        pending: 0,
+        in_progress: 0,
+        completed: 0
+      }
+    );
+
+    return {
+      currentSessionId: sessionState.currentSessionId,
+      todoList,
+      todoCounts: counts
+    };
+  }
+
+  _postTodoState(extra = {}) {
+    this._postMessage({
+      type: "todoState",
+      ...this._getTodoState(),
+      ...extra
+    });
+  }
+
   _getUndoState() {
     const latestEntry = this._getLatestUndoEntry().entry;
     return {
@@ -2689,9 +2734,14 @@ ${document.getText()}
 
   _summarizePlannedActions(actions, insideActions, outsideFiles) {
     const fileSummaries = [];
+    let todoUpdateCount = 0;
     for (const { action, result } of insideActions) {
       if (action.type === "patch") {
         fileSummaries.push(`patch ${action.path}`);
+        continue;
+      }
+      if (action.type === "update_todo_list") {
+        todoUpdateCount += 1;
         continue;
       }
       if (action.type !== "file" || !result?.success) continue;
@@ -2711,6 +2761,9 @@ ${document.getText()}
     }
     if (cmdCount > 0) {
       parts.push(`Commands: ${cmdCount}`);
+    }
+    if (todoUpdateCount > 0) {
+      parts.push(`Todo updates: ${todoUpdateCount}`);
     }
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
   }
@@ -6066,6 +6119,33 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "error",
                   text: `Error inserting content into ${action.path}: ${error.message}`
+                });
+              }
+            } else if (action.type === "update_todo_list") {
+              this._postMessage({
+                type: "status",
+                text: `Updating task list with ${action.items.length} item(s)...`
+              });
+
+              try {
+                const result = await toolRegistry.executeTool(
+                  "update_todo_list",
+                  {
+                    items: action.items
+                  },
+                  workspaceFolder,
+                  { agent: this.agent }
+                );
+
+                this._postTodoState();
+                this._postMessage({
+                  type: "applied",
+                  text: `\u2705 ${result.summary}`
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error updating task list: ${error.message}`
                 });
               }
             } else if (action.type === "read_files") {

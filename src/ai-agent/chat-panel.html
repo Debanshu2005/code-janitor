@@ -903,6 +903,7 @@
         overflow: hidden;
         flex-shrink: 0;
       }
+      #activity-panel.collapsed #todo-board,
       #activity-panel.collapsed #activity-list {
         display: none;
       }
@@ -942,6 +943,111 @@
       #activity-clear:hover {
         color: var(--text);
         border-color: var(--accent);
+      }
+      #todo-board {
+        display: none;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(48, 54, 61, 0.7);
+        background:
+          linear-gradient(180deg, rgba(14, 20, 31, 0.88), rgba(11, 16, 25, 0.72));
+      }
+      #todo-board.visible {
+        display: block;
+      }
+      #todo-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      #todo-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #c6d4e3;
+      }
+      #todo-summary {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      #todo-list {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        margin-top: 10px;
+      }
+      .todo-item {
+        display: grid;
+        grid-template-columns: 18px 1fr auto;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 8px;
+        border-radius: 10px;
+        border: 1px solid rgba(48, 54, 61, 0.7);
+        background: rgba(16, 22, 33, 0.7);
+      }
+      .todo-item.pending {
+        border-color: rgba(210, 153, 34, 0.28);
+      }
+      .todo-item.in_progress {
+        border-color: rgba(47, 129, 247, 0.45);
+        background: rgba(15, 32, 58, 0.52);
+      }
+      .todo-item.completed {
+        border-color: rgba(63, 185, 80, 0.28);
+      }
+      .todo-marker {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 700;
+        border: 1px solid currentColor;
+      }
+      .todo-item.pending .todo-marker {
+        color: var(--yellow);
+      }
+      .todo-item.in_progress .todo-marker {
+        color: var(--accent-hover);
+      }
+      .todo-item.completed .todo-marker {
+        color: var(--green);
+      }
+      .todo-text {
+        min-width: 0;
+        font-size: 12px;
+        color: var(--text);
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .todo-item.completed .todo-text {
+        color: #9fb2c8;
+        text-decoration: line-through;
+      }
+      .todo-pill {
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        border: 1px solid rgba(48, 54, 61, 0.7);
+      }
+      .todo-pill.pending {
+        color: var(--yellow);
+        background: rgba(210, 153, 34, 0.12);
+      }
+      .todo-pill.in_progress {
+        color: var(--accent-hover);
+        background: rgba(47, 129, 247, 0.14);
+      }
+      .todo-pill.completed {
+        color: var(--green);
+        background: rgba(63, 185, 80, 0.12);
       }
       #activity-list {
         max-height: 160px;
@@ -2723,6 +2829,13 @@
           <button id="activity-clear">Clear</button>
         </div>
       </div>
+      <div id="todo-board">
+        <div id="todo-head">
+          <div id="todo-title">Task Board</div>
+          <div id="todo-summary"></div>
+        </div>
+        <div id="todo-list"></div>
+      </div>
       <div id="activity-list">
         <div class="activity-empty">No activity yet. Start a task to see the agent workflow.</div>
       </div>
@@ -2957,6 +3070,9 @@
       var progressLabel = document.getElementById("progress-label");
       var progressFill = document.getElementById("progress-fill");
       var activityPanel = document.getElementById("activity-panel");
+      var todoBoard = document.getElementById("todo-board");
+      var todoSummary = document.getElementById("todo-summary");
+      var todoList = document.getElementById("todo-list");
       var activityList = document.getElementById("activity-list");
       var activityClear = document.getElementById("activity-clear");
       var activityToggle = document.getElementById("activity-toggle");
@@ -3255,6 +3371,87 @@
         empty.className = "activity-empty";
         empty.textContent = activityEmptyMessage;
         activityList.appendChild(empty);
+      }
+
+      function buildTodoCounts(items) {
+        var counts = {
+          pending: 0,
+          in_progress: 0,
+          completed: 0
+        };
+        (Array.isArray(items) ? items : []).forEach(function(item) {
+          if (item && counts[item.status] !== undefined) {
+            counts[item.status] += 1;
+          }
+        });
+        return counts;
+      }
+
+      function formatTodoSummary(counts) {
+        var parts = [];
+        if (counts.in_progress) {
+          parts.push(counts.in_progress + " in progress");
+        }
+        if (counts.pending) {
+          parts.push(counts.pending + " pending");
+        }
+        if (counts.completed) {
+          parts.push(counts.completed + " completed");
+        }
+        return parts.join(" · ");
+      }
+
+      function getTodoMarker(status) {
+        if (status === "completed") return "OK";
+        if (status === "in_progress") return "~";
+        return "o";
+      }
+
+      function getTodoLabel(status) {
+        if (status === "completed") return "Completed";
+        if (status === "in_progress") return "In Progress";
+        return "Pending";
+      }
+
+      function setTodoState(items, counts) {
+        var safeItems = Array.isArray(items) ? items : [];
+        if (!todoBoard || !todoList || !todoSummary) return;
+
+        todoList.innerHTML = "";
+
+        if (safeItems.length === 0) {
+          todoBoard.classList.remove("visible");
+          todoSummary.textContent = "";
+          return;
+        }
+
+        todoBoard.classList.add("visible");
+        var summaryCounts = counts || buildTodoCounts(safeItems);
+        todoSummary.textContent = formatTodoSummary(summaryCounts);
+
+        safeItems.forEach(function(item) {
+          if (!item || !item.text) return;
+          var status = String(item.status || "pending");
+          var row = document.createElement("div");
+          row.className = "todo-item " + status;
+
+          var marker = document.createElement("div");
+          marker.className = "todo-marker";
+          marker.textContent = getTodoMarker(status);
+
+          var text = document.createElement("div");
+          text.className = "todo-text";
+          text.textContent = item.text;
+
+          var pill = document.createElement("div");
+          pill.className = "todo-pill " + status;
+          pill.textContent = getTodoLabel(status);
+
+          row.appendChild(marker);
+          row.appendChild(text);
+          row.appendChild(pill);
+          todoList.appendChild(row);
+        });
       }
 
       function setActivityCollapsed(collapsed) {
@@ -5025,9 +5222,12 @@
           }
         } else if (msg.type === "undoState") {
           setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);
+        } else if (msg.type === "todoState") {
+          setTodoState(msg.todoList || [], msg.todoCounts || null);
         } else if (msg.type === "sessionState") {
           populateSessions(msg.sessions, msg.currentSessionId);
           setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);
+          setTodoState(msg.todoList || [], msg.todoCounts || null);
           restoreConversation(msg.history);
         } else if (msg.type === "setCurrentProvider") {
           if (msg.providers && msg.providers.length) {

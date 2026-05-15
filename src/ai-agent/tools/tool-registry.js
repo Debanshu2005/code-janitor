@@ -8,6 +8,7 @@
 const { applyDiff, validateDiff } = require("./apply-diff");
 const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, formatResults } = require("./read-file");
+const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
 
 /**
  * Tool definitions with metadata
@@ -115,6 +116,36 @@ const y = 4;
 ])`
       }
     ]
+  },
+
+  update_todo_list: {
+    name: "update_todo_list",
+    description:
+      "Replace the current chat session todo list with tracked task statuses",
+    handler: updateTodoList,
+    params: {
+      items: {
+        type: "array",
+        required: true,
+        description:
+          "Array of todo items: [{ text: string, status: 'pending' | 'in_progress' | 'completed' }]",
+        maxItems: MAX_TODO_ITEMS
+      }
+    },
+    examples: [
+      {
+        description: "Track a short multi-step task",
+        usage: `update_todo_list([
+  { text: 'Inspect the current tool wiring', status: 'completed' },
+  { text: 'Add todo list persistence', status: 'in_progress' },
+  { text: 'Run targeted tests', status: 'pending' }
+])`
+      },
+      {
+        description: "Clear the todo list",
+        usage: "update_todo_list([])"
+      }
+    ]
   }
 };
 
@@ -208,7 +239,7 @@ class ToolRegistry {
   /**
    * Execute a tool
    */
-  async executeTool(toolName, params, workspaceRoot) {
+  async executeTool(toolName, params, workspaceRoot, executionContext = {}) {
     const tool = this.getTool(toolName);
     if (!tool) {
       throw new Error(`Unknown tool: ${toolName}`);
@@ -228,13 +259,26 @@ class ToolRegistry {
     try {
       // Call handler with appropriate parameters
       if (toolName === "read_file") {
-        result = await tool.handler(params.files, workspaceRoot);
+        result = await tool.handler(params.files, workspaceRoot, executionContext);
       } else if (toolName === "insert_content") {
-        result = await tool.handler(params.path, params.line, params.content, workspaceRoot);
+        result = await tool.handler(
+          params.path,
+          params.line,
+          params.content,
+          workspaceRoot,
+          executionContext
+        );
       } else if (toolName === "apply_diff") {
-        result = await tool.handler(params.path, params.diff, workspaceRoot);
+        result = await tool.handler(
+          params.path,
+          params.diff,
+          workspaceRoot,
+          executionContext
+        );
+      } else if (toolName === "update_todo_list") {
+        result = await tool.handler(params.items, workspaceRoot, executionContext);
       } else {
-        result = await tool.handler(params, workspaceRoot);
+        result = await tool.handler(params, workspaceRoot, executionContext);
       }
     } catch (err) {
       error = err.message;

@@ -358,6 +358,33 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("parses UPDATE_TODO_LIST actions with tracked statuses", () => {
+    const agent = new AIAgent();
+    const response = [
+      "UPDATE_TODO_LIST:",
+      "```json",
+      "[",
+      '  { "text": "Inspect the current wiring", "status": "completed" },',
+      '  { "text": "Add todo persistence", "status": "in_progress" },',
+      '  { "text": "Run focused tests", "status": "pending" }',
+      "]",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "update_todo_list",
+        items: [
+          { text: "Inspect the current wiring", status: "completed" },
+          { text: "Add todo persistence", status: "in_progress" },
+          { text: "Run focused tests", status: "pending" }
+        ]
+      }
+    ]);
+  });
+
   test("prefers source files over generated copies when matching path hints", () => {
     const agent = new AIAgent();
     agent.codebaseContext = new Map([
@@ -409,6 +436,34 @@ describe("AIAgent structured edit parsing", () => {
     expect(state.currentSessionId).not.toBe(originalId);
     expect(state.currentSessionTitle).toBe("New Chat 1");
     expect(state.history).toEqual([]);
+  });
+
+  test("todo lists are stored per session and switch with the active chat", () => {
+    const agent = new AIAgent();
+    const firstSessionId = agent.getSessionState().currentSessionId;
+
+    agent.updateTodoList([
+      { text: "Inspect the current wiring", status: "in_progress" }
+    ]);
+
+    agent.createSession("Second chat");
+    const secondSessionId = agent.getSessionState().currentSessionId;
+    expect(secondSessionId).not.toBe(firstSessionId);
+    expect(agent.getSessionState().todoList).toEqual([]);
+
+    agent.updateTodoList([
+      { text: "Run focused tests", status: "pending" }
+    ]);
+
+    agent.switchSession(firstSessionId);
+    expect(agent.getSessionState().todoList).toEqual([
+      { text: "Inspect the current wiring", status: "in_progress" }
+    ]);
+
+    agent.switchSession(secondSessionId);
+    expect(agent.getSessionState().todoList).toEqual([
+      { text: "Run focused tests", status: "pending" }
+    ]);
   });
 
   test("applyChanges rejects paths that resolve to directories", async () => {

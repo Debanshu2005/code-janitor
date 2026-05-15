@@ -91,6 +91,20 @@ describe("ChatPanel structured edit helpers", () => {
     expect(summary).toContain("patch src/app.js");
   });
 
+  test("structured action summary includes todo list updates", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    const summary = panel._buildStructuredActionDisplaySummary([
+      {
+        type: "update_todo_list",
+        items: [{ text: "Run tests", status: "in_progress" }]
+      }
+    ]);
+
+    expect(summary).toContain("todo update");
+    expect(summary).toContain("Update the task list");
+  });
+
   test("suppresses internal structured edit retry statuses", () => {
     const panel = Object.create(ChatPanel.prototype);
 
@@ -266,6 +280,32 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel._getUndoState()).toEqual({
       canUndo: true,
       latestUndoId: "undo-2"
+    });
+  });
+
+  test("todo state mirrors the active session todo list", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      getSessionState: jest.fn(() => ({
+        currentSessionId: "session-a",
+        todoList: [
+          { text: "Inspect wiring", status: "completed" },
+          { text: "Run tests", status: "in_progress" }
+        ]
+      }))
+    };
+
+    expect(panel._getTodoState()).toEqual({
+      currentSessionId: "session-a",
+      todoList: [
+        { text: "Inspect wiring", status: "completed" },
+        { text: "Run tests", status: "in_progress" }
+      ],
+      todoCounts: {
+        pending: 0,
+        in_progress: 1,
+        completed: 1
+      }
     });
   });
 
