@@ -13,6 +13,7 @@ const {
   isValidGraphData,
   matchGraphPathsFromHints
 } = require("./graph-context");
+const { createOptimizedAgent } = require("./optimizer-integration");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -153,6 +154,9 @@ class AIAgent {
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
     this._syncCurrentSessionReferences();
+
+    // Enable performance optimizations
+    createOptimizedAgent(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {

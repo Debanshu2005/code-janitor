@@ -16,6 +16,7 @@ const PerformanceMonitor = require("../self-healing/performance-monitor");
 const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
+const { createOptimizedChatPanel } = require("./optimizer-integration");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
@@ -66,6 +67,9 @@ class ChatPanel {
     
     // Expose performance monitor globally for agent to log issues
     global.performanceMonitor = this.performanceMonitor;
+
+    // Enable performance optimizations
+    createOptimizedChatPanel(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
