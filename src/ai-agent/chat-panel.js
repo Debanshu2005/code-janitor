@@ -122,6 +122,10 @@ class ChatPanel {
     return queued;
   }
 
+  _getInteractionStyleForRequest(isEditLikeIntent) {
+    return isEditLikeIntent ? "agent_loop" : undefined;
+  }
+
   _findStructuredActionStart(text) {
     const value = String(text || "");
     const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
@@ -3466,6 +3470,7 @@ Now continue the professional edit loop:
       {
         mode: nextMode,
         intentOverride: "edit",
+        interactionStyle: this._getInteractionStyleForRequest(true),
         runtimeConfig,
         skipHistory: true,
         onStatus: (text) => {
@@ -5153,6 +5158,9 @@ ${trimmedText}`;
                 mode: requestMode,
                 systemOverlay,
                 intentOverride: workflowIntentOverride || undefined,
+                interactionStyle: this._getInteractionStyleForRequest(
+                  isEditLikeIntent
+                ),
                 forceStructuredEdits: workflowForceStructuredEdits,
                 runtimeConfig: config,
                 images: Array.isArray(message.images) ? message.images : [],

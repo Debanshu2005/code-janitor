@@ -22,6 +22,7 @@ const WORKFLOWS = Object.freeze({
     ].join("\n"),
     allowsWrites: true,
     executionStyle: "codex",
+    intentOverride: "edit",
     forceStructuredEdits: true
   },
   "office-hours": {

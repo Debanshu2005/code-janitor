@@ -141,6 +141,13 @@ describe("ChatPanel structured edit helpers", () => {
     );
   });
 
+  test("uses agent-loop interaction style for edit-like requests only", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(panel._getInteractionStyleForRequest(true)).toBe("agent_loop");
+    expect(panel._getInteractionStyleForRequest(false)).toBeUndefined();
+  });
+
   test("effective workspace follows the active editor workspace", () => {
     const panel = Object.create(ChatPanel.prototype);
     vscode.workspace.workspaceFolders = [
@@ -1047,6 +1054,7 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
       mode: "heavy",
       intentOverride: "edit",
+      interactionStyle: "agent_loop",
       runtimeConfig: { provider: "custom:test", model: "gpt-like" },
       skipHistory: true
     });
