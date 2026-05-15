@@ -1949,6 +1949,13 @@ class ChatPanel {
     }
   }
 
+  _getPreferredWebviewTarget({ preferPanel = true } = {}) {
+    if (preferPanel) {
+      return this.panel?.webview || this.sidebarView?.webview || null;
+    }
+    return this.sidebarView?.webview || this.panel?.webview || null;
+  }
+
   _getChatPanelHtmlPath() {
     const candidates = this._getChatPanelHtmlCandidates();
     const existingPath = candidates.find(candidate => fsSync.existsSync(candidate));
@@ -6672,10 +6679,13 @@ ${trimmedText}`;
         console.log("[ChatPanel] Tutorial marked as completed");
       } else if (message.type === "prefillMessage") {
         // Quick Fix with AI: pre-fill message and auto-send
-        if (this.panel) {
-          this._postMessage({ 
-            type: "prefillAndSend", 
-            message: message.message 
+        const targetWebview = this._getPreferredWebviewTarget({
+          preferPanel: true
+        });
+        if (targetWebview) {
+          targetWebview.postMessage({
+            type: "prefillAndSend",
+            message: message.message
           });
         }
       } else if (message.type === "webSearch") {
