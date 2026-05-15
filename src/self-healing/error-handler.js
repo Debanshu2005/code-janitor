@@ -1,6 +1,5 @@
 const vscode = require("../utils/vscode-shim");
 const fs = require("fs").promises;
-const fsSync = require("fs");
 const path = require("path");
 
 /**
@@ -176,7 +175,7 @@ class SelfDiagnosingErrorHandler {
     try {
       switch (diagnosis.type) {
         case "MISSING_FILE":
-          return await this._fixMissingFile(diagnosis, context);
+          return await this._fixMissingFile(diagnosis);
         
         case "FILE_EXISTS":
           return await this._fixFileExists(diagnosis, context);
@@ -209,7 +208,7 @@ class SelfDiagnosingErrorHandler {
   /**
    * Fix: Missing file or directory
    */
-  async _fixMissingFile(diagnosis, context) {
+  async _fixMissingFile(diagnosis) {
     const filePath = diagnosis.filePath;
     
     if (diagnosis.operation === "mkdir") {

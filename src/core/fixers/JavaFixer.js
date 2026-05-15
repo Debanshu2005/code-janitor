@@ -78,7 +78,7 @@ class JavaFixer extends BaseFixer {
             rest = controlMatch[2].trim();
 
           // More accurate detection - control structures typically don't have return types
-          const hasReturnType = /^[\w<>\[\]]+\s+\w+\s*\(/.test(rest);
+          const hasReturnType = /^[\w<>\][]+\s+\w+\s*\(/.test(rest);
           const isLikelyMethod =
             rest.includes("(") && !rest.trim().endsWith(") {");
 
@@ -163,7 +163,7 @@ class JavaFixer extends BaseFixer {
 
     // Method declarations (including generics and throws)
     if (
-      /^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?(synchronized\s+)?(abstract\s+)?(<[^>]+>\s+)?[\w<>\[\]]+\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(
+      /^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?(synchronized\s+)?(abstract\s+)?(<[^>]+>\s+)?[\w<>\][]+\s+\w+\s*\([^)]*\)\s*(throws\s+[\w<>,.\s]+)?\s*\{?\s*$/.test(
         trimmed
       )
     )
@@ -306,7 +306,9 @@ class JavaFixer extends BaseFixer {
   async _cleanupTempFile(filePath) {
     try {
       await fs.unlink(filePath);
-    } catch {}
+    } catch {
+      // Ignore cleanup failures for temporary formatter files.
+    }
   }
 
   async _fallbackFormatting() {

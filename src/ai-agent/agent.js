@@ -13,6 +13,7 @@ const {
   isValidGraphData,
   matchGraphPathsFromHints
 } = require("./graph-context");
+const { createOptimizedAgent } = require("./optimizer-integration");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -153,6 +154,9 @@ class AIAgent {
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
     this._syncCurrentSessionReferences();
+
+    // Enable performance optimizations
+    createOptimizedAgent(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
@@ -924,6 +928,57 @@ class AIAgent {
       : normalizedCurrent;
   }
 
+  _isRetryableNvidiaHttpError(status, errorDetails = "") {
+    const details = String(errorDetails || "").toLowerCase();
+
+    if ([429, 500, 502, 503, 504].includes(Number(status))) {
+      return true;
+    }
+
+    if (Number(status) === 404) {
+      return (
+        details.includes("not found for account") ||
+        details.includes("function") ||
+        details.includes("page not found")
+      );
+    }
+
+    if (Number(status) === 400) {
+      return (
+        details.includes("degraded function cannot be invoked") ||
+        (details.includes("function") && details.includes("cannot be invoked"))
+      );
+    }
+
+    return false;
+  }
+
+  async _resolveAlternateNvidiaModel(apiKey, currentModel, timeoutMs = 4_000) {
+    const normalizedCurrent = this._sanitizeNvidiaModel(currentModel);
+    const discoveredModels = await this._fetchNvidiaModelNames(
+      apiKey,
+      timeoutMs,
+      true
+    );
+    const availableModels = Array.isArray(discoveredModels)
+      ? discoveredModels.map((modelId) => this._sanitizeNvidiaModel(modelId))
+      : [];
+
+    for (const candidate of NVIDIA_FALLBACK_MODELS) {
+      if (
+        candidate !== normalizedCurrent &&
+        (availableModels.length === 0 || availableModels.includes(candidate))
+      ) {
+        return candidate;
+      }
+    }
+
+    const discoveredAlternate = availableModels.find(
+      (candidate) => candidate && candidate !== normalizedCurrent
+    );
+    return discoveredAlternate || "";
+  }
+
   async getAvailableModelsForProvider(
     provider,
     {
@@ -1039,7 +1094,7 @@ class AIAgent {
           };
         }
       } catch (err) {
-        console.warn('[Agent] NVIDIA model discovery failed, using configured model:', err.message);
+        console.warn("[Agent] NVIDIA model discovery failed, using configured model:", err.message);
       }
       
       // Fallback: use configured model without discovery
@@ -1079,7 +1134,7 @@ class AIAgent {
           };
         }
       } catch (err) {
-        console.warn('[Agent] Ollama model discovery failed, using configured model:', err.message);
+        console.warn("[Agent] Ollama model discovery failed, using configured model:", err.message);
       }
       
       // Fallback: use configured model without discovery
@@ -1955,7 +2010,9 @@ class AIAgent {
       if (abortSignal?.aborted || shouldStop?.()) {
         try {
           reader.cancel();
-        } catch {}
+        } catch {
+          // Ignore cancellation errors while shutting down the stream.
+        }
         break;
       }
 
@@ -1980,7 +2037,9 @@ class AIAgent {
           if (shouldStop?.()) {
             try {
               reader.cancel();
-            } catch {}
+            } catch {
+              // Ignore cancellation errors while shutting down the stream.
+            }
             streamDone = true;
             break;
           }
@@ -2691,8 +2750,9 @@ ${resolvedMessage}`;
         forceStructuredEdits ||
         this._shouldForceStructuredEdit(reqIntent, userMessage)
       );
-      const reqOpts = this._buildRequestOptions(
-        config,
+      let requestConfig = config;
+      let reqOpts = this._buildRequestOptions(
+        requestConfig,
         prompt,
         mode,
         reqIntent,
@@ -2705,7 +2765,7 @@ ${resolvedMessage}`;
         reqIntent === "refactor"
           ? this._withMinimumTimeoutMs(config.timeout, 360_000)
           : this._normalizeTimeoutMs(config.timeout, 0);
-      const response = await fetch(reqOpts.url, {
+      let response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
         signal: this._createRequestSignal(abortSignal, extendedTimeout),
@@ -2713,25 +2773,73 @@ ${resolvedMessage}`;
       });
 
       if (!response.ok) {
-        const errorDetails = await this._buildHttpError(response, "AI request failed with status");
-        
-        // Special handling for NVIDIA token limit errors
-        if (config.provider === "nvidia" && response.status === 400) {
-          if (/max.*token|token.*limit|context.*length|too.*long/i.test(errorDetails)) {
-            throw new Error(
-              "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
-              "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
-              "Solutions:\n" +
-              "1. Break the request into smaller parts\n" +
-              "2. Use Heavy mode (/heavy) for larger token limits\n" +
-              "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
-              "4. Simplify the request to generate less code\n\n" +
-              `Original error: ${errorDetails}`
+        const errorDetails = await this._buildHttpError(
+          response,
+          "AI request failed with status"
+        );
+
+        if (
+          requestConfig.provider === "nvidia" &&
+          this._isRetryableNvidiaHttpError(response.status, errorDetails)
+        ) {
+          const fallbackModel = await this._resolveAlternateNvidiaModel(
+            requestConfig.nvidiaApiKey,
+            requestConfig.model || requestConfig.nvidiaModel
+          );
+
+          if (fallbackModel && fallbackModel !== requestConfig.model) {
+            reportStatus?.(
+              `NVIDIA returned ${response.status} for ${requestConfig.model}. Retrying once with ${fallbackModel}...`
             );
+            requestConfig = {
+              ...requestConfig,
+              model: fallbackModel,
+              nvidiaModel: fallbackModel
+            };
+            reqOpts = this._buildRequestOptions(
+              requestConfig,
+              prompt,
+              mode,
+              reqIntent,
+              imageAttachments
+            );
+            response = await fetch(reqOpts.url, {
+              method: "POST",
+              headers: reqOpts.headers,
+              signal: this._createRequestSignal(abortSignal, extendedTimeout),
+              body: reqOpts.body
+            });
           }
         }
-        
-        throw new Error(errorDetails);
+
+        if (!response.ok) {
+          const retryErrorDetails = await this._buildHttpError(
+            response,
+            "AI request failed with status"
+          );
+
+          // Special handling for NVIDIA token limit errors
+          if (requestConfig.provider === "nvidia" && response.status === 400) {
+            if (
+              /max.*token|token.*limit|context.*length|too.*long/i.test(
+                retryErrorDetails
+              )
+            ) {
+              throw new Error(
+                "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
+                "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
+                "Solutions:\n" +
+                "1. Break the request into smaller parts\n" +
+                "2. Use Heavy mode (/heavy) for larger token limits\n" +
+                "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
+                "4. Simplify the request to generate less code\n\n" +
+                `Original error: ${retryErrorDetails}`
+              );
+            }
+          }
+
+          throw new Error(retryErrorDetails);
+        }
       }
 
       let fullResponse = "";
@@ -2805,7 +2913,7 @@ ${resolvedMessage}`;
         );
         const retryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
         const retryOpts = this._buildRequestOptions(
-          config,
+          requestConfig,
           retryPrompt,
           mode,
           "edit"
@@ -2865,7 +2973,7 @@ ${resolvedMessage}`;
           assistantText
         )}`;
         const fileOnlyRetryOpts = this._buildRequestOptions(
-          config,
+          requestConfig,
           fileOnlyRetryPrompt,
           mode,
           "edit"
@@ -4617,6 +4725,63 @@ function greet(name) {
 }
 \`\`\`
 
+**ADVANCED EDITING TOOLS (Bob-style precision tools):**
+
+For maximum precision and efficiency, you can also use these advanced tools:
+
+**APPLY_DIFF** - Surgical edits with line anchoring (preferred for targeted changes):
+Format:
+APPLY_DIFF: <exact file path>
+[diff blocks with line numbers and SEARCH/REPLACE sections]
+
+Benefits over PATCH:
+- Line number anchoring prevents ambiguity
+- Multiple diff blocks in one operation
+- Automatic bottom-to-top application preserves line numbers
+- Fuzzy matching within ±5 lines if exact match fails
+
+Use APPLY_DIFF when:
+- You need precise line-anchored edits
+- Making multiple changes to the same file
+- PATCH ambiguity is a concern
+
+**INSERT_CONTENT** - Add lines at specific positions:
+Format:
+INSERT_CONTENT: <exact file path> AT LINE N
+(content to insert)
+
+Use line 0 to append to end of file.
+Use INSERT_CONTENT when:
+- Adding imports at file start
+- Inserting new functions
+- Adding configuration blocks
+- Appending to files
+
+**READ_FILES** - Read multiple files with line ranges (up to 5 files):
+Format:
+READ_FILES: [
+  { "path": "file1.js", "lineRanges": ["1-50", "100-150"] },
+  { "path": "file2.js" }
+]
+
+Benefits:
+- Read up to 5 files in one operation
+- Specify line ranges to reduce context
+- Efficient for large files
+- Line-numbered output
+
+Use READ_FILES when:
+- Need context from multiple related files
+- Working with large files (use line ranges)
+- Want to see specific sections only
+
+**When to use each tool:**
+- PATCH: Simple find/replace, no line anchoring needed
+- APPLY_DIFF: Precise edits with line numbers, multiple changes
+- FILE: New files or complete rewrites
+- INSERT_CONTENT: Adding lines without modifying existing content
+- READ_FILES: Efficient multi-file context gathering
+
 You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
 When the current file state is unclear, inspect first instead of guessing.
 Use READ for exact file contents, GREP for workspace symbol/text search, and focused CMD checks when they directly confirm the fix.
@@ -5231,7 +5396,9 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
               .replace(/\\/g, "/")
           );
         }
-      } catch {}
+      } catch {
+        // Ignore filesystem races while probing optional path matches.
+      }
     }
 
     return Array.from(matches).sort();
@@ -5585,7 +5752,11 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
         fsSync.writeFileSync(tempPath, fileContent, "utf8");
         const tempCmd = this._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"));
         const result = await this.executeCommand(tempCmd, workspaceFolder);
-        try { fsSync.unlinkSync(tempPath); } catch (_) {}
+        try {
+          fsSync.unlinkSync(tempPath);
+        } catch (_) {
+          // Ignore temp cleanup errors after the syntax check completes.
+        }
         
         // FIXED: Only consider it an error if the command failed (non-zero exit)
         // Don't treat stdout/stderr output as errors - many tools print to stdout on success
@@ -5595,7 +5766,11 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
           error: result.success ? null : (result.error || result.output || "Syntax check failed")
         };
       } catch (err) {
-        try { fsSync.unlinkSync(tempPath); } catch (_) {}
+        try {
+          fsSync.unlinkSync(tempPath);
+        } catch (_) {
+          // Ignore temp cleanup errors after a syntax check failure.
+        }
         return { success: false, error: `Temp file syntax check failed: ${err.message}`, output: err.message };
       }
     }
@@ -5953,6 +6128,80 @@ ${userMessage}`;
         replace: replaceContent
       });
       markConsumedRange(match.index, match[0]);
+    }
+
+    // Match APPLY_DIFF: actions for Bob-style surgical edits with line anchoring
+    const applyDiffRegex = /APPLY_DIFF:\s*([^\r\n`]+)\r?\n(<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE)/g;
+    while ((match = applyDiffRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      const diffContent = match[2] || "";
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        continue;
+      }
+
+      actions.push({
+        type: "apply_diff",
+        path: normalizedPath,
+        diff: diffContent
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    // Match INSERT_CONTENT: actions for Bob-style line insertion
+    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = insertContentRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      const lineNumber = parseInt(match[2], 10);
+      const content = match[3] || "";
+
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+      if (isNaN(lineNumber) || lineNumber < 0) continue;
+
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        continue;
+      }
+
+      actions.push({
+        type: "insert_content",
+        path: normalizedPath,
+        line: lineNumber,
+        content: content.trim()
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    // Match READ_FILES: actions for Bob-style multi-file reading with line ranges
+    const readFilesRegex = /READ_FILES:\s*(\[[\s\S]*?\])/g;
+    while ((match = readFilesRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const filesSpec = JSON.parse(match[1]);
+        if (Array.isArray(filesSpec) && filesSpec.length > 0) {
+          actions.push({
+            type: "read_files",
+            files: filesSpec
+          });
+          markConsumedRange(match.index, match[0]);
+        }
+      } catch (error) {
+        // Invalid JSON, skip this match
+        continue;
+      }
     }
 
     const incompleteStructuredEditWarning =
@@ -6427,100 +6676,95 @@ ${userMessage}`;
       workspaceRoot: workspaceRootOverride
     } = context;
     
-    try {
-      const { workspaceRoot, fullPath, outsideWorkspace } =
-        this._resolveWorkspacePath(filePath, workspaceRootOverride);
+    const { workspaceRoot, fullPath, outsideWorkspace } =
+      this._resolveWorkspacePath(filePath, workspaceRootOverride);
 
-      // If outside workspace and not explicitly allowed, ask for permission
-      if (outsideWorkspace && !allowOutsideWorkspace) {
-        return { success: false, error: "outside_workspace", path: fullPath };
-      }
-
-      let oldContent = "";
-      let created = false;
-      try {
-        const stat = await fs.stat(fullPath);
-        if (stat.isDirectory()) {
-          return {
-            success: false,
-            error: `Target path resolves to a directory, not a file: ${filePath}`
-          };
-        }
-        oldContent = await fs.readFile(fullPath, "utf8");
-      } catch (e) {
-        if (e.code !== "ENOENT") throw e;
-        created = true;
-      }
-
-      const isReadme =
-        typeof fullPath === "string" &&
-        path.basename(fullPath).toLowerCase() === "readme.md";
-      const trimmedNewContent = (newContent || "").trim();
-
-      if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
-        return {
-          success: false,
-          error: "Refusing to empty an existing file without explicit user request."
-        };
-      }
-
-      if (isReadme && trimmedNewContent.length === 0) {
-        return {
-          success: false,
-          error: "Refusing to delete or empty README.md without explicit user request."
-        };
-      }
-
-      if (!created && this._isDocFile(fullPath) && !allowDocTruncate) {
-        const oldTrimmedLength = (oldContent || "").trim().length;
-        const newTrimmedLength = trimmedNewContent.length;
-        const looksLikeMajorTruncate =
-          oldTrimmedLength > 240 &&
-          newTrimmedLength < Math.max(120, Math.floor(oldTrimmedLength * 0.2));
-
-        if (looksLikeMajorTruncate) {
-          return {
-            success: false,
-            error:
-              "Refusing to heavily truncate documentation without explicit user request."
-          };
-        }
-      }
-
-      const changeSummary = this._summarizeLineChanges(oldContent, newContent);
-      await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(fullPath, newContent, "utf8");
-
-      const relativePath = workspaceRoot
-        ? path.relative(workspaceRoot, fullPath)
-        : fullPath;
-
-      if (workspaceRoot && !outsideWorkspace) {
-        this.codebaseContext.set(relativePath, {
-          content: newContent,
-          fullPath,
-          fileName: path.basename(relativePath).toLowerCase(),
-          directory: path.dirname(relativePath).toLowerCase()
-        });
-      }
-
-      return {
-        success: true,
-        path: fullPath,
-        relativePath,
-        created,
-        previousContent: created ? null : oldContent,
-        newContent,
-        changeSummary: changeSummary.summary,
-        changed: changeSummary.changed,
-        syntaxCheckCmd: this._getSyntaxCheckCommand(
-          relativePath.replace(/\\/g, "/")
-        )
-      };
-    } catch (error) {
-      // Let error handler diagnose
-      throw error;
+    // If outside workspace and not explicitly allowed, ask for permission
+    if (outsideWorkspace && !allowOutsideWorkspace) {
+      return { success: false, error: "outside_workspace", path: fullPath };
     }
+
+    let oldContent = "";
+    let created = false;
+    try {
+      const stat = await fs.stat(fullPath);
+      if (stat.isDirectory()) {
+        return {
+          success: false,
+          error: `Target path resolves to a directory, not a file: ${filePath}`
+        };
+      }
+      oldContent = await fs.readFile(fullPath, "utf8");
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      created = true;
+    }
+
+    const isReadme =
+      typeof fullPath === "string" &&
+      path.basename(fullPath).toLowerCase() === "readme.md";
+    const trimmedNewContent = (newContent || "").trim();
+
+    if (!created && trimmedNewContent.length === 0 && !allowEmpty) {
+      return {
+        success: false,
+        error: "Refusing to empty an existing file without explicit user request."
+      };
+    }
+
+    if (isReadme && trimmedNewContent.length === 0) {
+      return {
+        success: false,
+        error: "Refusing to delete or empty README.md without explicit user request."
+      };
+    }
+
+    if (!created && this._isDocFile(fullPath) && !allowDocTruncate) {
+      const oldTrimmedLength = (oldContent || "").trim().length;
+      const newTrimmedLength = trimmedNewContent.length;
+      const looksLikeMajorTruncate =
+        oldTrimmedLength > 240 &&
+        newTrimmedLength < Math.max(120, Math.floor(oldTrimmedLength * 0.2));
+
+      if (looksLikeMajorTruncate) {
+        return {
+          success: false,
+          error:
+            "Refusing to heavily truncate documentation without explicit user request."
+        };
+      }
+    }
+
+    const changeSummary = this._summarizeLineChanges(oldContent, newContent);
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.writeFile(fullPath, newContent, "utf8");
+
+    const relativePath = workspaceRoot
+      ? path.relative(workspaceRoot, fullPath)
+      : fullPath;
+
+    if (workspaceRoot && !outsideWorkspace) {
+      this.codebaseContext.set(relativePath, {
+        content: newContent,
+        fullPath,
+        fileName: path.basename(relativePath).toLowerCase(),
+        directory: path.dirname(relativePath).toLowerCase()
+      });
+    }
+
+    return {
+      success: true,
+      path: fullPath,
+      relativePath,
+      created,
+      previousContent: created ? null : oldContent,
+      newContent,
+      changeSummary: changeSummary.summary,
+      changed: changeSummary.changed,
+      syntaxCheckCmd: this._getSyntaxCheckCommand(
+        relativePath.replace(/\\/g, "/")
+      )
+    };
   }
 
   async createFolder(folderPath, allowOutsideWorkspace = false, options = {}) {
@@ -6546,43 +6790,38 @@ ${userMessage}`;
       workspaceRoot: workspaceRootOverride
     } = context;
     
-    try {
-      const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim();
-      let targetPath = normalizedFolderPath;
+    const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim();
+    let targetPath = normalizedFolderPath;
 
-      // If model gives MKDIR for a file path (e.g., "src/app.js"), use parent directory.
-      if (path.extname(normalizedFolderPath)) {
-        targetPath = path.dirname(normalizedFolderPath);
-      }
-
-      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(
-        targetPath,
-        workspaceRootOverride
-      );
-      
-      // If outside workspace and not explicitly allowed, return error for chat panel to handle
-      if (outsideWorkspace && !allowOutsideWorkspace) {
-        return { success: false, error: "outside_workspace", path: fullPath };
-      }
-      if (!fullPath) {
-        return { success: false, error: "Invalid folder path" };
-      }
-
-      try {
-        const stat = await fs.stat(fullPath);
-        if (stat.isFile()) {
-          return { success: true, path: path.dirname(fullPath), skipped: true };
-        }
-      } catch (e) {
-        if (e.code !== "ENOENT") throw e;
-      }
-
-      await fs.mkdir(fullPath, { recursive: true });
-      return { success: true, path: fullPath, skipped: false };
-    } catch (error) {
-      // Let error handler diagnose
-      throw error;
+    // If model gives MKDIR for a file path (e.g., "src/app.js"), use parent directory.
+    if (path.extname(normalizedFolderPath)) {
+      targetPath = path.dirname(normalizedFolderPath);
     }
+
+    const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(
+      targetPath,
+      workspaceRootOverride
+    );
+    
+    // If outside workspace and not explicitly allowed, return error for chat panel to handle
+    if (outsideWorkspace && !allowOutsideWorkspace) {
+      return { success: false, error: "outside_workspace", path: fullPath };
+    }
+    if (!fullPath) {
+      return { success: false, error: "Invalid folder path" };
+    }
+
+    try {
+      const stat = await fs.stat(fullPath);
+      if (stat.isFile()) {
+        return { success: true, path: path.dirname(fullPath), skipped: true };
+      }
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+
+    await fs.mkdir(fullPath, { recursive: true });
+    return { success: true, path: fullPath, skipped: false };
   }
 
   _shouldUsePowerShellForCommand(command) {

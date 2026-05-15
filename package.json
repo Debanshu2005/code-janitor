@@ -10,8 +10,12 @@
 >>>>>>> 5b0c3a9de1053d32c3c65fbd71e43f2fbb474dd8
 =======
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
+<<<<<<< HEAD
   "version": "1.20.6",
 >>>>>>> 915a1775e314fe3f8321364ee1b93c0626882cbf
+=======
+  "version": "1.21.3",
+>>>>>>> 7598283526b67feea91bbcaa79ead52339403609
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -342,13 +346,14 @@
   },
   "scripts": {
     "start": "node src/cli.js",
+    "build": "npm run package",
     "test": "jest",
     "lint": "eslint src/**/*.js",
     "lint:fix": "eslint --fix src/**/*.js",
     "format:js": "prettier --write \"src/**/*.js\"",
-    "format:java": "C:\\nvm4w\\nodejs\\google-java-format -r src/**/*.java",
-    "format:py": "C:\\nvm4w\\nodejs\\black src/",
-    "format:c": "C:\\nvm4w\\nodejs\\uncrustify -c src/core/fixers/uncrustify.cfg --replace src/**/*.{c,h,ino}",
+    "format:java": "node scripts/run-formatter.js java",
+    "format:py": "node scripts/run-formatter.js py",
+    "format:c": "node scripts/run-formatter.js c",
     "format:html": "prettier --write \"src/**/*.html\"",
     "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c && npm run format:html",
     "clean": "rimraf ./out",

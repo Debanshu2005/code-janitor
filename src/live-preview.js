@@ -538,7 +538,7 @@ function getMarkdownView(code) {
         .replace(/^[ \t]*\d+\. (.+)$/gm, "<li>$1</li>")
         .replace(/(<li>[\s\S]+?<\/li>)/g, "<ul>$1</ul>")
         // Paragraphs
-        .replace(/^(?!<[a-zA-Z\/]|\s*$)(.+)$/gm, "<p>$1</p>")
+        .replace(/^(?!<[a-zA-Z/]|\s*$)(.+)$/gm, "<p>$1</p>")
     );
   }
   return `<!DOCTYPE html><html><head><title>Markdown Preview</title><style>
@@ -564,7 +564,7 @@ function getMarkdownView(code) {
   </style></head><body>${renderMd(code)}</body></html>`;
 }
 
-function getCssView(languageId, code, filePath) {
+function getCssView(languageId, code) {
   const label = languageId.toUpperCase();
   return `
     <!DOCTYPE html>
@@ -632,7 +632,7 @@ function getSvgView(code) {
   return `<!DOCTYPE html><html><head><title>SVG Preview</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f4f4;}</style></head><body>${code}</body></html>`;
 }
 
-function getWebviewContent(languageId, fixedCode, hasError, documentPath) {
+function getWebviewContent(languageId, fixedCode, hasError) {
   if (languageId === "html") return fixedCode;
   if (languageId === "javascriptreact" || languageId === "typescriptreact")
     return getReactView(fixedCode, hasError);
@@ -646,7 +646,7 @@ function getWebviewContent(languageId, fixedCode, hasError, documentPath) {
     return getCompiledLanguageView(languageId, fixedCode);
   if (languageId === "markdown") return getMarkdownView(fixedCode);
   if (["css", "scss", "less", "sass"].includes(languageId))
-    return getCssView(languageId, fixedCode, documentPath);
+    return getCssView(languageId, fixedCode);
   if (languageId === "json" || languageId === "jsonc")
     return getJsonView(fixedCode);
   if (languageId === "xml" || languageId === "svg") return getSvgView(fixedCode);
@@ -799,7 +799,7 @@ async function livePreviewer(context, options = {}) {
         : fixedCode;
 
     panel.webview.html = withPreviewInstrumentation(
-      getWebviewContent(languageId, processedCode, hasError, document.fileName),
+      getWebviewContent(languageId, processedCode, hasError),
       sessionId
     );
   };

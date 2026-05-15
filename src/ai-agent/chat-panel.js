@@ -10,11 +10,13 @@ const {
   buildGStackHelpText,
   parseGStackCommand
 } = require("./gstack");
+const { registry: toolRegistry } = require("./tools");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
 const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
+const { createOptimizedChatPanel } = require("./optimizer-integration");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
@@ -65,6 +67,9 @@ class ChatPanel {
     
     // Expose performance monitor globally for agent to log issues
     global.performanceMonitor = this.performanceMonitor;
+
+    // Enable performance optimizations
+    createOptimizedChatPanel(this);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
@@ -137,7 +142,7 @@ class ChatPanel {
     return match.index + (match[1] ? match[1].length : 0);
   }
 
-  _createStreamDisplayController(options = {}) {
+  _createStreamDisplayController() {
     let bufferedText = "";
     let emittedContent = false;
     let visibleText = "";
@@ -331,7 +336,7 @@ class ChatPanel {
     return lines.join("\n");
   }
 
-  _buildVisibleAssistantText(response, options = {}) {
+  _buildVisibleAssistantText(response) {
     return String(response?.text || "");
   }
 
@@ -356,7 +361,7 @@ class ChatPanel {
     return "Code Janitor hid a partial response because the AI stream ended before completion. Retry the request to get a complete answer.";
   }
 
-  _handleChatStreamFailure(error, streamController) {
+  _handleChatStreamFailure(error) {
     const userStopped = this._userStoppedGeneration === true;
     this._userStoppedGeneration = false;
 
@@ -741,7 +746,11 @@ class ChatPanel {
           }
         } finally {
           if (tempPath) {
-            try { fsSync.unlinkSync(tempPath); } catch (_) {}
+            try {
+              fsSync.unlinkSync(tempPath);
+            } catch (_) {
+              // Ignore temp cleanup errors after syntax validation.
+            }
           }
         }
       } else {
@@ -1938,6 +1947,13 @@ class ChatPanel {
       seen.add(webview);
       webview.postMessage(message);
     }
+  }
+
+  _getPreferredWebviewTarget({ preferPanel = true } = {}) {
+    if (preferPanel) {
+      return this.panel?.webview || this.sidebarView?.webview || null;
+    }
+    return this.sidebarView?.webview || this.panel?.webview || null;
   }
 
   _getChatPanelHtmlPath() {
@@ -4181,7 +4197,7 @@ ${trimmedText}`;
     if (gitStatus?.success && gitStatus.output.trim()) {
       const status = gitStatus.output.trim();
       // Only report if file has uncommitted changes
-      if (status.startsWith('M ') || status.startsWith('A ') || status.startsWith('D ')) {
+      if (status.startsWith("M ") || status.startsWith("A ") || status.startsWith("D ")) {
         results.diagnostics.push({
           type: "git",
           status: status,
@@ -4191,7 +4207,7 @@ ${trimmedText}`;
     }
 
     // Run syntax check only for code files
-    if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.html', '.htm'].includes(ext)) {
+    if ([".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".html", ".htm"].includes(ext)) {
       const syntaxCheck = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
       if (syntaxCheck && !syntaxCheck.skipped && !syntaxCheck.success) {
         // Only report syntax errors, not successes
@@ -4231,7 +4247,7 @@ ${trimmedText}`;
 
     // Run syntax checks for each file type and auto-repair when we can.
     for (const [lang, files] of Object.entries(fileTypes)) {
-      if (files.length === 0 || lang === 'c') continue; // Skip C/C++ (needs compiler)
+      if (files.length === 0 || lang === "c") continue; // Skip C/C++ (needs compiler)
       
       for (const file of files) {
         const fullPath = path.join(workspaceFolder, file);
@@ -4505,7 +4521,7 @@ ${trimmedText}`;
       });
       
     } catch (err) {
-      console.error(`[ChatPanel] Critical error in _fetchAndSendModels:`, err);
+      console.error("[ChatPanel] Critical error in _fetchAndSendModels:", err);
       // Still send defaults even if config fails
       const defaultModels = this._getFallbackModelsForProvider(provider);
       
@@ -5943,6 +5959,140 @@ ${trimmedText}`;
                 type: result.success ? "applied" : "error",
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
+            } else if (action.type === "apply_diff") {
+              // Bob-style APPLY_DIFF action with SEARCH/REPLACE blocks
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Applying diff to ${action.path}...` });
+              
+              try {
+                const result = await toolRegistry.executeTool("apply_diff", {
+                  path: action.path,
+                  diff: action.diff
+                }, workspaceFolder);
+                
+                if (result.success) {
+                  // Read file for undo support
+                  const fullPath = path.join(workspaceFolder, action.path);
+                  let beforeContent = "";
+                  let afterContent = "";
+                  try {
+                    afterContent = await fs.readFile(fullPath, "utf8");
+                    // We don't have before content easily, but the tool tracks it
+                  } catch (error) {
+                    // File might not exist yet
+                  }
+                  
+                  const undoId = this._registerEditForUndo({
+                    filePath: fullPath,
+                    before: beforeContent,
+                    after: afterContent,
+                    label: "apply_diff"
+                  });
+                  
+                  this._postMessage({
+                    type: "applied",
+                    filePath: fullPath,
+                    undoId: undoId,
+                    text: `\u2705 Applied ${result.blocksApplied} diff block(s) to ${action.path}\nFinal line count: ${result.finalLineCount}`
+                  });
+                  
+                  changedFiles.push(action.path);
+                  await this._revealWorkspaceFile(fullPath);
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to apply diff to ${action.path}: ${result.error || "Unknown error"}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error applying diff to ${action.path}: ${error.message}`
+                });
+              }
+            } else if (action.type === "insert_content") {
+              // Bob-style INSERT_CONTENT action for line insertion
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Inserting content into ${action.path} at line ${action.line}...` });
+              
+              try {
+                const result = await toolRegistry.executeTool("insert_content", {
+                  path: action.path,
+                  line: action.line,
+                  content: action.content
+                }, workspaceFolder);
+                
+                if (result.success) {
+                  const fullPath = path.join(workspaceFolder, action.path);
+                  let afterContent = "";
+                  try {
+                    afterContent = await fs.readFile(fullPath, "utf8");
+                  } catch (error) {
+                    // Ignore
+                  }
+                  
+                  const undoId = this._registerEditForUndo({
+                    filePath: fullPath,
+                    before: "",
+                    after: afterContent,
+                    label: "insert_content"
+                  });
+                  
+                  const operationText = result.operation === "append" ? "Appended" : "Inserted";
+                  this._postMessage({
+                    type: "applied",
+                    filePath: fullPath,
+                    undoId: undoId,
+                    text: `\u2705 ${operationText} ${result.linesInserted} line(s) at line ${result.insertedAt} in ${action.path}\nFinal line count: ${result.finalLineCount}`
+                  });
+                  
+                  changedFiles.push(action.path);
+                  await this._revealWorkspaceFile(fullPath);
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to insert content into ${action.path}: ${result.error || "Unknown error"}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error inserting content into ${action.path}: ${error.message}`
+                });
+              }
+            } else if (action.type === "read_files") {
+              // Bob-style READ_FILES action for multi-file reading with line ranges
+              this._postMessage({ type: "status", text: `Reading ${action.files.length} file(s)...` });
+              
+              try {
+                const result = await toolRegistry.executeTool("read_file", {
+                  files: action.files
+                }, workspaceFolder);
+                
+                // Post the formatted result as a stream message
+                this._postMessage({
+                  type: "stream",
+                  text: result
+                });
+                
+                this._postMessage({
+                  type: "status",
+                  text: `\u2705 Read ${action.files.length} file(s) successfully`
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error reading files: ${error.message}`
+                });
+              }
             } else if (action.type === "graphify") {
               console.log("[ChatPanel] Executing graphify action");
               
@@ -6354,7 +6504,7 @@ ${trimmedText}`;
               });
             }
           }).catch(err => {
-            console.warn('[ChatPanel] Background key presence check failed:', err);
+            console.warn("[ChatPanel] Background key presence check failed:", err);
           });
         }
         
@@ -6445,7 +6595,6 @@ ${trimmedText}`;
           }
           
           // Send provider/key state immediately; live models are discovered below.
-          const customProvider = this._getCustomProviderById(message.provider);
           const defaultModels = this._getModelsForInitialProviderState(message.provider);
           
           if (this.panel) {
@@ -6480,7 +6629,7 @@ ${trimmedText}`;
               });
             }
           }).catch(err => {
-            console.warn('[ChatPanel] Background key presence check failed:', err);
+            console.warn("[ChatPanel] Background key presence check failed:", err);
           });
         } catch (error) {
           console.error("[ChatPanel] Error in setProvider:", error);
@@ -6530,10 +6679,13 @@ ${trimmedText}`;
         console.log("[ChatPanel] Tutorial marked as completed");
       } else if (message.type === "prefillMessage") {
         // Quick Fix with AI: pre-fill message and auto-send
-        if (this.panel) {
-          this._postMessage({ 
-            type: "prefillAndSend", 
-            message: message.message 
+        const targetWebview = this._getPreferredWebviewTarget({
+          preferPanel: true
+        });
+        if (targetWebview) {
+          targetWebview.postMessage({
+            type: "prefillAndSend",
+            message: message.message
           });
         }
       } else if (message.type === "webSearch") {

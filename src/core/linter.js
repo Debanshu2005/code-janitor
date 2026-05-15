@@ -1,5 +1,4 @@
 const fs = require("fs");
-const path = require("path");
 
 /**
  * Linter for JavaScript files with ESLint fallback
@@ -21,7 +20,6 @@ class Linter {
 
       // Try ESLint first, fallback to basic linting
       try {
-        const { ESLint } = require("eslint");
         return await this.eslintLint();
       } catch (eslintError) {
         console.warn("ESLint not available, using basic linter:", eslintError.message);

@@ -10,8 +10,6 @@ const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
 const GraphifyPanel = require("./graphify/graphify-panel");
 const { loadGraphContextForFile } = require("./graphify/graph-loader");
-const AIAgent = require("./ai-agent/agent");
-const path = require("path");
 const { computeMinimalReplacement } = require("./utils/minimal-diff");
 
 const FRONTEND_DIAGNOSTIC_SOURCE = "Code Janitor Frontend";
@@ -205,26 +203,6 @@ function createFrontendValidator(document, options = {}) {
   return { validator, graphContext };
 }
 
-function getDocumentPathCandidates(document, workspaceFolder) {
-  const absolutePath = document.fileName.replace(/\\/g, "/");
-  const candidates = new Set([absolutePath, path.basename(absolutePath)]);
-
-  if (workspaceFolder) {
-    candidates.add(
-      path.relative(workspaceFolder, document.fileName).replace(/\\/g, "/")
-    );
-  }
-
-  return candidates;
-}
-
-function getWorkspaceFolderForDocument(document) {
-  return (
-    vscode.workspace.getWorkspaceFolder?.(document.uri)?.uri?.fsPath ||
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  );
-}
-
 function getIdentifierSet(code) {
   return new Set((code.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []).slice(0, 500));
 }
@@ -301,36 +279,6 @@ function isCandidateValidForLanguage(candidateCode, language, ollamaClient) {
   }
 
   return ollamaClient._passesLanguageValidation(candidateCode, language);
-}
-
-async function getPreferredSyntaxFixRuntimeConfig(context) {
-  const config = vscode.workspace.getConfiguration("codeJanitor.ai");
-  let nvidiaApiKey = config.get("nvidiaApiKey", "").trim();
-  
-  // Try to get from secrets if not in config
-  if (!nvidiaApiKey && context?.secrets) {
-    nvidiaApiKey = String((await context.secrets.get("codeJanitor.ai.nvidiaApiKey")) || "").trim();
-  }
-  
-  const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434");
-  const timeout = config.get("timeout", 0);
-
-  if (nvidiaApiKey) {
-    return {
-      provider: "nvidia",
-      model: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
-      nvidiaModel: config.get("nvidiaModel", "minimaxi/minimax-m2.7"),
-      nvidiaApiKey,
-      timeout
-    };
-  }
-
-  return {
-    provider: "ollama",
-    model: "qwen2.5-coder:1.5b",
-    ollamaUrl,
-    timeout
-  };
 }
 
 async function runFixerAndApply(document, editor = null) {
@@ -1078,7 +1026,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
       }
 
       // Apply fixes and show preview for HTML files
-      const changed = await runFixerAndApply(event.document);
+      await runFixerAndApply(event.document);
 
       // For HTML files, the preview is already handled in runFixerAndApply
       // No additional action needed here
@@ -1087,359 +1035,6 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   context.subscriptions.push(saveDisposable);
 
   console.log("[OK] Code Janitor extension activated successfully!");
-}
-
-// Helper function to run syntax check via CMD
-async function runSyntaxCheckAndFix(document, workspaceFolder) {
-  const fileName = document.fileName;
-  const ext = require("path").extname(fileName).toLowerCase();
-
-  // Only check supported file types
-  const supportedExts = [
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".py",
-    ".java",
-    ".c",
-    ".cpp",
-    ".h",
-    ".hpp",
-    ".ino"
-  ];
-  if (!supportedExts.includes(ext)) {
-    return { hasSyntaxErrors: false, output: "" };
-  }
-
-  // Save the file first before checking
-  try {
-    await document.save();
-  } catch (saveError) {
-    console.warn("Could not save file before syntax check:", saveError.message);
-  }
-
-  // Get syntax check command
-  let cmd = null;
-  const relativePath = workspaceFolder
-    ? require("path").relative(workspaceFolder, fileName).replace(/\\/g, "/")
-    : fileName;
-
-  console.log(`Running syntax check for: ${relativePath}`);
-
-  if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
-    cmd = `node --check "${relativePath}"`;
-  } else if (ext === ".py") {
-    cmd = `python -m py_compile "${relativePath}"`;
-  } else if (ext === ".java") {
-    cmd = `javac -Xdiags:verbose "${relativePath}"`;
-  } else if (
-    [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext)
-  ) {
-    // C/C++ requires compiler - skip for now
-    console.log("C/C++ syntax check requires gcc compiler");
-    return {
-      hasSyntaxErrors: false,
-      output: "C/C++ syntax check requires gcc compiler"
-    };
-  }
-
-  if (!cmd) {
-    return { hasSyntaxErrors: false, output: "" };
-  }
-
-  console.log(`Executing command: ${cmd}`);
-  console.log(`Working directory: ${workspaceFolder || process.cwd()}`);
-
-  // Run the command
-  return new Promise((resolve) => {
-    const { exec } = require("child_process");
-    exec(
-      cmd,
-      {
-        cwd: workspaceFolder || require("path").dirname(fileName),
-        timeout: 10000
-      },
-      (error, stdout, stderr) => {
-        const output = [stdout, stderr].filter(Boolean).join("\n").trim();
-
-        console.log(`Command exit code: ${error ? error.code : 0}`);
-        console.log(`Command stdout: ${stdout}`);
-        console.log(`Command stderr: ${stderr}`);
-        console.log(`Combined output: ${output}`);
-
-        // Detect syntax errors:
-        // 1. Non-zero exit code = definite error
-        // 2. stderr with error keywords = likely error
-        const stderrText = (stderr || "").trim().toLowerCase();
-        const hasErrorKeywords = stderrText && (
-          stderrText.includes("error") ||
-          stderrText.includes("syntaxerror") ||
-          stderrText.includes("exception") ||
-          stderrText.includes("invalid") ||
-          stderrText.includes("unexpected") ||
-          stderrText.includes("failed") ||
-          /line \d+/.test(stderrText) // Error messages often include line numbers
-        );
-        
-        const hasSyntaxErrors = !!error || hasErrorKeywords;
-
-        if (hasSyntaxErrors) {
-          console.log(`[ERROR] Syntax errors detected in ${fileName}`);
-          console.log("Error details:", output || error.message);
-        } else {
-          console.log(`[OK] No syntax errors in ${fileName}`);
-        }
-
-        resolve({
-          hasSyntaxErrors,
-          output: output || (error ? error.message : "")
-        });
-      }
-    );
-  });
-}
-
-// Helper function to apply rule-based fixes only
-async function applyRuleBasedFixes(document, editor) {
-  const code = document.getText();
-  const fileName = document.fileName;
-  const ext = require("path").extname(fileName).toLowerCase();
-
-  try {
-    // For Python, use the full fixer pipeline first, then safe fallbacks
-    if (ext === ".py") {
-      const PythonFixer = require("./core/fixers/python-fixer");
-      const fixer = new PythonFixer(code, fileName, { verbose: true });
-
-      console.log("Applying Python fixer pipeline...");
-      console.log("Original code:", code.slice(0, 200));
-
-      const result = await fixer.analyze();
-      let fixed = code;
-
-      if (result && typeof result.fixedCode === "string") {
-        fixed = result.fixedCode;
-      } else if (fixer.getFixedCode) {
-        fixed = fixer.getFixedCode();
-      }
-
-      if (fixed === code) {
-        fixed = fixer._applySafeInlineFixes(code);
-        console.log(`  Safe inline fixes: ${fixed !== code ? "APPLIED" : "none"}`);
-
-        if ((await fixer._isValidPython(fixed)) === false) {
-          console.log("  Code still invalid, trying repair fallback...");
-          fixed = await fixer._repairInvalidPython(fixed);
-          console.log(`  Repair result: ${fixed !== code ? "APPLIED" : "none"}`);
-        }
-      }
-
-      if (fixed !== code) {
-        console.log("[OK] Applying changes to document...");
-        const edit = new vscode.WorkspaceEdit();
-        const fullRange = new vscode.Range(
-          document.positionAt(0),
-          document.lineAt(document.lineCount - 1).range.end
-        );
-        edit.replace(document.uri, fullRange, fixed);
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
-        console.log("[OK] Rule-based fixes applied and saved");
-        return { success: true, fixedCode: fixed };
-      } else {
-        console.log("[INFO] No changes made by rule-based fixes");
-      }
-    }
-
-    // For other languages, use their fixers
-    const fixer = getFixerForDocument(document, code, fileName);
-    if (!fixer) {
-      return { success: false, fixedCode: code };
-    }
-
-    console.log(`[FIX] Applying ${document.languageId} rule-based fixes...`);
-    const result = await fixer.analyze();
-    let fixed = code;
-
-    if (result && typeof result.fixedCode === "string") {
-      fixed = result.fixedCode;
-    } else if (fixer.getFixedCode) {
-      fixed = fixer.getFixedCode();
-    }
-
-    if (fixed !== code) {
-      const edit = new vscode.WorkspaceEdit();
-      const fullRange = new vscode.Range(
-        document.positionAt(0),
-        document.lineAt(document.lineCount - 1).range.end
-      );
-      edit.replace(document.uri, fullRange, fixed);
-      await vscode.workspace.applyEdit(edit);
-      await document.save();
-      console.log("[OK] Rule-based fixes applied");
-      return { success: true, fixedCode: fixed };
-    }
-
-    console.log("  No rule-based fixes needed");
-    return { success: false, fixedCode: code };
-  } catch (error) {
-    console.error("[ERROR] Rule-based fix error:", error.message);
-    console.error("Stack:", error.stack);
-    return { success: false, fixedCode: code };
-  }
-}
-
-// Helper function to apply AI fixes only
-async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
-  const code = document.getText();
-  const languageId = document.languageId;
-  const fileName = document.fileName;
-  const workspaceFolder = getWorkspaceFolderForDocument(document);
-
-  try {
-    const aiAgent = new AIAgent();
-    const config = aiAgent.getConfig();
-    const runtimeConfig = getPreferredSyntaxFixRuntimeConfig();
-
-    if (!config.enabled) {
-      return {
-        applied: false,
-        fixedCode: code,
-        reason: "AI disabled in settings"
-      };
-    }
-
-    const language = getNormalizedLanguageId(document);
-
-    const supportedLanguages = [
-      "python",
-      "javascript",
-      "java",
-      "c",
-      "cpp",
-      "html"
-    ];
-    if (!supportedLanguages.includes(language)) {
-      return {
-        applied: false,
-        fixedCode: code,
-        reason: `${language} not supported`
-      };
-    }
-
-
-    console.log(`Using AI agent (${runtimeConfig.provider}) to fix ${language}...`);
-
-    // Build a fix request message
-    const targetPaths = Array.from(
-      getDocumentPathCandidates(document, workspaceFolder)
-    ).join(", ");
-    const fixRequest = `Fix the syntax errors in this ${language} file.
-
-**File Information:**
-File path: ${fileName.replace(/\\\\/g, "/")}
-Language: ${language}
-
-**Syntax Errors from Compiler:**
-${syntaxErrorOutput || "No syntax checker output was provided."}
-
-**Current File Contents:**
-\`\`\`${language}
-${code}
-\`\`\`
-
-IMPORTANT: Return the COMPLETE corrected file with ALL lines included. Do not truncate or omit any code. Include the entire file from start to finish.`;
-
-    let fullResponse = "";
-    const streamCallback = (token) => {
-      fullResponse += token;
-    };
-
-    const result = await aiAgent.chat(
-      fixRequest,
-      workspaceFolder,
-      streamCallback,
-      null,
-      { mode: "heavy", runtimeConfig }
-    );
-
-    if (result.error) {
-      console.error(`[ERROR] AI agent error: ${result.error}`);
-      return { applied: false, fixedCode: code, reason: result.error };
-    }
-
-    // Check if AI provided FILE actions
-    if (result.actions && result.actions.length > 0) {
-      const pathCandidates = getDocumentPathCandidates(document, workspaceFolder);
-      const fileAction = result.actions.find(
-        (a) =>
-          a.type === "file" &&
-          a.path &&
-          pathCandidates.has(a.path.replace(/\\/g, "/"))
-      );
-      if (fileAction && fileAction.content) {
-        const safety = assessReplacementSafety(code, fileAction.content);
-        if (!safety.safe) {
-          console.warn(`Rejected AI output for ${fileName}: ${safety.reason}`);
-          return {
-            applied: false,
-            fixedCode: code,
-            reason: safety.reason
-          };
-        }
-
-        const ollamaClient = new OllamaClient();
-        if (
-          !isCandidateValidForLanguage(
-            fileAction.content,
-            language,
-            ollamaClient
-          )
-        ) {
-          return {
-            applied: false,
-            fixedCode: code,
-            reason: "AI output failed language validation"
-          };
-        }
-
-        console.log("[OK] AI agent provided fix");
-        await replaceDocumentText(document, fileAction.content, true);
-        return { applied: true, fixedCode: fileAction.content };
-      }
-    }
-
-    console.log("[INFO] AI agent did not provide file actions");
-    return {
-      applied: false,
-      fixedCode: code,
-      reason: "No file actions generated"
-    };
-  } catch (error) {
-    console.error("[ERROR] AI agent error:", error.message);
-    return { applied: false, fixedCode: code, reason: error.message };
-  }
-}
-
-// Helper function to check if file is supported
-function isSupportedFile(fileName, languageId) {
-  const supportedExtensions = /\.(c|h|cpp|ino|java|js|jsx|py|html)$/i;
-  const supportedLanguages = [
-    "c",
-    "cpp",
-    "cppm",
-    "java",
-    "javascript",
-    "javascriptreact",
-    "python",
-    "html"
-  ];
-
-  return (
-    supportedExtensions.test(fileName) ||
-    supportedLanguages.includes(languageId)
-  );
 }
 
 function updateFrontendDiagnostics(
@@ -1666,7 +1261,7 @@ function fixPythonLineOptimized(line, properIndent) {
   }
 
   // Fix print statements (quick regex)
-  if (/^print\s+[^\(]/.test(fixed)) {
+  if (/^print\s+[^(]/.test(fixed)) {
     fixed = fixed.replace(/^print\s+(.+)$/, "print($1)");
   }
 
@@ -1685,52 +1280,17 @@ function fixPythonLineOptimized(line, properIndent) {
 }
 
 // Language-specific line fixers
-function fixPythonLine(line, properIndent) {
-  let fixed = line.trim();
-
-  // Fix missing colons
-  if (
-    /^(if|elif|else|def|class|for|while|try|except|finally|with)\b/.test(
-      fixed
-    ) &&
-    !fixed.endsWith(":") &&
-    !fixed.includes("#")
-  ) {
-    fixed += ":";
-  }
-
-  // Fix print statements
-  fixed = fixed.replace(/^print\s+([^\(].+)$/, "print($1)");
-
-  // Fix boolean values
-  fixed = fixed
-    .replace(/\btrue\b/g, "True")
-    .replace(/\bfalse\b/g, "False")
-    .replace(/\bnull\b/g, "None")
-    .replace(/\bundefined\b/g, "None");
-
-  // Remove JS keywords only if they appear to be JavaScript syntax
-  if (
-    /^(var|let|const)\s+\w+\s*=/.test(fixed) ||
-    /^function\s+\w+\s*\(/.test(fixed)
-  ) {
-    fixed = fixed.replace(/^(var|let|const|function)\s+/, "");
-  }
-
-  return properIndent + fixed;
-}
-
-function fixJavaScriptLine(line, properIndent) {
+function fixJavaScriptLine(line) {
   // Disable auto-semicolon insertion - causes corruption
   return line;
 }
 
-function fixJavaLine(line, properIndent) {
+function fixJavaLine(line) {
   // Disable auto-semicolon insertion - causes corruption
   return line;
 }
 
-function fixCLine(line, properIndent) {
+function fixCLine(line) {
   // Disable auto-semicolon insertion - causes corruption
   return line;
 }

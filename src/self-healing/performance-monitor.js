@@ -1049,13 +1049,13 @@ class PerformanceMonitor {
               `<li class="recommendation-item">${recommendationCopy(recommendation)}</li>`
           )
           .join("")
-      : `<li class="recommendation-item quiet">No urgent changes are recommended right now.</li>`;
+      : "<li class=\"recommendation-item quiet\">No urgent changes are recommended right now.</li>";
 
     const issueListMarkup = issues.length
       ? `<ul class="bullets">${issues
           .map((issue) => `<li>${this._escapeHtml(issue)}</li>`)
           .join("")}</ul>`
-      : `<div class="empty-state">No issues detected in the latest review window.</div>`;
+      : "<div class=\"empty-state\">No issues detected in the latest review window.</div>";
 
     const issuePills = Object.keys(issueCounts).length
       ? Object.entries(issueCounts)
@@ -1065,7 +1065,7 @@ class PerformanceMonitor {
               `<div class="issue-pill"><strong>${count}</strong> ${this._escapeHtml(type.replace(/_/g, " "))}</div>`
           )
           .join("")
-      : `<div class="issue-pill quiet">No recent issue types logged.</div>`;
+      : "<div class=\"issue-pill quiet\">No recent issue types logged.</div>";
 
     const providerRows = providerStats.length
       ? providerStats
@@ -1082,7 +1082,7 @@ class PerformanceMonitor {
             `
           )
           .join("")
-      : `<tr><td colspan="6" class="empty-cell">No recent provider data available.</td></tr>`;
+      : "<tr><td colspan=\"6\" class=\"empty-cell\">No recent provider data available.</td></tr>";
 
     const timelineRows = timeline.length
       ? timeline
@@ -1098,7 +1098,7 @@ class PerformanceMonitor {
             `
           )
           .join("")
-      : `<tr><td colspan="5" class="empty-cell">No recent response timeline available.</td></tr>`;
+      : "<tr><td colspan=\"5\" class=\"empty-cell\">No recent response timeline available.</td></tr>";
 
     const issueRows = issueLog.length
       ? issueLog
@@ -1118,7 +1118,7 @@ class PerformanceMonitor {
             `;
           })
           .join("")
-      : `<tr><td colspan="3" class="empty-cell">No recent issue log entries.</td></tr>`;
+      : "<tr><td colspan=\"3\" class=\"empty-cell\">No recent issue log entries.</td></tr>";
 
     const autoHealRows = autoHealHistory.length
       ? autoHealHistory
@@ -1133,7 +1133,7 @@ class PerformanceMonitor {
             `
           )
           .join("")
-      : `<tr><td colspan="2" class="empty-cell">No auto-heal actions have been recorded yet.</td></tr>`;
+      : "<tr><td colspan=\"2\" class=\"empty-cell\">No auto-heal actions have been recorded yet.</td></tr>";
 
     panel.webview.html = `
       <!DOCTYPE html>
