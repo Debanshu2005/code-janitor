@@ -445,6 +445,80 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("parses SUBMIT_REVIEW_FINDINGS actions with issue payloads", () => {
+    const agent = new AIAgent();
+    const response = [
+      "SUBMIT_REVIEW_FINDINGS:",
+      "```json",
+      "{",
+      '  "issues": [',
+      "    {",
+      '      "category": "security",',
+      '      "type": "sensitive-data-logging",',
+      '      "severity": "critical",',
+      '      "title": "Hardcoded API key",',
+      '      "message": "API key is hardcoded in source.",',
+      '      "path": "src/config.js",',
+      '      "line": 8,',
+      '      "issueScope": "Single File"',
+      "    }",
+      "  ]",
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "submit_review_findings",
+        issues: [
+          {
+            category: "security",
+            type: "sensitive-data-logging",
+            severity: "critical",
+            title: "Hardcoded API key",
+            message: "API key is hardcoded in source.",
+            path: "src/config.js",
+            line: 8,
+            issueScope: "Single File"
+          }
+        ]
+      }
+    ]);
+  });
+
+  test("parses ANALYZE_FILE_QUALITY actions with options", () => {
+    const agent = new AIAgent();
+    const response = [
+      "ANALYZE_FILE_QUALITY:",
+      "```json",
+      "{",
+      '  "path": "src/app.js",',
+      '  "options": {',
+      '    "analyzeMagicValues": true,',
+      '    "analyzeFunctionComplexity": true,',
+      '    "analyzeSecurity": false',
+      "  }",
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "analyze_file_quality",
+        path: "src/app.js",
+        options: {
+          analyzeMagicValues: true,
+          analyzeFunctionComplexity: true,
+          analyzeSecurity: false
+        }
+      }
+    ]);
+  });
+
   test("prefers source files over generated copies when matching path hints", () => {
     const agent = new AIAgent();
     agent.codebaseContext = new Map([

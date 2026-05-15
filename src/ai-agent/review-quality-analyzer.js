@@ -138,10 +138,11 @@ function analyzeFunctionComplexity(content, filePath) {
         
         // Check function length
         if (functionLength > QUALITY_METRICS.MAX_FUNCTION_LENGTH) {
+          const excessLength = functionLength - QUALITY_METRICS.MAX_FUNCTION_LENGTH;
           issues.push({
             category: "maintainability",
             type: "function-length",
-            severity: functionLength > QUALITY_METRICS.MAX_FUNCTION_LENGTH * 2 ? "high" : "medium",
+            severity: excessLength >= 10 ? "high" : "medium",
             title: `Function '${functionName}' is too long`,
             message: `Function '${functionName}' has ${functionLength} lines, exceeding the recommended maximum of ${QUALITY_METRICS.MAX_FUNCTION_LENGTH} lines. Consider breaking it into smaller, focused functions.`,
             path: filePath,
@@ -182,6 +183,7 @@ function analyzeFunctionComplexity(content, filePath) {
 function analyzeNaming(content, filePath) {
   const issues = [];
   const lines = content.split("\n");
+  const allowedShortPrefixes = new Set(["id", "url", "api", "db", "ui", "ux"]);
   
   lines.forEach((line, index) => {
     const lineNum = index + 1;
@@ -206,10 +208,12 @@ function analyzeNaming(content, filePath) {
     }
     
     // Check for unclear abbreviations
-    const unclearAbbrevRegex = /\b(?:const|let|var)\s+([a-z]{1,3}[A-Z])/g;
+    const unclearAbbrevRegex = /\b(?:const|let|var)\s+([a-z]{2,4}[A-Z][A-Za-z0-9]*)/g;
     while ((match = unclearAbbrevRegex.exec(line)) !== null) {
       const varName = match[1];
-      if (varName.length < 4 && !["id", "url", "api", "db"].includes(varName.toLowerCase())) {
+      const prefixMatch = varName.match(/^[a-z]+/);
+      const prefix = prefixMatch ? prefixMatch[0].toLowerCase() : "";
+      if (prefix.length <= 3 && !allowedShortPrefixes.has(prefix)) {
         issues.push({
           category: "maintainability",
           type: "naming-intent-review",
@@ -243,13 +247,14 @@ function analyzeErrorHandling(content, filePath) {
     const lineNum = index + 1;
     const trimmed = line.trim();
     
-    if (trimmed.startsWith("try")) {
+    if (/^try\b/.test(trimmed)) {
       inTryCatch = true;
       tryStart = lineNum;
       hasCatch = false;
     }
     
-    if (inTryCatch && trimmed.startsWith("catch")) {
+    const catchMatch = trimmed.match(/\bcatch\s*\(([^)]*)\)\s*\{/);
+    if (inTryCatch && catchMatch) {
       hasCatch = true;
       
       // Check for empty catch blocks
@@ -270,7 +275,8 @@ function analyzeErrorHandling(content, filePath) {
       }
       
       // Check for generic error handling
-      if (line.includes("catch (e)") || line.includes("catch (err)")) {
+      const catchIdentifier = String(catchMatch[1] || "").trim();
+      if (catchIdentifier === "e" || catchIdentifier === "err" || catchIdentifier === "error") {
         const catchBlock = lines.slice(index, index + 5).join("\n");
         if (!catchBlock.includes("console.") && !catchBlock.includes("log")) {
           issues.push({
@@ -293,7 +299,7 @@ function analyzeErrorHandling(content, filePath) {
     }
     
     // Check for unhandled promises
-    if (line.includes("async ") && !line.includes("await") && !inTryCatch) {
+    if (/\basync\b/.test(line) && !line.includes("await") && !inTryCatch) {
       const nextFewLines = lines.slice(index, index + 10).join("\n");
       if (!nextFewLines.includes("try") && !nextFewLines.includes("catch")) {
         issues.push({
@@ -320,6 +326,7 @@ function analyzeErrorHandling(content, filePath) {
 function analyzeSecurityIssues(content, filePath) {
   const issues = [];
   const lines = content.split("\n");
+  const sqlRiskLines = new Set();
   
   lines.forEach((line, index) => {
     const lineNum = index + 1;
@@ -358,8 +365,17 @@ function analyzeSecurityIssues(content, filePath) {
     }
     
     // Check for SQL injection risks
-    if (line.includes("query(") || line.includes("execute(")) {
-      if (line.includes("+") || line.includes("${")) {
+    const looksLikeQueryConstruction =
+      /\b(query|sql)\b/i.test(line) &&
+      (line.includes("+") || line.includes("${"));
+    const looksLikeQueryExecution = /(?:^|\.)(query|execute)\s*\(/.test(line);
+    const nearbyQueryContext = lines
+      .slice(Math.max(0, index - 2), Math.min(lines.length, index + 3))
+      .join("\n");
+    if ((looksLikeQueryConstruction || looksLikeQueryExecution) &&
+        (nearbyQueryContext.includes("+") || nearbyQueryContext.includes("${"))) {
+      if (!sqlRiskLines.has(index)) {
+        sqlRiskLines.add(index);
         issues.push({
           category: "security",
           type: "input-sanitization-review",

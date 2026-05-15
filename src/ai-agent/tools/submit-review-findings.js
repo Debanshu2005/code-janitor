@@ -291,8 +291,7 @@ async function submitReviewFindings(issues, workspaceRoot, executionContext = {}
     diagnosticsByFile.set(filePath, diagnostics);
   }
   
-  // Clear existing diagnostics and set new ones
-  diagnosticCollection.clear();
+  // Update only the affected files so unrelated review results remain visible.
   for (const [filePath, diagnostics] of diagnosticsByFile) {
     const uri = vscode.Uri.file(filePath);
     diagnosticCollection.set(uri, diagnostics);

@@ -138,7 +138,7 @@ class ChatPanel {
 
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -226,7 +226,10 @@ class ChatPanel {
       /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
       /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
       /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
-      /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
+      /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /ATTEMPT_COMPLETION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /SUBMIT_REVIEW_FINDINGS:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /ANALYZE_FILE_QUALITY:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
     ];
 
     for (const pattern of blockPatterns) {
@@ -274,6 +277,9 @@ class ChatPanel {
       cmd: 0,
       update_todo_list: 0,
       ask_followup_question: 0,
+      attempt_completion: 0,
+      submit_review_findings: 0,
+      analyze_file_quality: 0,
       other: 0
     };
 
@@ -319,6 +325,27 @@ class ChatPanel {
         }`
       );
     }
+    if (counts.attempt_completion) {
+      parts.push(
+        `${counts.attempt_completion} completion attempt${
+          counts.attempt_completion === 1 ? "" : "s"
+        }`
+      );
+    }
+    if (counts.submit_review_findings) {
+      parts.push(
+        `${counts.submit_review_findings} review submission${
+          counts.submit_review_findings === 1 ? "" : "s"
+        }`
+      );
+    }
+    if (counts.analyze_file_quality) {
+      parts.push(
+        `${counts.analyze_file_quality} quality scan${
+          counts.analyze_file_quality === 1 ? "" : "s"
+        }`
+      );
+    }
     if (counts.other) {
       parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
     }
@@ -351,6 +378,10 @@ class ChatPanel {
         lines.push("- Ask a question");
       } else if (action.type === "attempt_completion") {
         lines.push("- Present task completion");
+      } else if (action.type === "submit_review_findings") {
+        lines.push("- Submit review findings");
+      } else if (action.type === "analyze_file_quality") {
+        lines.push(`- Analyze ${action.path || "the active file"} for quality`);
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -6269,6 +6300,13 @@ ${trimmedText}`;
               }
             } else if (action.type === "submit_review_findings") {
               // Submit review findings to the Bob Findings panel
+              if (!workspaceFolder) {
+                this._postMessage({
+                  type: "error",
+                  text: "Cannot submit review findings without an open workspace folder."
+                });
+                continue;
+              }
               this._postMessage({ type: "status", text: "Submitting review findings..." });
               try {
                 const result = await toolRegistry.executeTool(
@@ -6305,6 +6343,13 @@ ${trimmedText}`;
               }
             } else if (action.type === "analyze_file_quality") {
               // Analyze file quality and submit findings
+              if (!workspaceFolder) {
+                this._postMessage({
+                  type: "error",
+                  text: "Cannot analyze file quality without an open workspace folder."
+                });
+                continue;
+              }
               const filePath = action.path || (this.lastActiveEditor?.document?.uri?.fsPath
                 ? path.relative(workspaceFolder, this.lastActiveEditor.document.uri.fsPath)
                 : null);
@@ -6338,6 +6383,8 @@ ${trimmedText}`;
                     });
                   }
                 } else if (analysisResult.success) {
+                  const resolvedPath = path.resolve(workspaceFolder, analysisResult.filePath || filePath);
+                  this.reviewDiagnosticCollection.set(vscode.Uri.file(resolvedPath), []);
                   this._postMessage({
                     type: "applied",
                     text: `✅ Quality analysis complete for ${filePath}. No issues found.`

@@ -4485,6 +4485,8 @@ ${resolvedMessage}`;
       "  * Example: \"FETCH: https://www.reuters.com\\n\\nRegarding the Iran situation, recent reports indicate...\"",
       "  * User explicitly asks for current/latest information from the web",
       "  * You need to check documentation, API references, or package versions",
+      "- When you identify formal review findings that should appear in the Problems panel, use `SUBMIT_REVIEW_FINDINGS:` with a JSON payload.",
+      "- When the user asks for an automated code quality pass on a specific file, use `ANALYZE_FILE_QUALITY:` with a JSON payload.",
       "- CRITICAL: All generated code must be production-grade by default:",
       "  * Comprehensive error handling and input validation",
       "  * Security best practices (sanitization, authentication, authorization where applicable)",
@@ -4856,6 +4858,58 @@ Rules:
 - Keep at most one item \`in_progress\`
 - Use this for substantial multi-step tasks when keeping visible progress helps
 
+**SUBMIT_REVIEW_FINDINGS** - Create formal review diagnostics in the Problems panel:
+Format:
+SUBMIT_REVIEW_FINDINGS:
+\`\`\`json
+{
+  "issues": [
+    {
+      "category": "maintainability",
+      "type": "magic-numbers-strings",
+      "severity": "medium",
+      "title": "Magic number should be constant",
+      "message": "The magic number 42 should be extracted to a named constant",
+      "path": "src/utils/calculator.ts",
+      "line": 15,
+      "column": 4,
+      "endLine": 15,
+      "endColumn": 6,
+      "issueScope": "Single File",
+      "suggestion": "Extract 42 into a named constant"
+    }
+  ]
+}
+\`\`\`
+
+Rules:
+- Always provide \`issues\` as an array
+- Required issue fields: \`category\`, \`type\`, \`severity\`, \`title\`, \`message\`, \`path\`, \`line\`, \`issueScope\`
+- Valid categories: \`maintainability\`, \`security\`, \`performance\`, \`functionality\`, \`style\`
+- Valid severities: \`critical\`, \`high\`, \`medium\`, \`low\`
+- Use this when you have concrete, file-anchored findings that should be tracked formally
+
+**ANALYZE_FILE_QUALITY** - Run the built-in code quality analyzer for one file:
+Format:
+ANALYZE_FILE_QUALITY:
+\`\`\`json
+{
+  "path": "src/app.js",
+  "options": {
+    "analyzeMagicValues": true,
+    "analyzeFunctionComplexity": true,
+    "analyzeNaming": true,
+    "analyzeErrorHandling": true,
+    "analyzeSecurity": true
+  }
+}
+\`\`\`
+
+Rules:
+- \`path\` is optional only when the active file is the intended target
+- Omit \`options\` to use the default analyzer set
+- Use this when the user wants an automated quality scan instead of hand-authored findings
+
 **When to use each tool:**
 - PATCH: Simple find/replace, no line anchoring needed
 - APPLY_DIFF: Precise edits with line numbers, multiple changes
@@ -4863,6 +4917,8 @@ Rules:
 - INSERT_CONTENT: Adding lines without modifying existing content
 - READ_FILES: Efficient multi-file context gathering
 - UPDATE_TODO_LIST: Keep a short working checklist with status tracking for the current chat
+- SUBMIT_REVIEW_FINDINGS: Record concrete review issues in the Problems panel
+- ANALYZE_FILE_QUALITY: Run the built-in quality analyzer for a file
 
 You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
 When the current file state is unclear, inspect first instead of guessing.
@@ -4874,8 +4930,8 @@ GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
 ${isAgentLoop
-  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, or UPDATE_TODO_LIST: actions. Keep actions exact and easy to parse."
-  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, or UPDATE_TODO_LIST: actions. No explanations, no markdown outside code fences."}`;
+  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, or ANALYZE_FILE_QUALITY: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, or ANALYZE_FILE_QUALITY: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -5134,7 +5190,19 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       if (action.type === "grep") {
         return typeof action.query === "string" && action.query.trim().length > 0;
       }
-      return action.type === "mkdir" || action.type === "cmd";
+      if (action.type === "submit_review_findings") {
+        return Array.isArray(action.issues) && action.issues.length > 0;
+      }
+      if (action.type === "analyze_file_quality") {
+        return !action.path || typeof action.path === "string";
+      }
+      return (
+        action.type === "mkdir" ||
+        action.type === "cmd" ||
+        action.type === "update_todo_list" ||
+        action.type === "ask_followup_question" ||
+        action.type === "attempt_completion"
+      );
     });
   }
 
@@ -6256,7 +6324,7 @@ ${userMessage}`;
     }
 
     // Match INSERT_CONTENT: actions for Bob-style line insertion
-    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|UPDATE_TODO_LIST|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = insertContentRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6304,7 +6372,7 @@ ${userMessage}`;
     }
 
     // Match UPDATE_TODO_LIST: actions for session-scoped task tracking
-    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = updateTodoRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6320,7 +6388,7 @@ ${userMessage}`;
     }
 
     // Match ASK_FOLLOWUP_QUESTION: actions for gathering user input with suggestions
-    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = askFollowupRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6349,7 +6417,7 @@ ${userMessage}`;
     }
 
     // Match ATTEMPT_COMPLETION: actions for presenting final task results
-    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = attemptCompletionRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6365,6 +6433,61 @@ ${userMessage}`;
         actions.push({
           type: "attempt_completion",
           result: data.result
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
+    const submitReviewRegex = /SUBMIT_REVIEW_FINDINGS:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = submitReviewRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+        const issues = Array.isArray(data) ? data : data?.issues;
+
+        if (!Array.isArray(issues) || issues.length === 0) {
+          continue;
+        }
+
+        actions.push({
+          type: "submit_review_findings",
+          issues
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
+    const analyzeFileQualityRegex = /ANALYZE_FILE_QUALITY:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = analyzeFileQualityRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+
+        if (data?.path !== undefined && typeof data.path !== "string") {
+          continue;
+        }
+
+        if (
+          data?.options !== undefined &&
+          (!data.options || typeof data.options !== "object" || Array.isArray(data.options))
+        ) {
+          continue;
+        }
+
+        actions.push({
+          type: "analyze_file_quality",
+          path: data?.path || null,
+          options: data?.options || {}
         });
         markConsumedRange(match.index, match[0]);
       } catch (error) {
@@ -6434,7 +6557,7 @@ ${userMessage}`;
     // actions already parsed successfully.
     let recoveredIncompleteFileBlock = false;
     const looseFIleRegex =
-      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = looseFIleRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6472,7 +6595,9 @@ ${userMessage}`;
     } else if (
       hasStandaloneToken(/PATCH:\s*[^\r\n`]+/i) ||
       hasStandaloneToken(/FILE:\s*[^\r\n`]+/i) ||
-      hasStandaloneToken(/UPDATE_TODO_LIST:\s*$/im)
+      hasStandaloneToken(/UPDATE_TODO_LIST:\s*$/im) ||
+      hasStandaloneToken(/SUBMIT_REVIEW_FINDINGS:\s*$/im) ||
+      hasStandaloneToken(/ANALYZE_FILE_QUALITY:\s*$/im)
     ) {
       warnings.push(incompleteStructuredEditWarning);
     }

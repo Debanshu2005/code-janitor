@@ -240,7 +240,6 @@ describe("submit-review-findings", () => {
       expect(result.summary.totalIssues).toBe(1);
       expect(result.summary.filesAffected).toBe(1);
       expect(result.summary.bySeverity.medium).toBe(1);
-      expect(mockDiagnosticCollection.clear).toHaveBeenCalled();
       expect(mockDiagnosticCollection.set).toHaveBeenCalled();
     });
     
