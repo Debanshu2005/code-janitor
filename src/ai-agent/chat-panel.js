@@ -6732,6 +6732,42 @@ ${trimmedText}`;
                 type: "status",
                 text: "Use the YouTube search button in the chat to search for videos"
               });
+            } else if (action.type === "locate_code") {
+              this._postMessage({ type: "status", text: `Locating: ${action.searchTerm}` });
+              try {
+                const locations = await this.agent._locateCodeElement(action.searchTerm, workspaceFolder);
+                
+                if (locations.length === 0) {
+                  this._postMessage({
+                    type: "applied",
+                    text: `No matches found for "${action.searchTerm}"`
+                  });
+                } else {
+                  const resultLines = [`Found ${locations.length} location(s) for "${action.searchTerm}":\n`];
+                  
+                  for (const loc of locations.slice(0, 10)) {
+                    resultLines.push(`📍 ${loc.path}:${loc.line}`);
+                    if (loc.context) {
+                      resultLines.push(`   ${loc.context}`);
+                    }
+                    resultLines.push('');
+                  }
+                  
+                  if (locations.length > 10) {
+                    resultLines.push(`... and ${locations.length - 10} more matches`);
+                  }
+                  
+                  this._postMessage({
+                    type: "applied",
+                    text: resultLines.join('\n')
+                  });
+                }
+              } catch (err) {
+                this._postMessage({
+                  type: "error",
+                  text: `Failed to locate code: ${err.message}`
+                });
+              }
             } else if (action.type === "cmd") {
               if (
                 this._shouldSuppressGeneratedCommand(

@@ -2359,6 +2359,144 @@ class AIAgent {
     if (!workspaceFolder) return null;
     return this._knowledgeGraphCache.get(workspaceFolder)?.data?.graphData || null;
   }
+  /**
+   * Intelligently locate code elements (functions, classes, etc.) in the repository
+   * Uses graphify knowledge graph when available, falls back to file scanning
+   * @param {string} searchTerm - Function name, class name, or code element to find
+   * @param {string} workspaceFolder - Workspace root directory
+   * @returns {Promise<Array>} Array of {path, line, context} objects
+   */
+  async _locateCodeElement(searchTerm, workspaceFolder) {
+    if (!searchTerm || !workspaceFolder) {
+      return [];
+    }
+
+    const results = [];
+    const graphData = this._getCachedKnowledgeGraphData(workspaceFolder);
+
+    // Strategy 1: Use graphify knowledge graph if available
+    if (graphData && isValidGraphData(graphData)) {
+      const searchLower = searchTerm.toLowerCase();
+      
+      // Search through graph nodes for matching files
+      for (const node of graphData.nodes) {
+        const nodePath = node.path?.replace(/\\/g, "/");
+        if (!nodePath) continue;
+
+        // Check if filename matches search term
+        const basename = path.basename(nodePath, path.extname(nodePath));
+        if (basename.toLowerCase().includes(searchLower)) {
+          results.push({
+            path: nodePath,
+            line: 1,
+            context: `File: ${nodePath} (from knowledge graph)`,
+            confidence: 'high'
+          });
+        }
+      }
+    }
+
+    // Strategy 2: Use list_code_definition_names for precise function/class lookup
+    try {
+      const { listCodeDefinitionNames } = require("./tools/list-code-definition-names");
+      
+      // Get all source files in workspace
+      const files = await this._getAllSourceFiles(workspaceFolder);
+      
+      for (const filePath of files.slice(0, 50)) { // Limit to 50 files for performance
+        try {
+          const definitions = await listCodeDefinitionNames(filePath, workspaceFolder);
+          
+          if (definitions && definitions.definitions) {
+            for (const def of definitions.definitions) {
+              if (def.name && def.name.toLowerCase().includes(searchTerm.toLowerCase())) {
+                results.push({
+                  path: filePath,
+                  line: def.line || 1,
+                  context: `${def.type}: ${def.name}`,
+                  confidence: 'high'
+                });
+              }
+            }
+          }
+        } catch (err) {
+          // Skip files that can't be parsed
+          continue;
+        }
+      }
+    } catch (err) {
+      console.warn("[Agent] Code definition lookup failed:", err.message);
+    }
+
+    // Strategy 3: Fallback to grep/ripgrep search
+    if (results.length === 0) {
+      try {
+        const searchPattern = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const grepCmd = process.platform === 'win32'
+          ? `Get-ChildItem -Path . -Recurse -Include *.js,*.ts,*.jsx,*.tsx,*.py,*.java,*.cpp,*.c,*.h | Select-String -Pattern "${searchPattern}" | Select-Object -First 10`
+          : `rg "${searchPattern}" --type js --type ts --type py --max-count 10`;
+        
+        const cmdResult = await this.executeCommand(grepCmd, workspaceFolder);
+        
+        if (cmdResult.success && cmdResult.output) {
+          const lines = cmdResult.output.split('\n').filter(l => l.trim());
+          for (const line of lines) {
+            // Parse grep/rg output: "path:line:content"
+            const match = line.match(/^([^:]+):(\d+):(.*)/);
+            if (match) {
+              results.push({
+                path: match[1],
+                line: parseInt(match[2], 10),
+                context: match[3].trim(),
+                confidence: 'medium'
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Agent] Grep search failed:", err.message);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get all source files in workspace for code analysis
+   * @param {string} workspaceFolder - Workspace root directory
+   * @returns {Promise<Array<string>>} Array of file paths
+   */
+  async _getAllSourceFiles(workspaceFolder) {
+    const files = [];
+    const extensions = new Set(['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.cpp', '.c', '.h', '.cs', '.go', '.rs']);
+    
+    const scanDir = async (dir) => {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+          if (IGNORED_DIRS.has(entry.name)) continue;
+          
+          const fullPath = path.join(dir, entry.name);
+          
+          if (entry.isDirectory()) {
+            await scanDir(fullPath);
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name);
+            if (extensions.has(ext)) {
+              files.push(path.relative(workspaceFolder, fullPath).replace(/\\/g, '/'));
+            }
+          }
+        }
+      } catch (err) {
+        // Skip directories we can't read
+      }
+    };
+    
+    await scanDir(workspaceFolder);
+    return files;
+  }
+
 
   async _getKnowledgeGraphAssets(workspaceFolder) {
     if (!workspaceFolder) return null;
@@ -4467,6 +4605,8 @@ ${resolvedMessage}`;
       "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
       "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
+      "- When asked to find or locate functions, classes, or code elements, intelligently use READ: actions to inspect likely files based on naming patterns, graphify data, and project structure rather than blindly running grep commands.",
+      "- Before executing CMD: searches for code, consider if you can infer the location from file names, the knowledge graph, or directory structure to provide faster, more accurate results.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
       "- If the user wants to visualize architecture, dependencies, or the project graph, use the `GRAPHIFY: open` action instead of only describing it.",
       "- If the user wants lint results for the active JavaScript file, use `LINT: active`.",
@@ -4557,6 +4697,7 @@ ${loopPreamble ? `${loopPreamble}\n` : ""}Write PRODUCTION-GRADE code by default
 - Never use placeholders like TODO, FIXME, or "implement this later"
 - Make opinionated but reasonable engineering choices when the user has not specified low-level details.
 - If you touch multiple files, ensure imports, references, and wiring stay consistent.
+LOCATE_CODE: <function or class name>
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
@@ -6597,6 +6738,16 @@ ${userMessage}`;
     }
 
     const readRegex = /^READ:\s*(.+)$/gm;
+    // Match LOCATE_CODE: actions for intelligent code element discovery
+    const locateCodeRegex = /LOCATE_CODE:\s*(.+)/g;
+    while ((match = locateCodeRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const searchTerm = match[1].trim();
+      if (searchTerm) {
+        actions.push({ type: "locate_code", searchTerm });
+      }
+    }
+
     while ((match = readRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6891,7 +7042,7 @@ ${userMessage}`;
     const allowedPatterns = [
       /^(?:ls|dir|pwd|tree)(?:\s+.+)?$/i,
       /^(?:get-childitem|gci|get-location|gl)(?:\s+.+)?$/i,
-      /^(?:cat|type|get-content|gc|get-item|gi|resolve-path|head|tail|echo|find|which|where|select-string|sls|grep|rg|findstr)(?:\s+.+)?$/i,
+      /^(?:cat|type|get-content|gc|get-item|gi|resolve-path|head|tail|echo|find|which|where|select-string|sls|grep|rg|ripgrep|findstr)(?:\s+.+)?$/i,
       /^(?:mkdir|md)\s+.+$/i,
       /^npm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+--.*)?|ls(?:\s+.*)?|list(?:\s+.*)?)$/i,
       /^yarn(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
