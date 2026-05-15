@@ -66,7 +66,7 @@ function normalizeLineEndings(text) {
 /**
  * Apply a single diff block to the file lines
  */
-function applySingleDiff(lines, block, prefersCrlf) {
+function applySingleDiff(lines, block) {
   const { startLine, search, replace } = block;
   
   // Normalize search and replace content
@@ -154,7 +154,7 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
   const results = [];
   for (const block of blocks) {
     try {
-      const result = applySingleDiff(lines, block, prefersCrlf);
+      const result = applySingleDiff(lines, block);
       results.push(result);
     } catch (error) {
       throw new Error(`Failed to apply diff block at line ${block.startLine}: ${error.message}`);

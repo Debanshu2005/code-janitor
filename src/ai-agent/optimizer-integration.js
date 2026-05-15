@@ -170,14 +170,6 @@ function createOptimizedChatPanel(chatPanel) {
   const optimizer = new PerformanceOptimizer();
   const feedbackOptimizer = new FeedbackLoopOptimizer();
 
-  // Store original methods
-  const original = {
-    buildPatchedContent: chatPanel._buildPatchedContent.bind(chatPanel),
-    recoverFailedPatch: chatPanel._recoverFailedPatch.bind(chatPanel),
-    executeActions: chatPanel._executeActions ? chatPanel._executeActions.bind(chatPanel) : null,
-    runGStackEditGate: chatPanel._runGStackEditGate ? chatPanel._runGStackEditGate.bind(chatPanel) : null
-  };
-
   // Optimized patch matching with smart recovery
   chatPanel._buildPatchedContentOptimized = async function(currentContent, searchContent, replaceContent) {
     const result = await optimizer.patchMatcher.tryMatch(

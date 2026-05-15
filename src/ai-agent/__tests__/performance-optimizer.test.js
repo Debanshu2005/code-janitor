@@ -38,7 +38,7 @@ describe("FileContentCache", () => {
   test("should respect TTL", async () => {
     const shortCache = new FileContentCache(3, 50); // 50ms TTL
     let readCount = 0;
-    const readFn = async (path) => {
+    const readFn = async () => {
       readCount++;
       return `content ${readCount}`;
     };

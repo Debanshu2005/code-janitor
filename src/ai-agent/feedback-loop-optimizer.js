@@ -136,7 +136,7 @@ complete file content
 Start your response with the first action immediately.`;
   }
 
-  _buildFileOnlyPrompt(response) {
+  _buildFileOnlyPrompt() {
     return `The previous response had issues with PATCH actions. Please use FILE: actions instead:
 
 FILE: path/to/file.ext
@@ -212,7 +212,7 @@ class InspectionLoopOptimizer {
    * Determine if inspection is needed
    */
   shouldInspect(actions, context = {}) {
-    const { round = 0, intent } = context;
+    const { round = 0 } = context;
 
     // Don't inspect if max rounds reached
     if (round >= this.maxRounds) {

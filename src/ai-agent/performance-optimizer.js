@@ -462,7 +462,7 @@ class FastPathDetector {
   /**
    * Check if edit is eligible for fast-path execution
    */
-  isFastPathEligible(actions, context = {}) {
+  isFastPathEligible(actions) {
     // Fast-path criteria:
     // 1. Single action only
     // 2. PATCH type (not FILE rewrite)
