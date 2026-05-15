@@ -10,6 +10,7 @@ const {
   buildGStackHelpText,
   parseGStackCommand
 } = require("./gstack");
+const { registry: toolRegistry } = require("./tools");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
 const { buildFixInsights } = require("../core/fix-insights");
@@ -5947,6 +5948,140 @@ ${trimmedText}`;
                 type: result.success ? "applied" : "error",
                 text: result.success ? `\u2705 Created folder ${result.path || action.path}` : result.error
               });
+            } else if (action.type === "apply_diff") {
+              // Bob-style APPLY_DIFF action with SEARCH/REPLACE blocks
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Applying diff to ${action.path}...` });
+              
+              try {
+                const result = await toolRegistry.executeTool('apply_diff', {
+                  path: action.path,
+                  diff: action.diff
+                }, workspaceFolder);
+                
+                if (result.success) {
+                  // Read file for undo support
+                  const fullPath = path.join(workspaceFolder, action.path);
+                  let beforeContent = "";
+                  let afterContent = "";
+                  try {
+                    afterContent = await fs.readFile(fullPath, "utf8");
+                    // We don't have before content easily, but the tool tracks it
+                  } catch (error) {
+                    // File might not exist yet
+                  }
+                  
+                  const undoId = this._registerEditForUndo({
+                    filePath: fullPath,
+                    before: beforeContent,
+                    after: afterContent,
+                    label: "apply_diff"
+                  });
+                  
+                  this._postMessage({
+                    type: "applied",
+                    filePath: fullPath,
+                    undoId: undoId,
+                    text: `\u2705 Applied ${result.blocksApplied} diff block(s) to ${action.path}\nFinal line count: ${result.finalLineCount}`
+                  });
+                  
+                  changedFiles.push(action.path);
+                  await this._revealWorkspaceFile(fullPath);
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to apply diff to ${action.path}: ${result.error || 'Unknown error'}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error applying diff to ${action.path}: ${error.message}`
+                });
+              }
+            } else if (action.type === "insert_content") {
+              // Bob-style INSERT_CONTENT action for line insertion
+              if (outside && !allowOutside) {
+                this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
+                continue;
+              }
+              
+              this._postMessage({ type: "status", text: `Inserting content into ${action.path} at line ${action.line}...` });
+              
+              try {
+                const result = await toolRegistry.executeTool('insert_content', {
+                  path: action.path,
+                  line: action.line,
+                  content: action.content
+                }, workspaceFolder);
+                
+                if (result.success) {
+                  const fullPath = path.join(workspaceFolder, action.path);
+                  let afterContent = "";
+                  try {
+                    afterContent = await fs.readFile(fullPath, "utf8");
+                  } catch (error) {
+                    // Ignore
+                  }
+                  
+                  const undoId = this._registerEditForUndo({
+                    filePath: fullPath,
+                    before: "",
+                    after: afterContent,
+                    label: "insert_content"
+                  });
+                  
+                  const operationText = result.operation === 'append' ? 'Appended' : 'Inserted';
+                  this._postMessage({
+                    type: "applied",
+                    filePath: fullPath,
+                    undoId: undoId,
+                    text: `\u2705 ${operationText} ${result.linesInserted} line(s) at line ${result.insertedAt} in ${action.path}\nFinal line count: ${result.finalLineCount}`
+                  });
+                  
+                  changedFiles.push(action.path);
+                  await this._revealWorkspaceFile(fullPath);
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Failed to insert content into ${action.path}: ${result.error || 'Unknown error'}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error inserting content into ${action.path}: ${error.message}`
+                });
+              }
+            } else if (action.type === "read_files") {
+              // Bob-style READ_FILES action for multi-file reading with line ranges
+              this._postMessage({ type: "status", text: `Reading ${action.files.length} file(s)...` });
+              
+              try {
+                const result = await toolRegistry.executeTool('read_file', {
+                  files: action.files
+                }, workspaceFolder);
+                
+                // Post the formatted result as a stream message
+                this._postMessage({
+                  type: "stream",
+                  text: result
+                });
+                
+                this._postMessage({
+                  type: "status",
+                  text: `\u2705 Read ${action.files.length} file(s) successfully`
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error reading files: ${error.message}`
+                });
+              }
             } else if (action.type === "graphify") {
               console.log("[ChatPanel] Executing graphify action");
               
