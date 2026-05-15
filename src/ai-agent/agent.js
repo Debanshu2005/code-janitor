@@ -5174,6 +5174,69 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
     return Array.from(matches).sort();
   }
 
+  _resolveHintPathsWithoutIndex(pathHints, workspaceFolder, editorState = {}) {
+    const matches = new Set();
+    const openTabs = [
+      editorState.activeTabPath,
+      ...(Array.isArray(editorState.visibleTabs) ? editorState.visibleTabs : []),
+      ...(Array.isArray(editorState.allOpenTabs) ? editorState.allOpenTabs : [])
+    ]
+      .map((filePath) => this._normalizeWorkspaceRelativePath(filePath))
+      .filter(Boolean);
+
+    const getBaseStem = (value) =>
+      path
+        .basename(String(value || "").replace(/\\/g, "/").toLowerCase())
+        .replace(/\.[a-z0-9]+$/i, "");
+
+    for (const hint of pathHints) {
+      const normalizedHint = this._normalizeWorkspaceRelativePath(hint);
+      if (!normalizedHint) {
+        continue;
+      }
+
+      const normalizedLower = normalizedHint.toLowerCase();
+      const hintedBaseName = path.basename(normalizedLower);
+      const hintedBaseStem = getBaseStem(normalizedLower);
+
+      for (const openTabPath of openTabs) {
+        const normalizedTab = openTabPath.replace(/\\/g, "/").toLowerCase();
+        const tabBaseName = path.basename(normalizedTab);
+        const tabBaseStem = getBaseStem(normalizedTab);
+
+        if (
+          normalizedTab === normalizedLower ||
+          normalizedTab.endsWith(`/${normalizedLower}`) ||
+          tabBaseName === hintedBaseName ||
+          (hintedBaseStem && tabBaseStem === hintedBaseStem)
+        ) {
+          matches.add(openTabPath);
+        }
+      }
+
+      if (!workspaceFolder) {
+        continue;
+      }
+
+      const probe = this._resolveWorkspacePath(normalizedHint, workspaceFolder);
+      if (probe.outsideWorkspace || !probe.fullPath) {
+        continue;
+      }
+
+      try {
+        if (fsSync.existsSync(probe.fullPath) && fsSync.statSync(probe.fullPath).isFile()) {
+          matches.add(
+            path
+              .relative(probe.workspaceRoot, probe.fullPath)
+              .replace(/\\/g, "/")
+          );
+        }
+      } catch {}
+    }
+
+    return Array.from(matches).sort();
+  }
+
   _preferActivePathMatches(paths, activePath) {
     if (!Array.isArray(paths) || paths.length <= 1 || !activePath) {
       return Array.isArray(paths) ? paths : [];
@@ -5215,8 +5278,18 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
 
   _resolveEditableTargets(userMessage, workspaceFolder, editorState) {
     const message = userMessage || "";
+    const pathHints = this._extractPathHints(message);
     const explicitPaths = this._preferActivePathMatches(
-      this._matchPathsFromHints(this._extractPathHints(message)),
+      [
+        ...new Set([
+          ...this._matchPathsFromHints(pathHints),
+          ...this._resolveHintPathsWithoutIndex(
+            pathHints,
+            workspaceFolder,
+            editorState
+          )
+        ])
+      ],
       editorState.activeTabPath
     );
     const targetPaths = new Set(explicitPaths);

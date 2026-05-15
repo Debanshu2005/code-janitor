@@ -633,6 +633,39 @@ describe("AIAgent structured edit parsing", () => {
     });
   });
 
+  test("resolves explicit workspace-relative file paths before the codebase index exists", () => {
+    const agent = new AIAgent();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "code-janitor-edit-targets-"));
+    const srcDir = path.join(workspace, "src");
+
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, "index.html"), "<html></html>\n", "utf8");
+    fs.writeFileSync(
+      path.join(srcDir, "arduino-ide.html"),
+      "<html></html>\n",
+      "utf8"
+    );
+
+    try {
+      const result = agent._resolveEditableTargets(
+        "please update src/index.html and src/arduino-ide.html",
+        workspace,
+        {
+          activeTabPath: "package.json",
+          visibleTabs: ["package.json"],
+          allOpenTabs: ["package.json"]
+        }
+      );
+
+      expect(result).toEqual({
+        scope: "restricted",
+        paths: ["src/arduino-ide.html", "src/index.html"]
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("keeps workspace-scoped edit requests writable across the project", () => {
     const agent = new AIAgent();
 
