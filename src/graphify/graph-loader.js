@@ -13,7 +13,7 @@ function findGraphJsonForPath(inputPath) {
     currentPath = path.dirname(currentPath);
   }
 
-  while (true) {
+  for (;;) {
     const candidate = path.join(currentPath, "graphify-out", "graph.json");
     if (fs.existsSync(candidate)) {
       return candidate;

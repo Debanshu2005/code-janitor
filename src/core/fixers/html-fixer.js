@@ -172,9 +172,10 @@ class HtmlFixer {
   }
 
   async analyze() {
+    const original = this.code;
+
     try {
-      let code = this.code;
-      const original = code;
+      let code = original;
       const changeLog = [];
 
       // Check if HTML is already well-formed before making changes
@@ -319,6 +320,8 @@ class HtmlFixer {
         const changeLog = [
           "Applied basic HTML fixes (advanced parsing failed)"
         ];
+        this.fixedCode = basicFixed;
+        await this.saveFile(basicFixed);
 
         return {
           success: true,

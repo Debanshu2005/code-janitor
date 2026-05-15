@@ -2,33 +2,62 @@ const path = require("path");
 const fs = require("fs-extra");
 
 class FormatterPaths {
+  static _findFirstExistingPath(paths) {
+    return paths.find((candidate) => fs.existsSync(candidate)) || null;
+  }
+
   static getUncrustifyPath() {
-    const basePath = path.join(__dirname, "uncrustify");
     const exeName =
       process.platform === "win32" ? "uncrustify.exe" : "uncrustify";
-    const exePath = path.join(basePath, "bin", exeName);
-    if (fs.existsSync(exePath)) return exePath;
+    const exePath = this._findFirstExistingPath([
+      path.join(__dirname, "..", "..", "formatters", "uncrustify", "bin", exeName),
+      path.join(__dirname, "fixers", "uncrustify-0.81.0_f-win64", "bin", exeName)
+    ]);
+    if (exePath) return exePath;
     return "uncrustify"; // fallback to system PATH
   }
 
   static getJavaFormatterPath() {
-    const jarPath = path.join(
-      __dirname,
-      "fixers",
-      "google-java-format-1.28.0-all-deps.jar"
-    );
-    if (fs.existsSync(jarPath)) return jarPath;
+    const jarPath = this._findFirstExistingPath([
+      path.join(__dirname, "fixers", "google-java-format-1.28.0-all-deps.jar"),
+      path.join(
+        __dirname,
+        "..",
+        "..",
+        "formatters",
+        "google-java-format",
+        "google-java-format.jar"
+      )
+    ]);
+    if (jarPath) return jarPath;
     return "google-java-format"; // fallback
   }
 
   static getPythonPath() {
-    // Portable Python runtime bundled for Black
-    const basePath = path.join(__dirname, "black", "python");
-    const exePath =
+    const exePath = this._findFirstExistingPath([
       process.platform === "win32"
-        ? path.join(basePath, "python.exe")
-        : path.join(basePath, "bin", "python3");
-    if (fs.existsSync(exePath)) return exePath;
+        ? path.join(
+            __dirname,
+            "..",
+            "..",
+            "formatters",
+            "python-formatters",
+            "venv",
+            "Scripts",
+            "python.exe"
+          )
+        : path.join(
+            __dirname,
+            "..",
+            "..",
+            "formatters",
+            "python-formatters",
+            "venv",
+            "bin",
+            "python3"
+          )
+    ]);
+    if (exePath) return exePath;
     return "python3"; // fallback
   }
 
@@ -38,21 +67,31 @@ class FormatterPaths {
   }
 
   static getAutopep8Path() {
-    // Try bundled autopep8 first
-    const venvPath = path.join(
-      __dirname,
-      "..",
-      "..",
-      "formatters",
-      "python-formatters",
-      "venv"
-    );
-    const autopep8Path =
+    const autopep8Path = this._findFirstExistingPath([
       process.platform === "win32"
-        ? path.join(venvPath, "Scripts", "autopep8.exe")
-        : path.join(venvPath, "bin", "autopep8");
+        ? path.join(
+            __dirname,
+            "..",
+            "..",
+            "formatters",
+            "python-formatters",
+            "venv",
+            "Scripts",
+            "autopep8.exe"
+          )
+        : path.join(
+            __dirname,
+            "..",
+            "..",
+            "formatters",
+            "python-formatters",
+            "venv",
+            "bin",
+            "autopep8"
+          )
+    ]);
 
-    if (fs.existsSync(autopep8Path)) {
+    if (autopep8Path) {
       return autopep8Path;
     }
 
