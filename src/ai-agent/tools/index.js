@@ -19,6 +19,10 @@ const {
   normalizeSuggestions,
   MAX_SUGGESTIONS
 } = require("./ask-followup-question");
+const {
+  attemptCompletion,
+  validateAttemptCompletion
+} = require("./attempt-completion");
 const { registry, ToolRegistry, TOOL_DEFINITIONS } = require("./tool-registry");
 
 module.exports = {
@@ -49,6 +53,10 @@ module.exports = {
   askFollowupQuestion,
   normalizeSuggestions,
   MAX_SUGGESTIONS,
+
+  // Attempt Completion
+  attemptCompletion,
+  validateAttemptCompletion,
   
   // Tool Registry
   registry,

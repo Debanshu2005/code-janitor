@@ -10,6 +10,7 @@ const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, formatResults } = require("./read-file");
 const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
 const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-question");
+const { attemptCompletion, validateAttemptCompletion } = require("./attempt-completion");
 
 /**
  * Tool definitions with metadata
@@ -192,6 +193,35 @@ const y = 4;
 })`
       }
     ]
+  },
+
+  attempt_completion: {
+    name: "attempt_completion",
+    description:
+      "Present the final result of a task to the user. MUST only be used after confirming all previous tool uses were successful.",
+    handler: attemptCompletion,
+    validator: validateAttemptCompletion,
+    params: {
+      result: {
+        type: "string",
+        required: true,
+        description: "The final result description. Must be concise, final, and not end with questions or offers for further assistance."
+      }
+    },
+    examples: [
+      {
+        description: "Complete a task with a concise result",
+        usage: `attempt_completion({
+  result: '- CSS update complete\\n- Documented changes\\n- Navigation menu redesigned for better accessibility'
+})`
+      },
+      {
+        description: "Complete with a simple statement",
+        usage: `attempt_completion({
+  result: 'Task complete. All files updated successfully.'
+})`
+      }
+    ]
   }
 };
 
@@ -324,6 +354,8 @@ class ToolRegistry {
       } else if (toolName === "update_todo_list") {
         result = await tool.handler(params.items, workspaceRoot, executionContext);
       } else if (toolName === "ask_followup_question") {
+        result = await tool.handler(params, workspaceRoot, executionContext);
+      } else if (toolName === "attempt_completion") {
         result = await tool.handler(params, workspaceRoot, executionContext);
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);

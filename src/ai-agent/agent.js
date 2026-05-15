@@ -6304,7 +6304,7 @@ ${userMessage}`;
     }
 
     // Match UPDATE_TODO_LIST: actions for session-scoped task tracking
-    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = updateTodoRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6320,7 +6320,7 @@ ${userMessage}`;
     }
 
     // Match ASK_FOLLOWUP_QUESTION: actions for gathering user input with suggestions
-    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = askFollowupRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6341,6 +6341,30 @@ ${userMessage}`;
           type: "ask_followup_question",
           question: data.question,
           suggestions: data.suggestions
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
+    // Match ATTEMPT_COMPLETION: actions for presenting final task results
+    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = attemptCompletionRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+
+        if (!data.result || typeof data.result !== "string") {
+          continue;
+        }
+
+        actions.push({
+          type: "attempt_completion",
+          result: data.result
         });
         markConsumedRange(match.index, match[0]);
       } catch (error) {

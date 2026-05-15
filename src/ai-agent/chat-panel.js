@@ -344,6 +344,8 @@ class ChatPanel {
         lines.push("- Update the task list");
       } else if (action.type === "ask_followup_question") {
         lines.push("- Ask a question");
+      } else if (action.type === "attempt_completion") {
+        lines.push("- Present task completion");
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -2746,6 +2748,7 @@ ${document.getText()}
   _summarizePlannedActions(actions, insideActions, outsideFiles) {
     const fileSummaries = [];
     let todoUpdateCount = 0;
+    let completionAttempted = false;
     for (const { action, result } of insideActions) {
       if (action.type === "patch") {
         fileSummaries.push(`patch ${action.path}`);
@@ -2753,6 +2756,10 @@ ${document.getText()}
       }
       if (action.type === "update_todo_list") {
         todoUpdateCount += 1;
+        continue;
+      }
+      if (action.type === "attempt_completion") {
+        completionAttempted = true;
         continue;
       }
       if (action.type !== "file" || !result?.success) continue;
@@ -6181,6 +6188,28 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "error",
                   text: `Error asking question: ${error.message}`
+                });
+              }
+            } else if (action.type === "attempt_completion") {
+              // Attempt completion - present final result to user
+              try {
+                const result = await toolRegistry.executeTool(
+                  "attempt_completion",
+                  {
+                    result: action.result
+                  },
+                  workspaceFolder
+                );
+
+                // Post the completion result to the UI
+                this._postMessage({
+                  type: "completion",
+                  text: `✅ ${result.result}`
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error attempting completion: ${error.message}`
                 });
               }
             } else if (action.type === "read_files") {
