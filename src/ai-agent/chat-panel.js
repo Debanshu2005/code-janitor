@@ -6237,6 +6237,31 @@ ${trimmedText}`;
                   text: `Error reading files: ${error.message}`
                 });
               }
+            } else if (action.type === "list_code_definition_names") {
+              // List code definitions (classes, functions, methods) using AST analysis
+              this._postMessage({ type: "status", text: `Analyzing code definitions in ${action.path}...` });
+              
+              try {
+                const result = await toolRegistry.executeTool("list_code_definition_names", {
+                  path: action.path
+                }, workspaceFolder);
+                
+                // Post the formatted result as a stream message
+                this._postMessage({
+                  type: "stream",
+                  text: result
+                });
+                
+                this._postMessage({
+                  type: "status",
+                  text: `\u2705 Code definitions analyzed successfully`
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error analyzing code definitions: ${error.message}`
+                });
+              }
             } else if (action.type === "graphify") {
               console.log("[ChatPanel] Executing graphify action");
               

@@ -8,6 +8,14 @@ const { applyDiff, validateDiff, parseDiffBlocks } = require("./apply-diff");
 const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, readSingleFile, formatResults, parseLineRange, MAX_FILES_PER_REQUEST } = require("./read-file");
 const {
+  listCodeDefinitionNames,
+  parseFile,
+  getLanguage,
+  LANGUAGE_MAP,
+  MAX_FILE_SIZE,
+  MAX_DEFINITIONS_PER_FILE
+} = require("./list-code-definition-names");
+const {
   updateTodoList,
   normalizeTodoItems,
   buildTodoSummary,
@@ -41,6 +49,14 @@ module.exports = {
   formatResults,
   parseLineRange,
   MAX_FILES_PER_REQUEST,
+
+  // List Code Definition Names
+  listCodeDefinitionNames,
+  parseFile,
+  getLanguage,
+  LANGUAGE_MAP,
+  MAX_FILE_SIZE,
+  MAX_DEFINITIONS_PER_FILE,
 
   // Todo List
   updateTodoList,

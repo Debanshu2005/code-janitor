@@ -8,6 +8,7 @@
 const { applyDiff, validateDiff } = require("./apply-diff");
 const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, formatResults } = require("./read-file");
+const { listCodeDefinitionNames } = require("./list-code-definition-names");
 const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
 const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-question");
 const { attemptCompletion, validateAttemptCompletion } = require("./attempt-completion");
@@ -116,6 +117,33 @@ const y = 4;
   { path: 'src/utils.js', lineRanges: ['50-75'] },
   { path: 'package.json' }
 ])`
+      }
+    ]
+  },
+
+  list_code_definition_names: {
+    name: "list_code_definition_names",
+    description: "List definition names (classes, functions, methods, etc.) from source code files using AST analysis",
+    handler: listCodeDefinitionNames,
+    params: {
+      path: {
+        type: "string",
+        required: true,
+        description: "File path or directory path (relative to workspace). For directories, analyzes all top-level source files."
+      }
+    },
+    examples: [
+      {
+        description: "List definitions from a specific file",
+        usage: "list_code_definition_names('src/main.ts')"
+      },
+      {
+        description: "List definitions from all files in a directory",
+        usage: "list_code_definition_names('src/')"
+      },
+      {
+        description: "Analyze a Python file",
+        usage: "list_code_definition_names('app.py')"
       }
     ]
   },
@@ -336,6 +364,8 @@ class ToolRegistry {
       // Call handler with appropriate parameters
       if (toolName === "read_file") {
         result = await tool.handler(params.files, workspaceRoot, executionContext);
+      } else if (toolName === "list_code_definition_names") {
+        result = await tool.handler(params.path, workspaceRoot, executionContext);
       } else if (toolName === "insert_content") {
         result = await tool.handler(
           params.path,
