@@ -924,6 +924,57 @@ class AIAgent {
       : normalizedCurrent;
   }
 
+  _isRetryableNvidiaHttpError(status, errorDetails = "") {
+    const details = String(errorDetails || "").toLowerCase();
+
+    if ([429, 500, 502, 503, 504].includes(Number(status))) {
+      return true;
+    }
+
+    if (Number(status) === 404) {
+      return (
+        details.includes("not found for account") ||
+        details.includes("function") ||
+        details.includes("page not found")
+      );
+    }
+
+    if (Number(status) === 400) {
+      return (
+        details.includes("degraded function cannot be invoked") ||
+        (details.includes("function") && details.includes("cannot be invoked"))
+      );
+    }
+
+    return false;
+  }
+
+  async _resolveAlternateNvidiaModel(apiKey, currentModel, timeoutMs = 4_000) {
+    const normalizedCurrent = this._sanitizeNvidiaModel(currentModel);
+    const discoveredModels = await this._fetchNvidiaModelNames(
+      apiKey,
+      timeoutMs,
+      true
+    );
+    const availableModels = Array.isArray(discoveredModels)
+      ? discoveredModels.map((modelId) => this._sanitizeNvidiaModel(modelId))
+      : [];
+
+    for (const candidate of NVIDIA_FALLBACK_MODELS) {
+      if (
+        candidate !== normalizedCurrent &&
+        (availableModels.length === 0 || availableModels.includes(candidate))
+      ) {
+        return candidate;
+      }
+    }
+
+    const discoveredAlternate = availableModels.find(
+      (candidate) => candidate && candidate !== normalizedCurrent
+    );
+    return discoveredAlternate || "";
+  }
+
   async getAvailableModelsForProvider(
     provider,
     {
@@ -2691,8 +2742,9 @@ ${resolvedMessage}`;
         forceStructuredEdits ||
         this._shouldForceStructuredEdit(reqIntent, userMessage)
       );
-      const reqOpts = this._buildRequestOptions(
-        config,
+      let requestConfig = config;
+      let reqOpts = this._buildRequestOptions(
+        requestConfig,
         prompt,
         mode,
         reqIntent,
@@ -2705,7 +2757,7 @@ ${resolvedMessage}`;
         reqIntent === "refactor"
           ? this._withMinimumTimeoutMs(config.timeout, 360_000)
           : this._normalizeTimeoutMs(config.timeout, 0);
-      const response = await fetch(reqOpts.url, {
+      let response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
         signal: this._createRequestSignal(abortSignal, extendedTimeout),
@@ -2713,25 +2765,73 @@ ${resolvedMessage}`;
       });
 
       if (!response.ok) {
-        const errorDetails = await this._buildHttpError(response, "AI request failed with status");
-        
-        // Special handling for NVIDIA token limit errors
-        if (config.provider === "nvidia" && response.status === 400) {
-          if (/max.*token|token.*limit|context.*length|too.*long/i.test(errorDetails)) {
-            throw new Error(
-              "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
-              "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
-              "Solutions:\n" +
-              "1. Break the request into smaller parts\n" +
-              "2. Use Heavy mode (/heavy) for larger token limits\n" +
-              "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
-              "4. Simplify the request to generate less code\n\n" +
-              `Original error: ${errorDetails}`
+        const errorDetails = await this._buildHttpError(
+          response,
+          "AI request failed with status"
+        );
+
+        if (
+          requestConfig.provider === "nvidia" &&
+          this._isRetryableNvidiaHttpError(response.status, errorDetails)
+        ) {
+          const fallbackModel = await this._resolveAlternateNvidiaModel(
+            requestConfig.nvidiaApiKey,
+            requestConfig.model || requestConfig.nvidiaModel
+          );
+
+          if (fallbackModel && fallbackModel !== requestConfig.model) {
+            reportStatus?.(
+              `NVIDIA returned ${response.status} for ${requestConfig.model}. Retrying once with ${fallbackModel}...`
             );
+            requestConfig = {
+              ...requestConfig,
+              model: fallbackModel,
+              nvidiaModel: fallbackModel
+            };
+            reqOpts = this._buildRequestOptions(
+              requestConfig,
+              prompt,
+              mode,
+              reqIntent,
+              imageAttachments
+            );
+            response = await fetch(reqOpts.url, {
+              method: "POST",
+              headers: reqOpts.headers,
+              signal: this._createRequestSignal(abortSignal, extendedTimeout),
+              body: reqOpts.body
+            });
           }
         }
-        
-        throw new Error(errorDetails);
+
+        if (!response.ok) {
+          const retryErrorDetails = await this._buildHttpError(
+            response,
+            "AI request failed with status"
+          );
+
+          // Special handling for NVIDIA token limit errors
+          if (requestConfig.provider === "nvidia" && response.status === 400) {
+            if (
+              /max.*token|token.*limit|context.*length|too.*long/i.test(
+                retryErrorDetails
+              )
+            ) {
+              throw new Error(
+                "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
+                "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
+                "Solutions:\n" +
+                "1. Break the request into smaller parts\n" +
+                "2. Use Heavy mode (/heavy) for larger token limits\n" +
+                "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
+                "4. Simplify the request to generate less code\n\n" +
+                `Original error: ${retryErrorDetails}`
+              );
+            }
+          }
+
+          throw new Error(retryErrorDetails);
+        }
       }
 
       let fullResponse = "";
@@ -2805,7 +2905,7 @@ ${resolvedMessage}`;
         );
         const retryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
         const retryOpts = this._buildRequestOptions(
-          config,
+          requestConfig,
           retryPrompt,
           mode,
           "edit"
@@ -2865,7 +2965,7 @@ ${resolvedMessage}`;
           assistantText
         )}`;
         const fileOnlyRetryOpts = this._buildRequestOptions(
-          config,
+          requestConfig,
           fileOnlyRetryPrompt,
           mode,
           "edit"
