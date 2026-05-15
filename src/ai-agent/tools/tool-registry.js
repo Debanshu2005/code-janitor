@@ -9,6 +9,7 @@ const { applyDiff, validateDiff } = require("./apply-diff");
 const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, formatResults } = require("./read-file");
 const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
+const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-question");
 
 /**
  * Tool definitions with metadata
@@ -146,6 +147,51 @@ const y = 4;
         usage: "update_todo_list([])"
       }
     ]
+  },
+
+  ask_followup_question: {
+    name: "ask_followup_question",
+    description:
+      "Ask the user a question to gather additional information with suggested answers",
+    handler: askFollowupQuestion,
+    params: {
+      question: {
+        type: "string",
+        required: true,
+        description: "The question to ask the user"
+      },
+      suggestions: {
+        type: "array",
+        required: true,
+        description:
+          "Array of suggested answers: [{ text: string, mode?: string }]",
+        maxItems: MAX_SUGGESTIONS
+      }
+    },
+    examples: [
+      {
+        description: "Ask a simple question with suggestions",
+        usage: `ask_followup_question({
+  question: 'Which file should I modify?',
+  suggestions: [
+    { text: 'src/app.js' },
+    { text: 'src/utils.js' },
+    { text: 'src/config.js' }
+  ]
+})`
+      },
+      {
+        description: "Ask with mode-switching suggestions",
+        usage: `ask_followup_question({
+  question: 'How would you like to proceed?',
+  suggestions: [
+    { text: 'Review the code first', mode: 'ask' },
+    { text: 'Make the changes now', mode: 'code' },
+    { text: 'Create a plan', mode: 'plan' }
+  ]
+})`
+      }
+    ]
   }
 };
 
@@ -277,6 +323,8 @@ class ToolRegistry {
         );
       } else if (toolName === "update_todo_list") {
         result = await tool.handler(params.items, workspaceRoot, executionContext);
+      } else if (toolName === "ask_followup_question") {
+        result = await tool.handler(params, workspaceRoot, executionContext);
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);
       }

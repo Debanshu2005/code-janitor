@@ -133,7 +133,7 @@ class ChatPanel {
 
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -220,7 +220,8 @@ class ChatPanel {
     const blockPatterns = [
       /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
       /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
-      /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
+      /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
     ];
 
     for (const pattern of blockPatterns) {
@@ -267,6 +268,7 @@ class ChatPanel {
       mkdir: 0,
       cmd: 0,
       update_todo_list: 0,
+      ask_followup_question: 0,
       other: 0
     };
 
@@ -305,6 +307,13 @@ class ChatPanel {
         }`
       );
     }
+    if (counts.ask_followup_question) {
+      parts.push(
+        `${counts.ask_followup_question} question${
+          counts.ask_followup_question === 1 ? "" : "s"
+        }`
+      );
+    }
     if (counts.other) {
       parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
     }
@@ -333,6 +342,8 @@ class ChatPanel {
         lines.push(`- Run ${action.command || "a command"}`);
       } else if (action.type === "update_todo_list") {
         lines.push("- Update the task list");
+      } else if (action.type === "ask_followup_question") {
+        lines.push("- Ask a question");
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -6146,6 +6157,30 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "error",
                   text: `Error updating task list: ${error.message}`
+                });
+              }
+            } else if (action.type === "ask_followup_question") {
+              // Ask followup question with suggestions
+              try {
+                const result = await toolRegistry.executeTool(
+                  "ask_followup_question",
+                  {
+                    question: action.question,
+                    suggestions: action.suggestions
+                  },
+                  workspaceFolder
+                );
+
+                // Post the question with suggestions to the UI
+                this._postMessage({
+                  type: "followupQuestion",
+                  question: result.question,
+                  suggestions: result.suggestions
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error asking question: ${error.message}`
                 });
               }
             } else if (action.type === "read_files") {
