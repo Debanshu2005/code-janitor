@@ -450,8 +450,12 @@ function getApiSecretKey(provider) {
   return `codeJanitor.ai.${provider}.apiKey`;
 }
 
-function getConfigTargetForKey(key) {
-  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+function getGitHubSecretKey() {
+  return "codeJanitor.github.apiToken";
+}
+
+function getConfigTargetForKey(section, key) {
+  const cfg = vscode.workspace.getConfiguration(section);
   const inspected = cfg.inspect(key);
   const hasWorkspaceOverride =
     inspected &&
@@ -487,9 +491,31 @@ async function restorePersistedApiKeys(context) {
     }
 
     if (configValue) {
-      const target = getConfigTargetForKey(configKey);
+      const target = getConfigTargetForKey("codeJanitor.ai", configKey);
       await cfg.update(configKey, "", target);
     }
+  }
+}
+
+async function restorePersistedGitHubToken(context) {
+  if (!context?.secrets) return;
+
+  const cfg = vscode.workspace.getConfiguration("codeJanitor.github");
+  const configKey = "apiToken";
+  const configValue = String(cfg.get(configKey, "") || "").trim();
+  const secretValue = String(
+    (await context.secrets.get(getGitHubSecretKey())) || ""
+  )
+    .trim()
+    .replace(/^['"`]|['"`]$/g, "");
+
+  if (!secretValue && configValue) {
+    await context.secrets.store(getGitHubSecretKey(), configValue);
+  }
+
+  if (configValue) {
+    const target = getConfigTargetForKey("codeJanitor.github", configKey);
+    await cfg.update(configKey, "", target);
   }
 }
 
@@ -497,6 +523,7 @@ async function activate(context) {
   globalContext = context;
   console.log("[OK] Code Janitor extension is activating...");
   await restorePersistedApiKeys(context);
+  await restorePersistedGitHubToken(context);
 
   // Show setup guide on first install
   const hasSeenSetup = context.globalState.get("codeJanitor.seenSetup", false);
@@ -920,6 +947,25 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   } catch (regErr) {
     console.error("[Extension] Failed to register codeJanitor.bugFixScan — likely a duplicate Code Janitor install. Continuing activation.", regErr);
   }
+
+  const githubContextDisposable = vscode.commands.registerCommand(
+    "codeJanitor.showGitHubContext",
+    async () => {
+      try {
+        if (!chatPanelInstance) {
+          chatPanelInstance = new ChatPanel(context);
+        }
+        await chatPanelInstance.runGitHubRepositoryContext();
+      } catch (error) {
+        console.error("[Extension] Error in showGitHubContext command:", error);
+        vscode.window.showErrorMessage(
+          `GitHub repository context failed: ${error.message}`
+        );
+      }
+    }
+  );
+  context.subscriptions.push(githubContextDisposable);
+  console.log("[OK] GitHub context command registered.");
 
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);

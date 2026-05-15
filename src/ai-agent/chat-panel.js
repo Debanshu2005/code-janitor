@@ -138,7 +138,7 @@ class ChatPanel {
 
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -229,7 +229,8 @@ class ChatPanel {
       /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /ATTEMPT_COMPLETION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /SUBMIT_REVIEW_FINDINGS:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
-      /ANALYZE_FILE_QUALITY:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
+      /ANALYZE_FILE_QUALITY:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /GITHUB_CONTEXT:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
     ];
 
     for (const pattern of blockPatterns) {
@@ -280,6 +281,7 @@ class ChatPanel {
       attempt_completion: 0,
       submit_review_findings: 0,
       analyze_file_quality: 0,
+      github_context: 0,
       other: 0
     };
 
@@ -346,6 +348,13 @@ class ChatPanel {
         }`
       );
     }
+    if (counts.github_context) {
+      parts.push(
+        `${counts.github_context} GitHub lookup${
+          counts.github_context === 1 ? "" : "s"
+        }`
+      );
+    }
     if (counts.other) {
       parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
     }
@@ -382,6 +391,8 @@ class ChatPanel {
         lines.push("- Submit review findings");
       } else if (action.type === "analyze_file_quality") {
         lines.push(`- Analyze ${action.path || "the active file"} for quality`);
+      } else if (action.type === "github_context") {
+        lines.push(`- Fetch GitHub ${action.mode || "repository"} context`);
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -1372,6 +1383,53 @@ class ChatPanel {
     return workspaceFolder
       ? { ...writeOptions, workspaceRoot: workspaceFolder }
       : writeOptions;
+  }
+
+  async _fetchGitHubContext(params = {}, workspaceFolder = this._getEffectiveWorkspaceFolder()) {
+    if (!workspaceFolder) {
+      throw new Error("Open a workspace folder inside a git repository first.");
+    }
+
+    return toolRegistry.executeTool(
+      "fetch_github_context",
+      {
+        mode: params.mode || "repo",
+        ...(params.owner ? { owner: params.owner } : {}),
+        ...(params.repo ? { repo: params.repo } : {}),
+        ...(Number.isInteger(params.number) ? { number: params.number } : {})
+      },
+      workspaceFolder,
+      { context: this.context }
+    );
+  }
+
+  async runGitHubRepositoryContext() {
+    if (!this.sidebarView?.webview && !this.panel?.webview) {
+      await this.show();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    this._postMessage({ type: "thinking" });
+
+    try {
+      const workspaceFolder = this._getEffectiveWorkspaceFolder();
+      this._postMessage({
+        type: "status",
+        text: "Loading GitHub repository context..."
+      });
+      const result = await this._fetchGitHubContext({ mode: "repo" }, workspaceFolder);
+      this._postMessage({
+        type: "stream",
+        text: result.summary
+      });
+    } catch (error) {
+      this._postMessage({
+        type: "error",
+        text: `GitHub integration error: ${error.message}`
+      });
+    }
+
+    this._postMessage({ type: "done" });
   }
 
   async _findGitRoot(startPath) {
@@ -6399,6 +6457,32 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "error",
                   text: `Error analyzing file quality: ${error.message}`
+                });
+              }
+            } else if (action.type === "github_context") {
+              if (!workspaceFolder && !(action.owner && action.repo)) {
+                this._postMessage({
+                  type: "error",
+                  text: "Cannot load GitHub context without an open workspace folder or an explicit owner/repo."
+                });
+                continue;
+              }
+
+              this._postMessage({
+                type: "status",
+                text: `Loading GitHub ${action.mode || "repository"} context...`
+              });
+
+              try {
+                const result = await this._fetchGitHubContext(action, workspaceFolder);
+                this._postMessage({
+                  type: "stream",
+                  text: result.summary
+                });
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error loading GitHub context: ${error.message}`
                 });
               }
             } else if (action.type === "graphify") {

@@ -4487,6 +4487,7 @@ ${resolvedMessage}`;
       "  * You need to check documentation, API references, or package versions",
       "- When you identify formal review findings that should appear in the Problems panel, use `SUBMIT_REVIEW_FINDINGS:` with a JSON payload.",
       "- When the user asks for an automated code quality pass on a specific file, use `ANALYZE_FILE_QUALITY:` with a JSON payload.",
+      "- When the user wants GitHub repository, issue, or pull request context, use `GITHUB_CONTEXT:` with a JSON payload.",
       "- CRITICAL: All generated code must be production-grade by default:",
       "  * Comprehensive error handling and input validation",
       "  * Security best practices (sanitization, authentication, authorization where applicable)",
@@ -4910,6 +4911,30 @@ Rules:
 - Omit \`options\` to use the default analyzer set
 - Use this when the user wants an automated quality scan instead of hand-authored findings
 
+**GITHUB_CONTEXT** - Fetch GitHub repository, issue, or pull request context:
+Format:
+GITHUB_CONTEXT:
+\`\`\`json
+{
+  "mode": "repo"
+}
+\`\`\`
+
+Issue example:
+GITHUB_CONTEXT:
+\`\`\`json
+{
+  "mode": "issue",
+  "number": 42
+}
+\`\`\`
+
+Rules:
+- Valid modes: \`repo\`, \`issue\`, \`pull_request\`
+- When \`owner\` and \`repo\` are omitted, use the current workspace origin remote
+- \`number\` is required for \`issue\` and \`pull_request\` modes
+- Use this when the user wants GitHub-aware project context instead of local git status alone
+
 **When to use each tool:**
 - PATCH: Simple find/replace, no line anchoring needed
 - APPLY_DIFF: Precise edits with line numbers, multiple changes
@@ -4919,6 +4944,7 @@ Rules:
 - UPDATE_TODO_LIST: Keep a short working checklist with status tracking for the current chat
 - SUBMIT_REVIEW_FINDINGS: Record concrete review issues in the Problems panel
 - ANALYZE_FILE_QUALITY: Run the built-in quality analyzer for a file
+- GITHUB_CONTEXT: Fetch repository, issue, or pull request context from GitHub
 
 You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
 When the current file state is unclear, inspect first instead of guessing.
@@ -4930,8 +4956,8 @@ GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
 ${isAgentLoop
-  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, or ANALYZE_FILE_QUALITY: actions. Keep actions exact and easy to parse."
-  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, or ANALYZE_FILE_QUALITY: actions. No explanations, no markdown outside code fences."}`;
+  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -5195,6 +5221,12 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       }
       if (action.type === "analyze_file_quality") {
         return !action.path || typeof action.path === "string";
+      }
+      if (action.type === "github_context") {
+        return (
+          typeof action.mode === "string" &&
+          action.mode.trim().length > 0
+        );
       }
       return (
         action.type === "mkdir" ||
@@ -6324,7 +6356,7 @@ ${userMessage}`;
     }
 
     // Match INSERT_CONTENT: actions for Bob-style line insertion
-    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = insertContentRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6372,7 +6404,7 @@ ${userMessage}`;
     }
 
     // Match UPDATE_TODO_LIST: actions for session-scoped task tracking
-    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = updateTodoRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6388,7 +6420,7 @@ ${userMessage}`;
     }
 
     // Match ASK_FOLLOWUP_QUESTION: actions for gathering user input with suggestions
-    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = askFollowupRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6417,7 +6449,7 @@ ${userMessage}`;
     }
 
     // Match ATTEMPT_COMPLETION: actions for presenting final task results
-    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = attemptCompletionRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6440,7 +6472,7 @@ ${userMessage}`;
       }
     }
 
-    const submitReviewRegex = /SUBMIT_REVIEW_FINDINGS:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const submitReviewRegex = /SUBMIT_REVIEW_FINDINGS:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = submitReviewRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6464,7 +6496,7 @@ ${userMessage}`;
       }
     }
 
-    const analyzeFileQualityRegex = /ANALYZE_FILE_QUALITY:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const analyzeFileQualityRegex = /ANALYZE_FILE_QUALITY:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = analyzeFileQualityRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6488,6 +6520,45 @@ ${userMessage}`;
           type: "analyze_file_quality",
           path: data?.path || null,
           options: data?.options || {}
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
+    const githubContextRegex = /GITHUB_CONTEXT:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = githubContextRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+        const mode = String(data?.mode || "").trim();
+
+        if (!mode) {
+          continue;
+        }
+
+        if (data?.owner !== undefined && typeof data.owner !== "string") {
+          continue;
+        }
+
+        if (data?.repo !== undefined && typeof data.repo !== "string") {
+          continue;
+        }
+
+        if (data?.number !== undefined && !Number.isInteger(data.number)) {
+          continue;
+        }
+
+        actions.push({
+          type: "github_context",
+          mode,
+          owner: data?.owner || null,
+          repo: data?.repo || null,
+          number: data?.number
         });
         markConsumedRange(match.index, match[0]);
       } catch (error) {
@@ -6557,7 +6628,7 @@ ${userMessage}`;
     // actions already parsed successfully.
     let recoveredIncompleteFileBlock = false;
     const looseFIleRegex =
-      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = looseFIleRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6597,7 +6668,8 @@ ${userMessage}`;
       hasStandaloneToken(/FILE:\s*[^\r\n`]+/i) ||
       hasStandaloneToken(/UPDATE_TODO_LIST:\s*$/im) ||
       hasStandaloneToken(/SUBMIT_REVIEW_FINDINGS:\s*$/im) ||
-      hasStandaloneToken(/ANALYZE_FILE_QUALITY:\s*$/im)
+      hasStandaloneToken(/ANALYZE_FILE_QUALITY:\s*$/im) ||
+      hasStandaloneToken(/GITHUB_CONTEXT:\s*$/im)
     ) {
       warnings.push(incompleteStructuredEditWarning);
     }

@@ -41,6 +41,12 @@ const {
   VALID_SCOPES,
   MAX_ISSUES_PER_SUBMISSION
 } = require("./submit-review-findings");
+const {
+  fetchGitHubContext,
+  validateGitHubContextRequest,
+  parseGitHubRemoteUrl,
+  VALID_MODES: VALID_GITHUB_CONTEXT_MODES
+} = require("./fetch-github-context");
 
 module.exports = {
   // Apply Diff
@@ -91,6 +97,12 @@ module.exports = {
   VALID_SEVERITIES,
   VALID_SCOPES,
   MAX_ISSUES_PER_SUBMISSION,
+
+  // GitHub Context
+  fetchGitHubContext,
+  validateGitHubContextRequest,
+  parseGitHubRemoteUrl,
+  VALID_GITHUB_CONTEXT_MODES,
   
   // Tool Registry
   registry,

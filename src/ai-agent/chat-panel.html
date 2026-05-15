@@ -5037,7 +5037,7 @@
             refactor: "Refactor the active file for clarity and performance",
             tests: "Generate unit tests for the active file",
             docs: "Add JSDoc/docstring comments to the active file",
-            git: "Run `git status --short` in the workspace and show me the result using CMD.",
+            git: "Use GITHUB_CONTEXT to summarize the current GitHub repository, including open pull requests and open issues.",
           };
           if (action === "fix") {
             vscode.postMessage({ type: "fixActive" });

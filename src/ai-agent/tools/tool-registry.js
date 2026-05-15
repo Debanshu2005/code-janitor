@@ -13,6 +13,7 @@ const { updateTodoList, MAX_TODO_ITEMS } = require("./update-todo-list");
 const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-question");
 const { attemptCompletion, validateAttemptCompletion } = require("./attempt-completion");
 const { submitReviewFindings, validateIssues, MAX_ISSUES_PER_SUBMISSION } = require("./submit-review-findings");
+const { fetchGitHubContext } = require("./fetch-github-context");
 
 /**
  * Tool definitions with metadata
@@ -295,6 +296,60 @@ const y = 4;
     issueScope: "Single File"
   }
 ])`
+      }
+    ]
+  },
+
+  fetch_github_context: {
+    name: "fetch_github_context",
+    description: "Fetch GitHub repository, issue, or pull request context using the current workspace origin remote by default",
+    handler: fetchGitHubContext,
+    params: {
+      mode: {
+        type: "string",
+        required: true,
+        description: "GitHub context mode: repo, issue, or pull_request"
+      },
+      owner: {
+        type: "string",
+        required: false,
+        description: "Repository owner or organization. Optional when the current workspace origin remote is a GitHub repository."
+      },
+      repo: {
+        type: "string",
+        required: false,
+        description: "Repository name. Optional when the current workspace origin remote is a GitHub repository."
+      },
+      number: {
+        type: "number",
+        required: false,
+        description: "Issue or pull request number. Required for issue and pull_request modes."
+      }
+    },
+    examples: [
+      {
+        description: "Summarize the current workspace GitHub repository",
+        usage: `fetch_github_context({
+  mode: "repo"
+})`
+      },
+      {
+        description: "Fetch a specific GitHub issue",
+        usage: `fetch_github_context({
+  mode: "issue",
+  owner: "octocat",
+  repo: "Hello-World",
+  number: 42
+})`
+      },
+      {
+        description: "Fetch a specific pull request",
+        usage: `fetch_github_context({
+  mode: "pull_request",
+  owner: "octocat",
+  repo: "Hello-World",
+  number: 108
+})`
       }
     ]
   }

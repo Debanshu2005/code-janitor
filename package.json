@@ -53,6 +53,7 @@
     "onCommand:codeJanitor.livePreview",
     "onCommand:codeJanitor.validateFrontend",
     "onCommand:codeJanitor.openChat",
+    "onCommand:codeJanitor.showGitHubContext",
     "onCommand:codeJanitor.openGraphify",
     "onView:codeJanitor.chatSidebar"
   ],
@@ -208,6 +209,16 @@
           "description": "Maximum tokens for create mode (file generation) responses (default: 16384, range: 2048-32768)",
           "minimum": 2048,
           "maximum": 32768
+        },
+        "codeJanitor.github.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub API token used for repository, issue, and pull request context. Stored in VS Code secrets after first load."
+        },
+        "codeJanitor.github.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.github.com",
+          "description": "GitHub API base URL. Change this for GitHub Enterprise Server instances."
         }
 
       }
@@ -236,6 +247,11 @@
       {
         "command": "codeJanitor.openChat",
         "title": "Open AI Chat",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.showGitHubContext",
+        "title": "Show GitHub Repository Context",
         "category": "Code Janitor"
       },
       {
@@ -280,6 +296,9 @@
         },
         {
           "command": "codeJanitor.openChat"
+        },
+        {
+          "command": "codeJanitor.showGitHubContext"
         },
         {
           "command": "codeJanitor.openGraphify"

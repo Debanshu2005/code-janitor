@@ -519,6 +519,33 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("parses GITHUB_CONTEXT actions for repository lookups", () => {
+    const agent = new AIAgent();
+    const response = [
+      "GITHUB_CONTEXT:",
+      "```json",
+      "{",
+      '  "mode": "issue",',
+      '  "owner": "octocat",',
+      '  "repo": "Hello-World",',
+      '  "number": 42',
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "github_context",
+        mode: "issue",
+        owner: "octocat",
+        repo: "Hello-World",
+        number: 42
+      }
+    ]);
+  });
+
   test("prefers source files over generated copies when matching path hints", () => {
     const agent = new AIAgent();
     agent.codebaseContext = new Map([
