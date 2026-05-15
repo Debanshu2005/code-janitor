@@ -1,4 +1,8 @@
 /* eslint-env jest */
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
 jest.mock(
   "vscode",
   () => ({
@@ -59,5 +63,33 @@ describe("AIAgent HTML syntax checks", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("HTML JavaScript syntax error");
+  });
+
+  test("accepts absolute HTML paths when workspaceFolder is also provided", async () => {
+    const agent = new AIAgent();
+    const tempDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "code-janitor-html-")
+    );
+    const htmlPath = path.join(tempDir, "my_portfolio.html");
+
+    jest
+      .spyOn(agent, "_loadParse5")
+      .mockResolvedValue({ parse: jest.fn() });
+    jest
+      .spyOn(agent, "_validateEmbeddedHtmlSyntax")
+      .mockResolvedValue(null);
+
+    await fs.promises.writeFile(
+      htmlPath,
+      "<!DOCTYPE html><html><body><h1>Portfolio</h1></body></html>",
+      "utf8"
+    );
+
+    try {
+      const result = await agent._runSyntaxCheck(htmlPath, tempDir, null);
+      expect(result).toEqual({ success: true, output: "" });
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

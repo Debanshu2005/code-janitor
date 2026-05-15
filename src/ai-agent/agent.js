@@ -1,4 +1,4 @@
-const vscode = require("vscode");
+const vscode = require("../utils/vscode-shim");
 const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
@@ -19,11 +19,14 @@ const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
 const MAX_EDIT_TARGET_SNIPPET = 6_000;
 const MAX_FAST_EDIT_ACTIVE_FILE_CHARS = 4_000;
+const MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS = 12_000;
+const MAX_FULL_EDITABLE_TARGET_CHARS = 48_000;
 const MAX_RELEVANT_FILES = 3;
 const MAX_OPEN_TAB_SNIPPETS = 1;
 const MAX_HISTORY_ENTRIES = 3;
 const MAX_SESSION_RECENT_ENTRIES = 8;
 const MAX_SESSION_PERSISTED_ENTRIES = 24;
+const MAX_PERSISTED_HISTORY_ENTRY_CHARS = 24_000;
 const MAX_SESSION_SUMMARY_CHARS = 2_400;
 const MAX_CHAT_SESSIONS = 12;
 const RELEVANT_FILE_CACHE_LIMIT = 30;
@@ -34,6 +37,14 @@ const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const MAX_FETCHED_URLS = 2;
 const MAX_FETCHED_CONTENT_CHARS = 5_000;
+const PERSISTED_HISTORY_TRUNCATION_NOTICE =
+  "[chat history truncated for storage]";
+const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+]);
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -107,6 +118,19 @@ const NVIDIA_FALLBACK_MODELS = [
   "mistralai/mistral-nemotron",
   "meta/llama-3.1-70b-instruct",
   "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+];
+const OLLAMA_GENERAL_PREFERRED_MODELS = [
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
+];
+const OLLAMA_EDIT_PREFERRED_MODELS = [
+  "qwen2.5-coder:7b",
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
 ];
 
 class AIAgent {
@@ -269,7 +293,9 @@ class AIAgent {
       .map((session) =>
         this._createSessionRecord({
           ...session,
-          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          history: this._prepareHistoryEntriesForPersistence(
+            session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES)
+          ),
           summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
         })
       );
@@ -428,16 +454,59 @@ class AIAgent {
     return this.getSessionState();
   }
 
-  _buildPromptHistoryContext(isTabQuestion = false) {
+  deleteSession(sessionId) {
+    if (!sessionId) return this.getSessionState();
+
+    const existingIndex = this.chatSessions.findIndex(
+      (session) => session.id === sessionId
+    );
+    if (existingIndex < 0) return this.getSessionState();
+
+    this.chatSessions = this.chatSessions.filter(
+      (session) => session.id !== sessionId
+    );
+
+    if (this.chatSessions.length === 0) {
+      const replacement = this._createSessionRecord({ title: "New Chat 1" });
+      this.chatSessions = [replacement];
+      this.currentSessionId = replacement.id;
+    } else if (this.currentSessionId === sessionId) {
+      const [nextSession] = this.chatSessions
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      this.currentSessionId = nextSession.id;
+    }
+
+    this._syncCurrentSessionReferences();
+    this._persistChatState();
+    return this.getSessionState();
+  }
+
+  _isExecutionLikeIntent(intent) {
+    return (
+      intent === "edit" ||
+      intent === "create" ||
+      intent === "debug" ||
+      intent === "refactor" ||
+      intent === "command" ||
+      intent === "bugfix"
+    );
+  }
+
+  _buildPromptHistoryContext(isTabQuestion = false, options = {}) {
+    const userOnly = options.userOnly === true;
     const session = this._getCurrentSession();
     const parts = [];
     if (session.summary) {
       parts.push(`Conversation summary:\n${session.summary}`);
     }
 
-    const recentEntries = isTabQuestion
+    let recentEntries = isTabQuestion
       ? session.history.filter((entry) => entry.role === "user").slice(-2, -1)
       : session.history.slice(-MAX_HISTORY_ENTRIES, -1);
+    if (userOnly) {
+      recentEntries = recentEntries.filter((entry) => entry.role === "user");
+    }
     const historyText = recentEntries
       .map(
         (entry) =>
@@ -449,6 +518,64 @@ class AIAgent {
     }
 
     return parts.join("\n\n");
+  }
+
+  _buildHistorySafeAssistantEntry(text, options = {}) {
+    const repetitionDetected = options.repetitionDetected === true;
+    const cleaned = String(text || "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    if (!cleaned) {
+      return repetitionDetected
+        ? "[response truncated due to repetition]"
+        : "";
+    }
+
+    const lines = cleaned.split(/\r?\n/);
+    const deduped = [];
+    for (const line of lines) {
+      const previous = deduped[deduped.length - 1];
+      if (line.trim() && previous === line) {
+        continue;
+      }
+      deduped.push(line);
+    }
+
+    const normalized = deduped.join("\n").trim();
+    if (!normalized) {
+      return repetitionDetected
+        ? "[response truncated due to repetition]"
+        : "";
+    }
+
+    if (!repetitionDetected) {
+      return normalized;
+    }
+
+    const capped = normalized.slice(0, 1200).trim();
+    return `${capped}\n\n[response truncated due to repetition]`;
+  }
+
+  _prepareHistoryEntriesForPersistence(history) {
+    return this._sanitizeHistoryEntries(history).map((entry) => {
+      const content = String(entry.content || "").trim();
+      if (content.length <= MAX_PERSISTED_HISTORY_ENTRY_CHARS) {
+        return entry;
+      }
+
+      const suffix = `\n\n${PERSISTED_HISTORY_TRUNCATION_NOTICE}`;
+      const headLimit = Math.max(
+        0,
+        MAX_PERSISTED_HISTORY_ENTRY_CHARS - suffix.length
+      );
+
+      return {
+        ...entry,
+        content: `${content.slice(0, headLimit).trimEnd()}${suffix}`
+      };
+    });
   }
 
   getConfig() {
@@ -470,12 +597,13 @@ class AIAgent {
       provider,
       ollamaUrl,
       model,
+      modelConfigured: genericModel.length > 0,
       nvidiaModel: this._sanitizeNvidiaModel(nvidiaModel || model),
       groqApiKey: config.get("groqApiKey", ""),
       openrouterApiKey: config.get("openrouterApiKey", ""),
       anthropicApiKey: config.get("anthropicApiKey", ""),
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
-      timeout: config.get("timeout", 300_000),
+      timeout: this._normalizeTimeoutMs(config.get("timeout", 0), 0),
       maxTokens: {
         fast: Math.max(512, Math.min(4096, config.get("maxTokens.fast", 2048))),
         heavy: Math.max(1024, Math.min(8192, config.get("maxTokens.heavy", 4096))),
@@ -492,7 +620,17 @@ class AIAgent {
     }
     if (provider === "anthropic") return "claude-3-5-haiku-20241022";
     if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0];
-    return "qwen2.5-coder:1.5b";
+    return "qwen2.5-coder:7b";
+  }
+
+  _normalizeTimeoutMs(timeoutMs, fallback = 0) {
+    const parsed = Number(timeoutMs);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  }
+
+  _withMinimumTimeoutMs(timeoutMs, minimumMs) {
+    const normalizedTimeout = this._normalizeTimeoutMs(timeoutMs, 0);
+    return normalizedTimeout === 0 ? 0 : Math.max(normalizedTimeout, minimumMs);
   }
 
   _sanitizeNvidiaModel(model) {
@@ -743,17 +881,27 @@ class AIAgent {
     }
   }
 
-  _pickOllamaModel(models, currentModel) {
+  _pickOllamaModel(models, currentModel, options = {}) {
     if (!Array.isArray(models) || models.length === 0) return currentModel;
-    if (currentModel && models.includes(currentModel)) return currentModel;
+    const normalizedCurrent = String(currentModel || "").trim();
+    const preferHigherQuality = options.preferHigherQuality === true;
+    if (
+      normalizedCurrent &&
+      models.includes(normalizedCurrent) &&
+      !preferHigherQuality
+    ) {
+      return normalizedCurrent;
+    }
 
-    const preferredModels = [
-      "qwen2.5-coder:1.5b",
-      "codellama:latest",
-      "llama3:latest"
-    ];
+    const preferredModels = preferHigherQuality
+      ? OLLAMA_EDIT_PREFERRED_MODELS
+      : OLLAMA_GENERAL_PREFERRED_MODELS;
     for (const candidate of preferredModels) {
       if (models.includes(candidate)) return candidate;
+    }
+
+    if (normalizedCurrent && models.includes(normalizedCurrent)) {
+      return normalizedCurrent;
     }
 
     return models[0];
@@ -833,14 +981,31 @@ class AIAgent {
     return [];
   }
 
-  async _prepareRuntimeConfig(config, reportStatus) {
+  _shouldPreferHigherQualityOllamaModel(config, intent = "general") {
+    if (config?.provider !== "ollama") {
+      return false;
+    }
+
+    if (config?.modelConfigured) {
+      return false;
+    }
+
+    return (
+      intent === "edit" ||
+      intent === "debug" ||
+      intent === "refactor" ||
+      intent === "create"
+    );
+  }
+
+  async _prepareRuntimeConfig(config, reportStatus, intent = "general") {
     if (!config) {
       return config;
     }
 
     const baseConfig = {
       ...config,
-      timeout: Math.max(config.timeout || 0, 300_000)
+      timeout: this._withMinimumTimeoutMs(config.timeout, 300_000)
     };
 
     // Skip model discovery for non-Ollama/NVIDIA providers
@@ -894,10 +1059,18 @@ class AIAgent {
         ]);
         
         if (models.length > 0) {
-          const resolvedModel = this._pickOllamaModel(models, baseConfig.model);
+          const preferredHigherQuality = this._shouldPreferHigherQualityOllamaModel(
+            baseConfig,
+            intent
+          );
+          const resolvedModel = this._pickOllamaModel(models, baseConfig.model, {
+            preferHigherQuality: preferredHigherQuality
+          });
           if (resolvedModel !== baseConfig.model) {
             reportStatus?.(
-              `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
+              preferredHigherQuality && models.includes(baseConfig.model)
+                ? `Using higher-quality Ollama edit model ${resolvedModel} for this request.`
+                : `Ollama model ${baseConfig.model} was unavailable. Using ${resolvedModel} instead.`
             );
           }
           return {
@@ -921,8 +1094,19 @@ class AIAgent {
       config?.provider === "nvidia"
         ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
         : String(config?.model || "").trim();
+    const configuredMaxTokens = {
+      fast: Math.max(512, Number(config?.maxTokens?.fast) || 2048),
+      heavy: Math.max(1024, Number(config?.maxTokens?.heavy) || 4096),
+      deep: Math.max(2048, Number(config?.maxTokens?.deep) || 8192),
+      create: Math.max(2048, Number(config?.maxTokens?.create) || 8192)
+    };
     const profile = {
-      maxTokens: mode === "deep" ? 4608 : mode === "heavy" ? 3072 : 1024,
+      maxTokens:
+        mode === "deep"
+          ? configuredMaxTokens.deep
+          : mode === "heavy"
+            ? configuredMaxTokens.heavy
+            : configuredMaxTokens.fast,
       relevantFileCount: MAX_RELEVANT_FILES,
       fileSnippetChars: MAX_FILE_SNIPPET,
       contextChars: MAX_CONTEXT_CHARS,
@@ -930,7 +1114,7 @@ class AIAgent {
     };
 
     if ((mode === "heavy" || mode === "deep") && intent === "create") {
-      profile.maxTokens = 8192;
+      profile.maxTokens = Math.max(profile.maxTokens, configuredMaxTokens.create);
     }
 
     if (config?.provider === "nvidia" && mode === "fast") {
@@ -964,13 +1148,350 @@ class AIAgent {
       }
     }
 
+    if (intent === "edit" || intent === "debug" || intent === "refactor") {
+      const minimumExecutionTokens =
+        mode === "fast"
+          ? Math.max(configuredMaxTokens.fast, 1536)
+          : mode === "heavy"
+            ? Math.max(configuredMaxTokens.fast, 3072)
+            : Math.max(configuredMaxTokens.heavy, 4096);
+      const maximumExecutionTokens =
+        mode === "fast"
+          ? Math.min(
+              configuredMaxTokens.create,
+              Math.max(configuredMaxTokens.heavy, 4096)
+            )
+          : mode === "heavy"
+            ? Math.min(
+                configuredMaxTokens.create,
+                Math.max(configuredMaxTokens.heavy, 8192)
+              )
+            : configuredMaxTokens.create;
+      profile.maxTokens = Math.min(
+        Math.max(profile.maxTokens, minimumExecutionTokens),
+        maximumExecutionTokens
+      );
+    } else if (intent === "create") {
+      const minimumCreateTokens =
+        mode === "fast"
+          ? Math.max(
+              configuredMaxTokens.fast,
+              config?.provider === "nvidia" ? 4096 : 3072
+            )
+          : mode === "heavy"
+            ? Math.max(configuredMaxTokens.heavy, 6144)
+            : Math.max(configuredMaxTokens.heavy, 8192);
+      const maximumCreateTokens =
+        mode === "fast"
+          ? Math.min(configuredMaxTokens.create, 8192)
+          : mode === "heavy"
+            ? Math.min(configuredMaxTokens.create, 12288)
+            : configuredMaxTokens.create;
+      profile.maxTokens = Math.min(
+        Math.max(profile.maxTokens, minimumCreateTokens),
+        maximumCreateTokens
+      );
+    } else if (intent === "command") {
+      profile.maxTokens = Math.min(
+        profile.maxTokens,
+        mode === "fast" ? 1536 : 3072
+      );
+    }
+
     return profile;
   }
 
-  _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
-    const isUnlimited = mode === "deep" && intent === "create";
+  _sanitizeImageAttachments(images) {
+    if (!Array.isArray(images)) return [];
+
+    return images
+      .slice(0, 3)
+      .map((entry, index) => {
+        const mimeType = String(entry?.mimeType || entry?.mime || "")
+          .trim()
+          .toLowerCase();
+        const dataUrl = typeof entry?.dataUrl === "string" ? entry.dataUrl.trim() : "";
+        const name = String(entry?.name || `image-${index + 1}`).trim();
+        const match = /^data:([^;]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl);
+
+        if (!SUPPORTED_CHAT_IMAGE_MIME_TYPES.has(mimeType) || !match) {
+          return null;
+        }
+
+        const matchedMimeType = String(match[1] || "").trim().toLowerCase();
+        if (matchedMimeType !== mimeType) {
+          return null;
+        }
+
+        return {
+          name,
+          mimeType,
+          dataUrl,
+          base64Data: String(match[2] || "").replace(/\s+/g, "")
+        };
+      })
+      .filter(Boolean);
+  }
+
+  _buildImageAttachmentHistoryNote(images) {
+    if (!Array.isArray(images) || images.length === 0) return "";
+    const names = images
+      .map((image) => image?.name)
+      .filter(Boolean)
+      .slice(0, 3);
+    return names.length > 0
+      ? `[Attached image${images.length === 1 ? "" : "s"}: ${names.join(", ")}]`
+      : `[Attached ${images.length} image${images.length === 1 ? "" : "s"}]`;
+  }
+
+  _buildOpenAiCompatibleUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent;
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image_url",
+        image_url: {
+          url: image.dataUrl
+        }
+      }))
+    ];
+  }
+
+  _buildAnthropicUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent;
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: image.mimeType,
+          data: image.base64Data
+        }
+      }))
+    ];
+  }
+
+  _buildOllamaUserMessage(userContent, images = []) {
+    const message = {
+      role: "user",
+      content: userContent || "Please analyze the attached image(s)."
+    };
+
+    if (Array.isArray(images) && images.length > 0) {
+      message.images = images.map((image) => image.base64Data);
+    }
+
+    return message;
+  }
+
+  _extractTextFromStructuredContent(content) {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        if (typeof part.text === "string") return part.text;
+        if (typeof part.content === "string") return part.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  _extractOpenAiCompatibleImages(images) {
+    if (!Array.isArray(images)) return [];
+    return images
+      .map((image) => {
+        const url =
+          image?.image_url?.url ||
+          image?.imageUrl?.url ||
+          image?.url ||
+          "";
+        return typeof url === "string" && /^data:image\//i.test(url) ? url : "";
+      })
+      .filter(Boolean);
+  }
+
+  _buildGeneratedImageSummary(images) {
+    const count = Array.isArray(images) ? images.length : 0;
+    return count > 0
+      ? `Generated ${count} image${count === 1 ? "" : "s"}.`
+      : "Generated an image.";
+  }
+
+  _isOpenRouterImageGenerationModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value);
+  }
+
+  _looksLikeVisionCapableModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    if (!value) return false;
+
+    return (
+      /\b(vision|visual|multimodal|image|images|img|photo|picture)\b/.test(value) ||
+      /\b(vl|llava|bakllava|minicpm-v|pixtral|internvl|qvq|molmo)\b/.test(value) ||
+      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3|qwen2-vl|qwen2\.5-vl|llama-3\.2-11b-vision|llama-3\.2-90b-vision)\b/.test(value)
+    );
+  }
+
+  _looksLikeTextOnlyModel(model) {
+    const value = String(model || "").trim().toLowerCase();
+    if (!value) return false;
+
+    return (
+      /\b(coder|code|embed|embedding|rerank|instruct|instruct-turbo)\b/.test(value) ||
+      /\b(qwen2\.5-coder|qwen3-coder|deepseek-coder|codellama|starcoder|codegemma)\b/.test(value)
+    );
+  }
+
+  _stripThinkTaggedTextChunk(chunk, state = { insideThink: false }) {
+    let remaining = String(chunk || "");
+    if (!remaining) return "";
+
+    let visible = "";
+    while (remaining) {
+      const lowered = remaining.toLowerCase();
+
+      if (state.insideThink) {
+        const endIndex = lowered.indexOf("</think>");
+        if (endIndex === -1) {
+          return visible;
+        }
+        remaining = remaining.slice(endIndex + "</think>".length);
+        state.insideThink = false;
+        continue;
+      }
+
+      const startIndex = lowered.indexOf("<think>");
+      const strayEndIndex = lowered.indexOf("</think>");
+
+      if (strayEndIndex !== -1 && (startIndex === -1 || strayEndIndex < startIndex)) {
+        remaining = remaining.slice(strayEndIndex + "</think>".length);
+        continue;
+      }
+
+      if (startIndex === -1) {
+        visible += remaining;
+        return visible;
+      }
+
+      visible += remaining.slice(0, startIndex);
+      remaining = remaining.slice(startIndex + "<think>".length);
+      state.insideThink = true;
+    }
+
+    return visible;
+  }
+
+  _modelSupportsImageInput(config = {}, model = "") {
+    const provider = String(config?.provider || "").trim().toLowerCase();
+    const selectedModel = String(model || config?.model || "").trim();
+    if (!selectedModel) return false;
+
+    if (provider === "anthropic") {
+      return true;
+    }
+
+    if (provider === "nvidia" || provider === "groq" || provider === "ollama") {
+      return this._looksLikeVisionCapableModel(selectedModel);
+    }
+
+    if (provider === "openrouter") {
+      return (
+        this._isOpenRouterImageGenerationModel(selectedModel) ||
+        this._looksLikeVisionCapableModel(selectedModel)
+      );
+    }
+
+    if (this._looksLikeVisionCapableModel(selectedModel)) {
+      return true;
+    }
+
+    // For custom and newer provider models, avoid blocking image input purely
+    // because the model name is unfamiliar. The provider can still reject the
+    // request and we normalize that server-side error into a clearer hint.
+    if (provider.startsWith("custom:")) {
+      return !this._looksLikeTextOnlyModel(selectedModel);
+    }
+
+    return !this._looksLikeTextOnlyModel(selectedModel);
+  }
+
+  _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
+    if (!this._isOpenRouterImageGenerationModel(model)) {
+      return false;
+    }
+
+    if (intent === "create") {
+      return true;
+    }
+
+    const text = String(userContent || "").toLowerCase();
+    if (
+      /\b(generate|create|draw|make|render|illustrate|design|poster|banner|logo|icon|image|picture|photo|artwork|scene|portrait)\b/.test(
+        text
+      )
+    ) {
+      return true;
+    }
+
+    return (
+      Array.isArray(images) &&
+      images.length > 0 &&
+      /\b(edit|modify|transform|restyle|remove|replace|add|erase|upscale|variation|variant)\b/.test(
+        text
+      )
+    );
+  }
+
+  async _readResponseOutput(reqOpts, response, options = {}) {
+    if (typeof reqOpts?.parseResponseBody === "function") {
+      const parsed = await reqOpts.parseResponseBody(response, options);
+      return {
+        text: typeof parsed?.text === "string" ? parsed.text : "",
+        images: Array.isArray(parsed?.images) ? parsed.images : []
+      };
+    }
+
+    const parseChunk =
+      typeof options.parseChunk === "function" ? options.parseChunk : reqOpts.parseChunk;
+    const text = await this._readResponseText(response, parseChunk, options);
+    return { text, images: [] };
+  }
+
+  _buildRequestOptions(config, prompt, mode = "fast", intent = "general", images = []) {
     const latencyProfile = this._getLatencyProfile(config, mode, intent);
-    const optimizedMaxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens;
+    const optimizedMaxTokens = latencyProfile.maxTokens;
+    const isExecutionIntent = this._isExecutionLikeIntent(intent);
+    const requestTemperature = isExecutionIntent ? 0.1 : 0.2;
+    const requestTopP = isExecutionIntent ? 0.85 : 0.9;
+    const estimatedPromptTokens = Math.max(1024, Math.ceil(prompt.length / 4));
+    const optimizedContextWindow = isExecutionIntent
+      ? Math.max(
+          8192,
+          Math.min(
+            24576,
+            Math.max(
+              optimizedMaxTokens * 2,
+              estimatedPromptTokens + optimizedMaxTokens + 1024
+            )
+          )
+        )
+      : Math.max(4096, Math.min(8192, optimizedMaxTokens * 2));
 
     // Log key presence only; never print secrets or prefixes.
     console.log("[Agent] Building request for provider:", config.provider);
@@ -995,6 +1516,15 @@ class AIAgent {
             .replace(/\nAssistant:$/, "")
             .trim()
         : prompt;
+    const userMessageContent = this._buildOpenAiCompatibleUserContent(
+      userContent,
+      images
+    );
+    const anthropicUserContent = this._buildAnthropicUserContent(
+      userContent,
+      images
+    );
+    const ollamaUserMessage = this._buildOllamaUserMessage(userContent, images);
 
     if (config.customProvider?.protocol === "openai") {
       return {
@@ -1007,12 +1537,12 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
-          temperature: 0.2,
+          temperature: requestTemperature,
           max_tokens: optimizedMaxTokens,
-          top_p: 0.9
+          top_p: requestTopP
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -1039,8 +1569,9 @@ class AIAgent {
           model: config.model,
           max_tokens: optimizedMaxTokens,
           stream: true,
+          temperature: requestTemperature,
           system: sysContent,
-          messages: [{ role: "user", content: userContent }]
+          messages: [{ role: "user", content: anthropicUserContent }]
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ")) return null;
@@ -1068,13 +1599,13 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
-          temperature: 0.2,
+          temperature: requestTemperature,
           max_tokens: optimizedMaxTokens,
-          top_p: 0.9,
-          frequency_penalty: 0.2
+          top_p: requestTopP,
+          frequency_penalty: isExecutionIntent ? 0.25 : 0.2
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -1089,6 +1620,12 @@ class AIAgent {
       };
     }
     if (config.provider === "openrouter") {
+      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(
+        config.model,
+        userContent,
+        images,
+        intent
+      );
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
         headers: {
@@ -1101,12 +1638,17 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
-          stream: true,
-          temperature: 0.2,
+          stream: !requestImageOutput,
+          temperature: requestTemperature,
           max_tokens: optimizedMaxTokens,
-          top_p: 0.9
+          top_p: requestTopP,
+          ...(requestImageOutput
+            ? {
+                modalities: ["image", "text"]
+              }
+            : {})
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -1117,7 +1659,29 @@ class AIAgent {
           } catch {
             return null;
           }
-        }
+        },
+        parseResponseBody: requestImageOutput
+          ? async (response, options = {}) => {
+              const data = await response.json();
+              const message = data?.choices?.[0]?.message || {};
+              const generatedImages = this._extractOpenAiCompatibleImages(
+                message.images || []
+              );
+              const text =
+                this._extractTextFromStructuredContent(message.content) ||
+                this._buildGeneratedImageSummary(generatedImages);
+              if (
+                generatedImages.length > 0 &&
+                typeof options.streamCallback === "function"
+              ) {
+                options.streamCallback(text);
+              }
+              return {
+                text,
+                images: generatedImages
+              };
+            }
+          : null
       };
     }
     if (config.provider === "nvidia") {
@@ -1125,6 +1689,7 @@ class AIAgent {
       const isMinimax = resolvedModel === "minimaxai/minimax-m2.7";
       const isLlama70b = resolvedModel === "meta/llama-3.1-70b-instruct";
       const isNemotron = resolvedModel === "nvidia/llama-3.3-nemotron-super-49b-v1.5";
+      const thinkState = { insideThink: false };
       
       const minimaxOptimizations = isMinimax ? {
         top_p: 0.8,
@@ -1153,10 +1718,16 @@ class AIAgent {
           model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
-          temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
+          temperature: isMinimax
+            ? 0.3
+            : isNemotron
+              ? 0.7
+              : isLlama70b
+                ? 0.15
+                : requestTemperature,
           max_tokens: optimizedMaxTokens,
           ...minimaxOptimizations,
           ...llama70bOptimizations,
@@ -1167,11 +1738,8 @@ class AIAgent {
           try {
             const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null;
             if (!token) return null;
-            // Filter out <think> tags and their content
-            if (token.includes("<think>") || token.includes("</think>")) {
-              return null;
-            }
-            return token;
+            const visibleToken = this._stripThinkTaggedTextChunk(token, thinkState);
+            return visibleToken || null;
           } catch {
             return null;
           }
@@ -1187,16 +1755,16 @@ class AIAgent {
         model: config.model,
         messages: [
           { role: "system", content: sysContent },
-          { role: "user", content: userContent }
+          ollamaUserMessage
         ],
         stream: true,
         options: {
-          temperature: 0.2,
-          num_predict: mode === "deep" ? -1 : mode === "heavy" ? 2048 : 1024,
+          temperature: requestTemperature,
+          num_predict: optimizedMaxTokens,
           top_k: 15,
-          top_p: 0.85,
-          num_ctx: 2048,
-          repeat_penalty: 1.15
+          top_p: requestTopP,
+          num_ctx: optimizedContextWindow,
+          repeat_penalty: isExecutionIntent ? 1.2 : 1.15
         }
       }),
       parseChunk: (line) => {
@@ -1212,17 +1780,23 @@ class AIAgent {
   }
 
   _createRequestSignal(abortSignal, timeoutMs) {
+    const normalizedTimeout = this._normalizeTimeoutMs(timeoutMs, 0);
+
+    if (!(normalizedTimeout > 0)) {
+      return abortSignal || undefined;
+    }
+
     if (!abortSignal) {
-      return AbortSignal.timeout(timeoutMs);
+      return AbortSignal.timeout(normalizedTimeout);
     }
 
     if (typeof AbortSignal.any === "function") {
-      return AbortSignal.any([abortSignal, AbortSignal.timeout(timeoutMs)]);
+      return AbortSignal.any([abortSignal, AbortSignal.timeout(normalizedTimeout)]);
     }
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), normalizedTimeout);
 
     abortSignal.addEventListener("abort", onAbort, { once: true });
     controller.signal.addEventListener(
@@ -1235,6 +1809,82 @@ class AIAgent {
     );
 
     return controller.signal;
+  }
+
+  _getProviderDisplayName(provider) {
+    switch (provider) {
+      case "ollama":
+        return "Ollama";
+      case "groq":
+        return "Groq";
+      case "openrouter":
+        return "OpenRouter";
+      case "anthropic":
+        return "Anthropic";
+      case "nvidia":
+        return "NVIDIA NIM";
+      default:
+        return "the AI provider";
+    }
+  }
+
+  _normalizeAiError(error, config = {}) {
+    const providerName = this._getProviderDisplayName(config.provider);
+    const rawMessage = String(error?.message || error || "Unknown error").trim();
+    const normalizedMessage = rawMessage.toLowerCase();
+    const errorCode = String(error?.code || error?.cause?.code || "").toUpperCase();
+
+    if (error?.name === "AbortError") {
+      return this._normalizeTimeoutMs(config.timeout, 0) > 0
+        ? "The AI request timed out. Try a faster model or increase the timeout in Code Janitor settings."
+        : "The AI request was cancelled before completion.";
+    }
+
+    if (
+      normalizedMessage === "terminated" ||
+      normalizedMessage.includes("socket closed") ||
+      normalizedMessage.includes("other side closed") ||
+      errorCode === "ECONNRESET" ||
+      errorCode === "EPIPE" ||
+      errorCode === "UND_ERR_SOCKET"
+    ) {
+      if (config.provider === "ollama") {
+        return `The connection to Ollama was closed while it was generating a response. Make sure Ollama is still running at ${config.ollamaUrl} and retry.`;
+      }
+
+      return `The connection to ${providerName} was closed while streaming the response. Retry once, then try a different model/provider or a higher timeout if it keeps happening.`;
+    }
+
+    if (errorCode === "ECONNREFUSED") {
+      if (config.provider === "ollama") {
+        return `Could not connect to Ollama at ${config.ollamaUrl}. Make sure the Ollama server is running and the URL is correct.`;
+      }
+
+      return `Could not connect to ${providerName}. Check your network connection and provider settings, then retry.`;
+    }
+
+    if (errorCode === "ENOTFOUND") {
+      return `Could not resolve the ${providerName} host. Check your internet connection, proxy, or DNS settings, then retry.`;
+    }
+
+    if (errorCode === "ETIMEDOUT" || normalizedMessage.includes("timed out")) {
+      return `The ${providerName} request timed out. Try a faster model, reduce the request size, or increase the timeout in settings.`;
+    }
+
+    if (
+      normalizedMessage.includes("not a multimodal model") ||
+      normalizedMessage.includes("does not support image") ||
+      normalizedMessage.includes("image input is not supported")
+    ) {
+      const modelLabel = config.model ? ` (${config.model})` : "";
+      return `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`;
+    }
+
+    if (normalizedMessage === "fetch failed") {
+      return `The request to ${providerName} failed before a response was received. Check connectivity and provider settings, then retry.`;
+    }
+
+    return rawMessage || "Unknown AI error";
   }
 
   async _buildHttpError(response, prefix) {
@@ -1672,8 +2322,17 @@ class AIAgent {
       typeof options.intentOverride === "string" && options.intentOverride.trim()
         ? options.intentOverride.trim().toLowerCase()
         : null;
+    const forceStructuredEdits = options.forceStructuredEdits === true;
+    const interactionStyle =
+      options.interactionStyle === "agent_loop" ? "agent_loop" : "default";
     const reportStatus =
       typeof options.onStatus === "function" ? options.onStatus : null;
+    const systemOverlay =
+      typeof options.systemOverlay === "string" && options.systemOverlay.trim()
+        ? options.systemOverlay.trim()
+        : "";
+    const skipHistory = options.skipHistory === true;
+    const earlyIntent = forcedIntent || this._detectIntent(userMessage);
 
     const runtimeConfig =
       options.runtimeConfig && typeof options.runtimeConfig === "object"
@@ -1685,17 +2344,35 @@ class AIAgent {
 
     const config = await this._prepareRuntimeConfig(
       runtimeConfig,
-      reportStatus
+      reportStatus,
+      earlyIntent
     );
     if (!config.enabled) {
       return { error: "AI is disabled in Code Janitor settings." };
     }
+    const imageAttachments = this._sanitizeImageAttachments(options.images);
+    if (
+      imageAttachments.length > 0 &&
+      !this._modelSupportsImageInput(config, config.model)
+    ) {
+      const modelLabel = config.model ? ` (${config.model})` : "";
+      return {
+        error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+      };
+    }
+    if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
+      userMessage = "Please analyze the attached image(s).";
+    }
 
-    this._appendConversationEntry("user", userMessage);
+    if (!skipHistory) {
+      this._appendConversationEntry(
+        "user",
+        [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
+          .filter(Boolean)
+          .join("\n\n")
+      );
+    }
     const isTabQuestion = this._isTabQuestion(userMessage);
-
-    // Detect intent early for knowledge graph decision
-    const earlyIntent = forcedIntent || this._detectIntent(userMessage);
     const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
@@ -1760,7 +2437,9 @@ class AIAgent {
     ) {
       const reply = `Today is ${new Date().toDateString()}.`;
       if (streamCallback) streamCallback(reply);
-      this._appendConversationEntry("assistant", reply);
+      if (!skipHistory) {
+        this._appendConversationEntry("assistant", reply);
+      }
       return { text: reply, actions: [] };
     }
     if (
@@ -1770,7 +2449,9 @@ class AIAgent {
     ) {
       const reply = `Current date and time: ${new Date().toString()}.`;
       if (streamCallback) streamCallback(reply);
-      this._appendConversationEntry("assistant", reply);
+      if (!skipHistory) {
+        this._appendConversationEntry("assistant", reply);
+      }
       return { text: reply, actions: [] };
     }
 
@@ -1789,6 +2470,7 @@ class AIAgent {
     }
 
     let prompt;
+    let retryBasePrompt = "";
     // Audit/bugfix use the same minimal prompt construction as fast: just
     // system instruction + active file + user message. Skipping the heavy
     // workspace-scan branch keeps the audit/bugfix system instruction from
@@ -1802,12 +2484,6 @@ class AIAgent {
             : "Preparing fast reply..."
       );
       const intent = earlyIntent;
-      const activeFileContext = this._getActiveFileContext(
-        effectiveWorkspace,
-        intent === "edit" || intent === "debug" || intent === "refactor"
-          ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS
-          : 1_200
-      );
       const editorState = this._getEditorState(effectiveWorkspace);
       let fastContext = "";
       // In audit/bugfix mode, skip repo-wide scanning. The model must focus
@@ -1835,12 +2511,28 @@ class AIAgent {
           latencyProfile.contextChars
         );
       }
-      const history = this._buildPromptHistoryContext(false);
+      const history = this._buildPromptHistoryContext(false, {
+        userOnly: this._isExecutionLikeIntent(intent)
+      });
       const editableTargets = this._resolveEditableTargets(
         userMessage,
         effectiveWorkspace,
         editorState
       );
+      const isEditIntent =
+        intent === "edit" || intent === "debug" || intent === "refactor";
+      const focusedEditableTargetContext = isEditIntent
+        ? this._getFocusedEditableTargetContext(
+            editableTargets,
+            effectiveWorkspace,
+            MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+          )
+        : "";
+      const activeFileContext = focusedEditableTargetContext ||
+        this._getActiveFileContext(
+          effectiveWorkspace,
+          isEditIntent ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS : 1_200
+        );
       this.currentEditableTargets =
         intent !== "create" && editableTargets.paths.length
           ? new Set(editableTargets.paths)
@@ -1849,22 +2541,46 @@ class AIAgent {
         intent,
         effectiveWorkspace,
         mode,
-        this.showThinking
+        this.showThinking,
+        interactionStyle
       );
+      const effectiveSystemInstruction = systemOverlay
+        ? `${systemInstruction}\n\n${systemOverlay}`
+        : systemInstruction;
       const isCreateIntent = intent === "create";
-      const isEditIntent =
-        intent === "edit" || intent === "debug" || intent === "refactor";
+      const editableTargetsContext = isCreateIntent
+        ? ""
+        : this._buildEditableTargetsContext(editableTargets);
+      const focusedEditLanguageHint =
+        isEditIntent && focusedEditableTargetContext
+          ? this._buildFocusedEditLanguageHint(
+              editableTargets,
+              effectiveWorkspace
+            )
+          : "";
       const contextToUse = isCreateIntent ? "" : fastContext;
       const activeCtx = isCreateIntent ? "" : activeFileContext;
       const editHint =
         isEditIntent && activeFileContext
-          ? "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
+          ? focusedEditableTargetContext
+            ? "\nPrefer exactly one PATCH action for this file when making a small localized change. Preserve every untouched line. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and use FILE only if a PATCH would be unsafe or the user asked for a broader rewrite."
+            : "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
       const fastKnowledgeGraph = knowledgeGraphContext;
-      prompt = `${systemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}${history ? `\n\n${history}` : ""}
+      const promptPrefix = `${effectiveSystemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${editableTargetsContext ? `\n\n${editableTargetsContext}` : ""}${focusedEditLanguageHint ? `\n\n${focusedEditLanguageHint}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}`;
+      prompt = `${promptPrefix}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`;
+      if (
+        forceStructuredEdits ||
+        this._shouldForceStructuredEdit(intent, userMessage)
+      ) {
+        retryBasePrompt = `${promptPrefix}
+
+### USER_MESSAGE ###
+${resolvedMessage}`;
+      }
     } else {
       const editorState = this._getEditorState(effectiveWorkspace);
       const editableTargets = this._resolveEditableTargets(
@@ -1872,12 +2588,20 @@ ${resolvedMessage}`;
         effectiveWorkspace,
         editorState
       );
+      const intent = this._detectIntent(userMessage);
+      const isEditIntent =
+        intent === "edit" || intent === "debug" || intent === "refactor";
+      const focusedEditableTargetContext = isEditIntent
+        ? this._getFocusedEditableTargetContext(
+            editableTargets,
+            effectiveWorkspace,
+            MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+          )
+        : "";
       const isScopedActiveFileEdit =
         this._isActiveFileScanRequest(userMessage) &&
         this._isEditRequest(userMessage) &&
         editableTargets.paths.length > 0;
-
-      const intent = this._detectIntent(userMessage);
 
       reportStatus?.(
         isScopedActiveFileEdit
@@ -1901,21 +2625,24 @@ ${resolvedMessage}`;
             maxResults: latencyProfile.relevantFileCount,
             snippetChars: latencyProfile.fileSnippetChars
           });
-      const activeFileContext = this._getActiveFileContext(effectiveWorkspace);
+      const activeFileContext = focusedEditableTargetContext ||
+        this._getActiveFileContext(effectiveWorkspace);
       const editorStateContext = this._buildEditorStateContext(editorState);
-      const openTabSnippetContext = isScopedActiveFileEdit
-        ? this._getTargetSnippetContext(
-            editableTargets.paths,
-            effectiveWorkspace,
-            MAX_RELEVANT_FILES,
-            MAX_EDIT_TARGET_SNIPPET
-          )
-        : this._getOpenTabSnippetContext(
-            editorState.allOpenTabs,
-            effectiveWorkspace
-          );
+      const openTabSnippetContext = focusedEditableTargetContext
+        ? ""
+        : isScopedActiveFileEdit
+          ? this._getTargetSnippetContext(
+              editableTargets.paths,
+              effectiveWorkspace,
+              MAX_RELEVANT_FILES,
+              MAX_EDIT_TARGET_SNIPPET
+            )
+          : this._getOpenTabSnippetContext(
+              editorState.allOpenTabs,
+              effectiveWorkspace
+            );
       this.currentEditableTargets =
-        intent !== "create" && intent !== "edit" && editableTargets.paths.length
+        intent !== "create" && editableTargets.paths.length
           ? new Set(editableTargets.paths)
           : null;
       prompt = this._buildPrompt(
@@ -1927,25 +2654,57 @@ ${resolvedMessage}`;
         isTabQuestion,
         editableTargets,
         mode,
-        knowledgeGraphContext
+        knowledgeGraphContext,
+        systemOverlay,
+        {
+          interactionStyle
+        }
       );
+      if (
+        forceStructuredEdits ||
+        this._shouldForceStructuredEdit(intent, userMessage)
+      ) {
+        retryBasePrompt = this._buildPrompt(
+          resolvedMessage,
+          relevantFiles,
+          activeFileContext,
+          editorStateContext,
+          openTabSnippetContext,
+          isTabQuestion,
+          editableTargets,
+          mode,
+          knowledgeGraphContext,
+          systemOverlay,
+          {
+            includeHistory: false,
+            intentOverride: intent,
+            interactionStyle
+          }
+        );
+      }
     }
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
       const reqIntent = forcedIntent || earlyIntent;
-      const shouldCheckRepetition = !this._shouldForceStructuredEdit(
-        reqIntent,
-        userMessage
+      const shouldCheckRepetition = !(
+        forceStructuredEdits ||
+        this._shouldForceStructuredEdit(reqIntent, userMessage)
       );
-      const reqOpts = this._buildRequestOptions(config, prompt, mode, reqIntent);
+      const reqOpts = this._buildRequestOptions(
+        config,
+        prompt,
+        mode,
+        reqIntent,
+        imageAttachments
+      );
       const extendedTimeout =
         reqIntent === "create" ||
         reqIntent === "edit" ||
         reqIntent === "debug" ||
         reqIntent === "refactor"
-          ? Math.max(config.timeout || 0, 360_000)
-          : config.timeout;
+          ? this._withMinimumTimeoutMs(config.timeout, 360_000)
+          : this._normalizeTimeoutMs(config.timeout, 0);
       const response = await fetch(reqOpts.url, {
         method: "POST",
         headers: reqOpts.headers,
@@ -1976,10 +2735,10 @@ ${resolvedMessage}`;
       }
 
       let fullResponse = "";
+      let responseImages = [];
       let repetitionDetected = false;
-      fullResponse = await this._readResponseText(
-        response,
-        (line) => {
+      const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        parseChunk: (line) => {
           const token = reqOpts.parseChunk(line);
           if (token === null) return null;
           const nextResponse = fullResponse + token;
@@ -1993,12 +2752,12 @@ ${resolvedMessage}`;
           fullResponse = nextResponse;
           return token;
         },
-        {
-          streamCallback,
-          abortSignal,
-          shouldStop: () => repetitionDetected
-        }
-      );
+        streamCallback,
+        abortSignal,
+        shouldStop: () => repetitionDetected
+      });
+      fullResponse = initialResponse.text || fullResponse;
+      responseImages = initialResponse.images || [];
 
       const finalText = repetitionDetected
         ? `${fullResponse}\n\nStopped because the response started repeating.`
@@ -2009,32 +2768,42 @@ ${resolvedMessage}`;
       
       let parsedResponse = this._parseResponse(cleanedText);
       const finalIntent = forcedIntent || this._detectIntent(userMessage);
-      const requiresFileActions = this._shouldForceStructuredEdit(
-        finalIntent,
-        userMessage
-      );
-      let assistantText = finalText;
+      const requiresFileActions =
+        forceStructuredEdits ||
+        this._shouldForceStructuredEdit(finalIntent, userMessage);
+      let assistantText =
+        cleanedText ||
+        (responseImages.length > 0
+          ? this._buildGeneratedImageSummary(responseImages)
+          : finalText);
       let firstRetryText = "";
       const shouldAllowClarification = this._isClarificationResponse(
         assistantText,
         finalIntent,
         userMessage
       );
+      const firstPassHadIncompleteStructuredEdits =
+        this._hasIncompleteStructuredEditWarning(parsedResponse.warnings);
 
       if (
         requiresFileActions &&
         !shouldAllowClarification &&
-        !this._hasRequiredActions(
-          finalIntent,
-          userMessage,
-          parsedResponse.actions
+        (
+          !this._hasStructuredEditPipelineActions(
+            finalIntent,
+            userMessage,
+            parsedResponse.actions
+          ) ||
+          firstPassHadIncompleteStructuredEdits
         ) &&
         !abortSignal?.aborted
       ) {
         reportStatus?.(
-          "Model replied with prose. Retrying with strict edit format..."
+          firstPassHadIncompleteStructuredEdits
+            ? "Model output looked incomplete. Retrying with strict edit format..."
+            : "Model replied with prose. Retrying with strict edit format..."
         );
-        const retryPrompt = `${prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
+        const retryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
         const retryOpts = this._buildRequestOptions(
           config,
           retryPrompt,
@@ -2057,16 +2826,18 @@ ${resolvedMessage}`;
           );
         }
 
-        const retryText = await this._readResponseText(
-          retryResponse,
-          retryOpts.parseChunk,
-          { abortSignal }
-        );
+        const retryText = (
+          await this._readResponseOutput(retryOpts, retryResponse, {
+            abortSignal
+          })
+        ).text;
 
         firstRetryText = retryText || finalText;
         parsedResponse = this._parseResponse(firstRetryText);
         assistantText = firstRetryText;
       }
+      const retryHadIncompleteStructuredEdits =
+        this._hasIncompleteStructuredEditWarning(parsedResponse.warnings);
 
       const shouldAllowClarificationAfterRetry = this._isClarificationResponse(
         assistantText,
@@ -2077,11 +2848,20 @@ ${resolvedMessage}`;
       if (
         requiresFileActions &&
         !shouldAllowClarificationAfterRetry &&
-        !this._hasEditActions(parsedResponse.actions) &&
+        (!this._hasStructuredEditPipelineActions(
+          finalIntent,
+          userMessage,
+          parsedResponse.actions
+        ) ||
+          retryHadIncompleteStructuredEdits) &&
         !abortSignal?.aborted
       ) {
-        reportStatus?.("Retrying with FILE-only format for safe edits...");
-        const fileOnlyRetryPrompt = `${prompt}\n\n${this._buildFileOnlyRetryPrompt(
+        reportStatus?.(
+          retryHadIncompleteStructuredEdits
+            ? "Structured edits still looked incomplete. Retrying with FILE-only format..."
+            : "Retrying with FILE-only format for safe edits..."
+        );
+        const fileOnlyRetryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildFileOnlyRetryPrompt(
           assistantText
         )}`;
         const fileOnlyRetryOpts = this._buildRequestOptions(
@@ -2106,14 +2886,33 @@ ${resolvedMessage}`;
           );
         }
 
-        const fileOnlyRetryText = await this._readResponseText(
-          fileOnlyRetryResponse,
-          fileOnlyRetryOpts.parseChunk,
-          { abortSignal }
-        );
+        const fileOnlyRetryText = (
+          await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
+            abortSignal
+          })
+        ).text;
 
         assistantText = fileOnlyRetryText || assistantText;
         parsedResponse = this._parseResponse(assistantText);
+      }
+
+      if (
+        requiresFileActions &&
+        !this._isClarificationResponse(assistantText, finalIntent, userMessage) &&
+        this._hasIncompleteStructuredEditWarning(parsedResponse.warnings)
+      ) {
+        const incompleteMessage = this._buildIncompleteStructuredEditMessage(
+          mode,
+          finalIntent
+        );
+        if (!skipHistory) {
+          this._appendConversationEntry("assistant", incompleteMessage);
+        }
+        return {
+          text: incompleteMessage,
+          actions: [],
+          warnings: [...(parsedResponse.warnings || []), incompleteMessage]
+        };
       }
 
       if (
@@ -2123,7 +2922,9 @@ ${resolvedMessage}`;
       ) {
         const noEditsMessage =
           "No executable file edits were generated for this edit request. Please retry with the exact target file path and desired change.";
-        this._appendConversationEntry("assistant", assistantText || noEditsMessage);
+        if (!skipHistory) {
+          this._appendConversationEntry("assistant", noEditsMessage);
+        }
         return {
           text: noEditsMessage,
           actions: [],
@@ -2131,21 +2932,46 @@ ${resolvedMessage}`;
         };
       }
 
-      this._appendConversationEntry(
-        "assistant",
-        assistantText ||
-          (repetitionDetected
-            ? `${fullResponse}\n\n[stopped repetitive output]`
-            : fullResponse || this._getEmptyResponseFallback(mode))
-      );
+      if (!skipHistory) {
+        this._appendConversationEntry(
+          "assistant",
+          this._buildHistorySafeAssistantEntry(
+            [
+              assistantText ||
+                (repetitionDetected
+                  ? `${fullResponse}\n\n[stopped repetitive output]`
+                  : fullResponse || this._getEmptyResponseFallback(mode)),
+              responseImages.length > 0
+                ? this._buildGeneratedImageSummary(responseImages)
+                : ""
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+            { repetitionDetected }
+          )
+        );
+      }
+
+      if (responseImages.length > 0) {
+        parsedResponse = {
+          ...parsedResponse,
+          text: parsedResponse.text || assistantText,
+          images: responseImages
+        };
+      }
 
       return parsedResponse;
     } catch (error) {
       if (error.name === "AbortError") {
-        return { text: "Generation stopped", actions: [] };
+        if (abortSignal?.aborted) {
+          return { text: "Generation stopped", actions: [] };
+        }
+        return {
+          error: this._normalizeAiError(error, config)
+        };
       }
 
-      return { error: `AI error: ${error.message}` };
+      return { error: `AI error: ${this._normalizeAiError(error, config)}` };
     } finally {
       this.currentEditableTargets = null;
     }
@@ -2271,6 +3097,25 @@ ${resolvedMessage}`;
     );
   }
 
+  _findOpenDocumentByPath(filePath) {
+    if (!filePath) return null;
+
+    const openDocuments = Array.isArray(vscode.workspace.textDocuments)
+      ? vscode.workspace.textDocuments
+      : [];
+    const normalizedTarget = path.normalize(filePath);
+
+    return (
+      openDocuments.find(
+        (document) =>
+          document &&
+          !document.isUntitled &&
+          document.uri?.scheme === "file" &&
+          path.normalize(document.fileName) === normalizedTarget
+      ) || null
+    );
+  }
+
   _toWorkspaceRelativePath(filePath, workspaceFolder) {
     if (!filePath) {
       return null;
@@ -2281,6 +3126,23 @@ ${resolvedMessage}`;
       : filePath;
 
     return normalizedPath.replace(/\\/g, "/");
+  }
+
+  _normalizeWorkspaceRelativePath(filePath, options = {}) {
+    const stripLeadingDot = options.stripLeadingDot !== false;
+    const raw = String(filePath || "")
+      .trim()
+      .replace(/^["'`]|["'`]$/g, "")
+      .replace(/\\/g, "/");
+    if (!raw) {
+      return "";
+    }
+
+    let normalized = path.posix.normalize(raw);
+    if (stripLeadingDot) {
+      normalized = normalized.replace(/^\.\/+/, "");
+    }
+    return normalized === "." ? "" : normalized;
   }
 
   _formatContextPath(filePath, workspaceFolder) {
@@ -2311,6 +3173,239 @@ ${resolvedMessage}`;
     const content = document.getText().slice(0, maxChars);
 
     return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``;
+  }
+
+  _buildContentContext(label, displayPath, content, maxChars) {
+    const source = typeof content === "string" ? content : "";
+    if (!source) return "";
+
+    if (!Number.isFinite(maxChars) || maxChars <= 0 || source.length <= maxChars) {
+      return `${label}: ${displayPath}\n\`\`\`\n${source}\n\`\`\``;
+    }
+
+    const headChars = Math.max(1_600, Math.floor(maxChars * 0.65));
+    const tailChars = Math.max(1_200, maxChars - headChars);
+    const totalRetained = Math.min(source.length, headChars + tailChars);
+    const retainedHead = Math.min(headChars, totalRetained);
+    const retainedTail = Math.max(0, totalRetained - retainedHead);
+    const omittedChars = Math.max(0, source.length - retainedHead - retainedTail);
+    const head = source.slice(0, retainedHead);
+    const tail = retainedTail > 0 ? source.slice(-retainedTail) : "";
+
+    return `${label}: ${displayPath}\n\`\`\`\n${head}\n...\n[truncated ${omittedChars} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _getFocusedEditableTargetData(editableTargets, workspaceFolder) {
+    if (
+      !editableTargets ||
+      editableTargets.scope !== "restricted" ||
+      !Array.isArray(editableTargets.paths) ||
+      editableTargets.paths.length !== 1
+    ) {
+      return null;
+    }
+
+    const targetPath = editableTargets.paths[0];
+    const fullPath = workspaceFolder
+      ? path.join(workspaceFolder, targetPath)
+      : targetPath;
+    const openDocument = this._findOpenDocumentByPath(fullPath);
+
+    if (openDocument) {
+      return {
+        targetPath,
+        displayPath: this._formatContextPath(openDocument.fileName, workspaceFolder),
+        content: openDocument.getText(),
+        isDirty: openDocument.isDirty === true
+      };
+    }
+
+    const fileData = this.codebaseContext.get(targetPath);
+    if (!fileData || typeof fileData.content !== "string") {
+      return null;
+    }
+
+    return {
+      targetPath,
+      displayPath: targetPath,
+      content: fileData.content,
+      isDirty: false
+    };
+  }
+
+  _getStructuredEditLanguage(filePath = "") {
+    const ext = path.extname(String(filePath || "")).toLowerCase();
+    if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+      return "javascript";
+    }
+    if (ext === ".py") {
+      return "python";
+    }
+    if (ext === ".html" || ext === ".htm") {
+      return "html";
+    }
+    return "";
+  }
+
+  _findAnchorLine(content, patterns = []) {
+    const source = typeof content === "string" ? content : "";
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (match && match[0]) {
+        return match[0].split(/\r?\n/)[0].trim();
+      }
+    }
+    return "";
+  }
+
+  _quoteAnchor(anchor) {
+    const value = String(anchor || "").trim();
+    if (!value) return "";
+    const compact = value.replace(/\s+/g, " ");
+    return `\`${compact.slice(0, 120)}${compact.length > 120 ? "..." : ""}\``;
+  }
+
+  _buildFocusedEditLanguageHint(editableTargets, workspaceFolder) {
+    const data = this._getFocusedEditableTargetData(
+      editableTargets,
+      workspaceFolder
+    );
+    if (!data || !data.content) {
+      return "";
+    }
+
+    const language = this._getStructuredEditLanguage(data.targetPath);
+    if (!language) {
+      return "";
+    }
+
+    const quotedAnchors = [];
+    const pushAnchor = (anchor) => {
+      const quoted = this._quoteAnchor(anchor);
+      if (quoted && !quotedAnchors.includes(quoted)) {
+        quotedAnchors.push(quoted);
+      }
+    };
+
+    if (language === "html") {
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /<main\b[^\n>]*>/i,
+          /<section\b[^\n>]*>/i,
+          /<form\b[^\n>]*>/i,
+          /<div\b[^\n>]*class=["'][^"']+["'][^\n>]*>/i,
+          /<button\b[^\n>]*>/i,
+          /<\/main>/i,
+          /<\/body>/i
+        ])
+      );
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /<style\b[^\n>]*>/i,
+          /<script\b[^\n>]*>/i,
+          /<\/head>/i,
+          /<\/body>/i
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for HTML in ${data.displayPath}:`,
+        "- Patch the smallest enclosing element instead of rewriting the whole document.",
+        "- For a new button or small UI control, SEARCH should usually include the surrounding container and its closing tag.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- If adding styles, patch the existing `<style>` block or insert before `</head>`.",
+        "- If adding behavior, patch an existing `<script>` block or insert before `</body>`."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (language === "javascript") {
+      const importLines = data.content.match(/^import\s.+$/gm) || [];
+      pushAnchor(importLines[importLines.length - 1] || "");
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /export\s+default\s+[^\n]+/i,
+          /return\s*\(\s*$/m,
+          /function\s+[A-Za-z0-9_$]+\s*\([^)]*\)\s*\{/m,
+          /const\s+[A-Za-z0-9_$]+\s*=\s*\([^)]*\)\s*=>\s*\{/m
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for JavaScript in ${data.displayPath}:`,
+        "- Preserve braces, commas, and surrounding exports exactly.",
+        "- For import changes, SEARCH should anchor on the last nearby import line rather than the entire file header.",
+        "- For JSX or UI edits, patch the smallest returned markup container, not the whole component.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- For a new helper, anchor on the related function signature or insert before the nearest `export default`."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (language === "python") {
+      const importLines =
+        data.content.match(/^(?:from\s+\S+\s+import\s+.+|import\s+.+)$/gm) || [];
+      pushAnchor(importLines[importLines.length - 1] || "");
+      pushAnchor(
+        this._findAnchorLine(data.content, [
+          /^def\s+[A-Za-z0-9_]+\s*\([^)]*\):/m,
+          /^async\s+def\s+[A-Za-z0-9_]+\s*\([^)]*\):/m,
+          /^class\s+[A-Za-z0-9_]+\s*(?:\([^)]*\))?:/m,
+          /^if __name__ == ["']__main__["']:/m
+        ])
+      );
+
+      return [
+        `Language-aware PATCH helper for Python in ${data.displayPath}:`,
+        "- Preserve indentation exactly and patch whole logical blocks, not partial indented fragments.",
+        "- For import changes, anchor on the last existing import line.",
+        "- For a helper or function change, SEARCH should include the full `def` or `class` signature and enough surrounding lines to stay unique.",
+        quotedAnchors.length > 0
+          ? `- Good anchors from this file: ${quotedAnchors.join(", ")}`
+          : "",
+        "- If adding a helper, place it before `if __name__ == \"__main__\":` when that block exists."
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return "";
+  }
+
+  _getFocusedEditableTargetContext(
+    editableTargets,
+    workspaceFolder,
+    maxChars = MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+  ) {
+    const data = this._getFocusedEditableTargetData(
+      editableTargets,
+      workspaceFolder
+    );
+    if (!data || !data.content) {
+      return "";
+    }
+
+    if (data.content.length <= MAX_FULL_EDITABLE_TARGET_CHARS) {
+      return this._buildContentContext(
+        "Editable target content (full file)",
+        `${data.displayPath}${data.isDirty ? " (unsaved changes)" : ""}`,
+        data.content,
+        data.content.length
+      );
+    }
+
+    return this._buildContentContext(
+      "Editable target content",
+      `${data.displayPath}${data.isDirty ? " (unsaved changes)" : ""}`,
+      data.content,
+      maxChars
+    );
   }
 
   _formatFileList(label, filePaths) {
@@ -2535,7 +3630,7 @@ ${resolvedMessage}`;
   _isEditRequest(message) {
     if (this._isGreetingOnly(message)) return false;
     return (
-      /\b(edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/i.test(
+      /\b(add|edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply|implement|write|create|set|wire|hook\s+up|integrate|support|adjust|handle)\b/i.test(
         message || ""
       ) ||
       /\b(do|make)\s+(this|these|it)\s+for\s+me\b/i.test(message || "") ||
@@ -2547,6 +3642,35 @@ ${resolvedMessage}`;
       /\b(set|wire)\s+it\s+up\b/i.test(message || "") ||
       /\b(host|deploy)\s+it\b/i.test(message || "")
     );
+  }
+
+  _isWorkspaceScopedEditRequest(message) {
+    const text = String(message || "").toLowerCase();
+    if (!text) return false;
+
+    if (
+      /\b(workspace|repo|repository|project|codebase)\b/.test(text) ||
+      /\b(across|throughout)\s+the\s+(workspace|repo|repository|project|codebase|app|site)\b/.test(text)
+    ) {
+      return true;
+    }
+
+    return (
+      /\b(multiple|several|all)\s+(files|folders|modules|components|pages|routes)\b/.test(text) ||
+      (/\b(files|folders|modules|components|pages|routes)\b/.test(text) &&
+        /\b(across|throughout|project|workspace|repo|repository|codebase)\b/.test(text))
+    );
+  }
+
+  _shouldTreatAsEditIntent(intent, userMessage) {
+    if (intent === "edit" || intent === "create") return true;
+    if (
+      (intent === "debug" || intent === "refactor") &&
+      this._isEditRequest(userMessage || "")
+    ) {
+      return true;
+    }
+    return false;
   }
 
   _detectIntent(message) {
@@ -2577,6 +3701,14 @@ ${resolvedMessage}`;
       /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
       this._mentionsEditorFiles(m) ||
       /\b(code|project|app|site|html|css|js|file|files)\b/.test(m);
+    const hasExplainIntent =
+      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
+        m
+      );
+    const hasImperativeEditClause =
+      /(?:^|[.!?;:,]\s*|\band\s+)(?:edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/.test(
+        m
+      );
     const hasReviewIntent =
       /\b(review|code review|pr review|audit|inspect for bugs|look for bugs|find issues|find bugs|find regressions|find risks|find problems)\b/.test(
         m
@@ -2624,11 +3756,7 @@ ${resolvedMessage}`;
       )
     )
       return "create";
-    if (
-      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
-        m
-      )
-    )
+    if (hasExplainIntent && !(hasApplyChangePhrase || hasImperativeEditClause))
       return "explain";
     if (hasApplyChangePhrase && hasImplementationContext) return "edit";
     if (hasExplicitEditVerb) return "edit";
@@ -3105,7 +4233,13 @@ ${resolvedMessage}`;
     ].join("\n");
   }
 
-  _buildSystemInstruction(intent, workspaceFolder, mode = "fast", showThinking = false) {
+  _buildSystemInstruction(
+    intent,
+    workspaceFolder,
+    mode = "fast",
+    showThinking = false,
+    interactionStyle = "default"
+  ) {
     const silentPreamble = this._buildSilentAuditGatePreamble() + "\n\n";
     // Audit is NOT a separate mode — the silent preamble already runs the
     // mandatory malicious-pattern scan on every request, automatically and
@@ -3117,16 +4251,19 @@ ${resolvedMessage}`;
     if (mode === "bugfix") {
       return silentPreamble + this._buildBugFixSystemInstruction();
     }
-    const thinkingInstruction = showThinking
+    const shouldShowThinking =
+      showThinking && !this._isExecutionLikeIntent(intent);
+    const thinkingInstruction = shouldShowThinking
       ? "\n\nIMPORTANT: Structure your reply in exactly two top-level sections when possible: a heading titled \"Thinking\" with 3-6 concise bullets summarizing approach, tradeoffs, or checks, followed by a heading titled \"Answer\" for the final response. Keep the Thinking section brief and useful. Do not expose hidden internal chain-of-thought or long private reasoning."
       : "";
     const base =
       silentPreamble +
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a brief comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
       thinkingInstruction;
-    const compactRules = [
+    const fastRules = [
       "Operational rules (fast):",
-      "- Be concise and correct.",
+      "- Answer directly and completely for the user's request.",
+      "- Keep the response focused, but do not shorten it so much that useful detail is lost.",
       "- Use FILE: only when the user asks to change files.",
       "- Avoid unrelated context or speculation.",
       "- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.",
@@ -3139,8 +4276,10 @@ ${resolvedMessage}`;
     ].join("\n");
     const operatingPrinciples = [
       "Operational rules:",
+      "- Work like a hands-on coding agent, not a debate bot: inspect, edit, verify, then stop.",
       "- Be precise and minimal: use only the actions required to solve the request.",
       "- Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.",
+      "- When an edit, debug, or verification request would benefit from real workspace evidence, use CMD: to inspect files, scripts, package metadata, git state, or command output instead of guessing.",
       "- Never claim a command/check was run unless it is actually in your action list.",
       "- If external or time-sensitive facts are required, say verification is needed instead of guessing.",
       "- If a command is likely to fail, propose a corrected safer command immediately.",
@@ -3149,6 +4288,8 @@ ${resolvedMessage}`;
       "- Before changing code, infer the smallest correct scope from the provided context and avoid unrelated edits.",
       "- When editing files, keep the codebase buildable and coherent; do not leave partial migrations or dangling references.",
       "- If information is missing, make the safest reasonable assumption instead of stalling, unless a wrong assumption would be destructive.",
+      "- Good CMD uses include: `rg`, `Get-Content`, `Get-ChildItem`, `Select-String`, `git status`, `git diff`, `npm run <script>`, `npm test`, `node --check`, and other focused workspace commands.",
+      "- After code edits, it is good to verify the result with targeted CMD checks when they directly confirm the fix.",
       "- When the user asks for a flowchart, sequence diagram, class diagram, state diagram, ER diagram, gantt chart, or architecture visualization, respond with a valid fenced ```mermaid block first, then add a short explanation after it.",
       "- When using CMD:, keep commands workspace-scoped, deterministic, and directly relevant to the task.",
       "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
@@ -3161,6 +4302,9 @@ ${resolvedMessage}`;
       "- If the user wants a live preview of the active previewable file, use `PREVIEW: open`.",
       "- If the user wants you to inspect/study/analyze the live preview, detect render/runtime issues, or fix problems found from the preview, use `PREVIEW: inspect`.",
       "- If the user asks for the extension's AI performance report or self-healing/performance diagnostics, use `PERFORMANCE: show`.",
+      "- For edit requests, prefer a grounded tool loop: inspect the real file/workspace state, make the smallest correct PATCH or FILE change, then verify with focused checks.",
+      "- Use `READ: <path>` when you need the exact current contents of a workspace file before editing.",
+      "- Use `GREP: <query>` when you need symbol, string, or call-site search across indexed workspace files before editing.",
       "- You have FULL internet access via FETCH: action. Use it when:",
       "  * User asks about current events, news, politics, wars, conflicts, or any time-sensitive topics",
       "  * Output FETCH: URL on its own line, then CONTINUE your response",
@@ -3184,12 +4328,19 @@ ${resolvedMessage}`;
       "  * Environment-based configuration (dev/staging/prod)",
       "  * Graceful degradation and fallback mechanisms"
     ].join("\n");
-    const rules = mode === "fast" ? compactRules : operatingPrinciples;
+    const rules =
+      mode === "fast" && !this._isExecutionLikeIntent(intent)
+        ? fastRules
+        : operatingPrinciples;
+    const isAgentLoop = interactionStyle === "agent_loop";
+    const loopPreamble = isAgentLoop
+      ? "Agent loop mode: brief narration is allowed before structured actions. Put each action on its own line. After tool results come back, continue from that evidence. When done, stop emitting actions and answer plainly."
+      : "";
     switch (intent) {
       case "greeting":
         return `${base}
 ${rules}
-Reply naturally and briefly.`;
+Reply naturally and helpfully.`;
       case "show_graph":
         return `${base}
 ${rules}
@@ -3212,7 +4363,7 @@ Opening the codebase graph visualization panel. You'll be able to see the depend
         return `${base}
 ${rules}
 ${loc}
-Write PRODUCTION-GRADE code by default:
+${loopPreamble ? `${loopPreamble}\n` : ""}Write PRODUCTION-GRADE code by default:
 - Enterprise-level error handling with proper try-catch, error boundaries, and graceful failures
 - Input validation and sanitization for all user inputs and external data
 - Security: XSS prevention, CSRF tokens, SQL injection protection, secure headers
@@ -3235,8 +4386,10 @@ Write PRODUCTION-GRADE code by default:
 You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
 - MKDIR: to create directories
-- CMD: to run a single workspace shell command only when strictly needed
-Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences.
+- CMD: to run one workspace shell command per line for inspection, package scripts, npm checks, syntax checks, or verification when that materially helps
+${isAgentLoop
+  ? "You may narrate briefly, then emit executable FILE:, MKDIR:, or CMD: actions. Keep narration outside the code fences."
+  : "Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences."}
 Format:
 FILE: folder/file.ext
 \`\`\`
@@ -3315,7 +4468,7 @@ Give a clear, direct, technically sound explanation with production-level insigh
 - Discuss performance considerations and optimization opportunities
 - Mention scalability and maintenance concerns
 - Reference industry standards and patterns where relevant
-Be concise but substantive. Do not output FILE: or CMD: directives unless asked.`;
+Give enough detail to fully answer the question. Do not output FILE: or CMD: directives unless asked.`;
       case "debug":
         return `${base}
 ${rules}
@@ -3357,9 +4510,11 @@ Use FILE: directives only if the user explicitly asks you to apply changes.`;
       case "command":
         return `${base}
 ${rules}
-The user is asking to run or provide command-oriented actions.
+${loopPreamble ? `${loopPreamble}\n` : ""}The user is asking to run or provide command-oriented actions.
 - Prefer the smallest workspace-scoped command that satisfies the request.
 - Use CMD: only when command execution is actually requested or clearly necessary.
+- You may emit multiple CMD: lines when you need separate inspect, run, and verify steps, but each CMD line must contain exactly one command.
+- npm access is available for safe workspace commands, including script runs and command output checks.
 - Do not wrap commands in explanations or tutorials.
 - If file edits are also required, combine FILE: and CMD: only when both are necessary.
 Respond with executable actions when a command is requested.
@@ -3371,11 +4526,14 @@ FILE: <exact file path>
 (complete updated file content)
 \`\`\`
 MKDIR: folder/subfolder
-Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+${isAgentLoop
+  ? "You may add a short narration line before the actions. Keep the executable actions exact."
+  : "Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
       case "edit":
         return `${base}
 ${rules}
-The user wants to edit a file. Write PRODUCTION-GRADE code by default:
+${loopPreamble ? `${loopPreamble}\n` : ""}The user wants to edit a file. Write PRODUCTION-GRADE code by default:
+ - Do the work directly. Do not narrate a plan before the executable actions.
 - Preserve existing architecture and style unless changes are required
 - Apply all production-level standards: error handling, validation, security, performance, accessibility
 - Include concrete fixes with proper error boundaries and fallback mechanisms
@@ -3386,6 +4544,10 @@ The user wants to edit a file. Write PRODUCTION-GRADE code by default:
 - Ensure backward compatibility unless breaking changes are explicitly requested
 - Do not silently remove logic, configuration, or content unless the request clearly calls for it
 - Never delete or empty README.md unless the user explicitly asks you to remove it
+- Follow a grounded edit loop when needed:
+  1. Inspect the real file or workspace state first when context is incomplete.
+  2. Make the smallest correct PATCH or FILE change.
+  3. Add focused verification when it materially proves the fix.
 
 **CRITICAL: Choose the right edit format:**
 
@@ -3455,10 +4617,18 @@ function greet(name) {
 }
 \`\`\`
 
-You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
+You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
+When the current file state is unclear, inspect first instead of guessing.
+Use READ for exact file contents, GREP for workspace symbol/text search, and focused CMD checks when they directly confirm the fix.
+After edits, include focused verification CMDs when they materially prove the change.
+Safe high-value CMD patterns include project search/read commands and targeted verification such as npm run lint, npm test, node --check, python -m py_compile, or similar project-local checks.
+READ: src/path/to/file.js
+GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
-Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences.`;
+${isAgentLoop
+  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -3488,15 +4658,22 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
   _shouldForceStructuredEdit(intent, userMessage) {
     // Only force structured edits when user explicitly asks to change files
     if (intent === "create") return true;
-    if (intent === "edit" && this._isEditRequest(userMessage)) return true;
     if (
-      (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage) &&
-      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
+      this._shouldTreatAsEditIntent(intent, userMessage) &&
+      this._isEditRequest(userMessage)
     ) {
       return true;
     }
     return false;
+  }
+
+  _buildRetryResponseExcerpt(rawResponse) {
+    return String(rawResponse || "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/\n?Stopped because the response started repeating\.\s*$/i, "")
+      .replace(/\n?\[stopped repetitive output\]\s*$/i, "")
+      .trim()
+      .slice(0, 2000);
   }
 
   _buildStructuredRetryPrompt(rawResponse) {
@@ -3504,24 +4681,29 @@ Use FILE: or CMD: directives only when the user explicitly asks to create or run
 Return ONLY executable actions now.
 
 Rules:
+- Work like Codex: do the work directly and do not restate the plan.
+- Do not continue, quote, or paraphrase the previous reply.
 - If the user asked you to change code/files, include at least one PATCH: or FILE: action.
+- If you genuinely need more ground truth before editing, you may instead return READ:, GREP:, or focused inspection CMD: actions only.
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
+- Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
 - If a previous command failed, return a corrected command that addresses the failure cause.
-- You have access to workspace shell commands through CMD:, but avoid CMD unless file edits alone cannot solve the request.
+- You have access to workspace shell commands through CMD:, and you should use them when they help inspect context or verify the applied fix.
 - Do not give explanations or tutorial steps.
 - Do not describe what to click in VS Code.
 - Use exact file paths.
 - If multiple files are needed, output multiple action blocks.
 - For PATCH actions, copy SEARCH exactly from the provided file context and make it unique within that file.
+- Never use placeholders such as "...", "(unchanged)", "existing code", or "your code here".
 - Prefer source files over generated copies such as \`.tmp-vsix-*\`, \`dist/\`, \`build/\`, or \`out/\` unless the user explicitly asks for those artifacts.
 
 Previous invalid reply:
 \`\`\`
-${(rawResponse || "").slice(0, 4000)}
+${this._buildRetryResponseExcerpt(rawResponse)}
 \`\`\``;
   }
 
@@ -3530,16 +4712,21 @@ ${(rawResponse || "").slice(0, 4000)}
 Return FILE actions only.
 
 Hard rules:
+- Work like Codex: do the work directly and do not restate the plan.
+- Do not continue, quote, or paraphrase the previous reply.
 - Output one or more FILE: blocks only.
 - Do NOT output CMD:.
 - Do NOT output MKDIR:.
 - Each FILE block must contain complete file content.
 - Use exact workspace-relative file paths.
+- Do not omit sections or replace them with placeholders such as "...", "(unchanged)", "existing code", "your code here", or UI labels.
+- Do not truncate the file mid-tag, mid-block, or mid-function.
+- Preserve required closing tags, braces, and imports so the file is complete from start to finish.
 - Do not include explanations or markdown outside code fences.
 
 Previous invalid reply:
 \`\`\`
-${(rawResponse || "").slice(0, 4000)}
+${this._buildRetryResponseExcerpt(rawResponse)}
 \`\`\``;
   }
 
@@ -3613,16 +4800,65 @@ ${(rawResponse || "").slice(0, 4000)}
     return this._hasPatchActions(actions) || this._hasFileActions(actions);
   }
 
-  _hasRequiredActions(intent, userMessage, actions) {
+  _hasGroundingActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || typeof action.type !== "string") return false;
+      if (action.type === "read") {
+        return typeof action.path === "string" && action.path.trim().length > 0;
+      }
+      if (action.type === "grep") {
+        return typeof action.query === "string" && action.query.trim().length > 0;
+      }
+      if (action.type === "cmd") {
+        return typeof action.command === "string" && action.command.trim().length > 0;
+      }
+      return false;
+    });
+  }
+
+  _hasStructuredEditPipelineActions(intent, userMessage, actions) {
     if (!this._hasMeaningfulActions(actions)) {
       return false;
     }
 
     if (this._shouldForceStructuredEdit(intent, userMessage)) {
-      return this._hasEditActions(actions);
+      return this._hasEditActions(actions) || this._hasGroundingActions(actions);
     }
 
     return true;
+  }
+
+  _hasRequiredActions(intent, userMessage, actions) {
+    return this._hasStructuredEditPipelineActions(intent, userMessage, actions);
+  }
+
+  _hasIncompleteStructuredEditWarning(warnings) {
+    if (!Array.isArray(warnings) || warnings.length === 0) {
+      return false;
+    }
+
+    return warnings.some((warning) =>
+      /structured edit output appears incomplete/i.test(String(warning || ""))
+    );
+  }
+
+  _buildIncompleteStructuredEditMessage(mode, intent) {
+    const nextMode =
+      mode === "fast" ? "heavy" : mode === "heavy" ? "deep" : null;
+    const modeHint = nextMode
+      ? ` Retry in /${nextMode} mode so the model has more room to finish the file.`
+      : " Retry with a smaller target or split the change into smaller steps.";
+    const intentHint =
+      intent === "create"
+        ? " Full-file generation likely hit the model output limit."
+        : " The model likely stopped in the middle of an edit.";
+
+    return (
+      "Structured edit output was incomplete, so Code Janitor did not apply partial file changes." +
+      intentHint +
+      modeHint
+    );
   }
 
   _hasMeaningfulActions(actions) {
@@ -3643,6 +4879,12 @@ ${(rawResponse || "").slice(0, 4000)}
         return (
           typeof action.content === "string" && action.content.trim().length > 0
         );
+      }
+      if (action.type === "read") {
+        return typeof action.path === "string" && action.path.trim().length > 0;
+      }
+      if (action.type === "grep") {
+        return typeof action.query === "string" && action.query.trim().length > 0;
       }
       return action.type === "mkdir" || action.type === "cmd";
     });
@@ -3771,25 +5013,40 @@ ${(rawResponse || "").slice(0, 4000)}
   }
 
   _isRepeatingResponse(text, mode = "fast") {
-    const window =
+    const minChars =
       mode === "heavy" || mode === "deep"
         ? REPETITION_WINDOW_HEAVY
         : REPETITION_WINDOW;
-    if (!text || text.length < window * 3) {
+    if (!text || text.length < minChars * 2) {
       return false;
     }
 
-    const tail = text.slice(-window);
-    const normalizedTail = tail.trim();
-    if (
-      normalizedTail.length <
-      Math.max(48, Math.floor(window * 0.4))
-    ) {
+    const normalize = (value) =>
+      String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length < 4) {
       return false;
     }
 
-    const recentHistory = text.slice(0, -window).slice(-(window * 3));
-    return recentHistory.includes(tail);
+    const maxGroupSize = Math.min(8, Math.floor(lines.length / 2));
+    for (let size = maxGroupSize; size >= 2; size -= 1) {
+      const lastGroup = normalize(lines.slice(-size).join("\n"));
+      const previousGroup = normalize(lines.slice(-(size * 2), -size).join("\n"));
+      if (
+        lastGroup.length >= Math.max(40, Math.floor(minChars * 0.25)) &&
+        lastGroup === previousGroup
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   _extractPathHints(query) {
@@ -3813,9 +5070,36 @@ ${(rawResponse || "").slice(0, 4000)}
       addHint(match);
     }
 
+    const namedFilePhraseHints = [
+      { pattern: /\bpackage(?:\s+|-)?lock(?:\s+|-)?json\b/gi, hint: "package-lock.json" },
+      { pattern: /\bpackage(?:\s+|-)?json\b/gi, hint: "package.json" },
+      { pattern: /\bts(?:\s+|-)?config\b/gi, hint: "tsconfig" },
+      { pattern: /\bjs(?:\s+|-)?config\b/gi, hint: "jsconfig" },
+      { pattern: /\bcargo(?:\s+|-)?toml\b/gi, hint: "cargo.toml" },
+      { pattern: /\breadme\b/gi, hint: "readme" },
+      { pattern: /\blicen[sc]e\b/gi, hint: "license" },
+      { pattern: /\bchangelog\b/gi, hint: "changelog" },
+      { pattern: /\bcontributing\b/gi, hint: "contributing" },
+      { pattern: /\bmakefile\b/gi, hint: "makefile" },
+      { pattern: /\bdockerfile\b/gi, hint: "dockerfile" },
+      { pattern: /\bgitignore\b/gi, hint: ".gitignore" }
+    ];
+
+    for (const { pattern, hint } of namedFilePhraseHints) {
+      if (pattern.test(text)) {
+        addHint(hint);
+      }
+    }
+
     const quotedTokenRegex = /[`'"]([A-Za-z0-9_.-]{3,})[`'"]/g;
     let match;
     while ((match = quotedTokenRegex.exec(text)) !== null) {
+      addHint(match[1]);
+    }
+
+    const labeledFileRegex =
+      /\b([A-Za-z0-9_.-]*[._-][A-Za-z0-9_.-]+|[A-Z0-9]{3,})\s+(?:file|tab|document|doc)\b/g;
+    while ((match = labeledFileRegex.exec(text)) !== null) {
       addHint(match[1]);
     }
 
@@ -3890,6 +5174,69 @@ ${(rawResponse || "").slice(0, 4000)}
     return Array.from(matches).sort();
   }
 
+  _resolveHintPathsWithoutIndex(pathHints, workspaceFolder, editorState = {}) {
+    const matches = new Set();
+    const openTabs = [
+      editorState.activeTabPath,
+      ...(Array.isArray(editorState.visibleTabs) ? editorState.visibleTabs : []),
+      ...(Array.isArray(editorState.allOpenTabs) ? editorState.allOpenTabs : [])
+    ]
+      .map((filePath) => this._normalizeWorkspaceRelativePath(filePath))
+      .filter(Boolean);
+
+    const getBaseStem = (value) =>
+      path
+        .basename(String(value || "").replace(/\\/g, "/").toLowerCase())
+        .replace(/\.[a-z0-9]+$/i, "");
+
+    for (const hint of pathHints) {
+      const normalizedHint = this._normalizeWorkspaceRelativePath(hint);
+      if (!normalizedHint) {
+        continue;
+      }
+
+      const normalizedLower = normalizedHint.toLowerCase();
+      const hintedBaseName = path.basename(normalizedLower);
+      const hintedBaseStem = getBaseStem(normalizedLower);
+
+      for (const openTabPath of openTabs) {
+        const normalizedTab = openTabPath.replace(/\\/g, "/").toLowerCase();
+        const tabBaseName = path.basename(normalizedTab);
+        const tabBaseStem = getBaseStem(normalizedTab);
+
+        if (
+          normalizedTab === normalizedLower ||
+          normalizedTab.endsWith(`/${normalizedLower}`) ||
+          tabBaseName === hintedBaseName ||
+          (hintedBaseStem && tabBaseStem === hintedBaseStem)
+        ) {
+          matches.add(openTabPath);
+        }
+      }
+
+      if (!workspaceFolder) {
+        continue;
+      }
+
+      const probe = this._resolveWorkspacePath(normalizedHint, workspaceFolder);
+      if (probe.outsideWorkspace || !probe.fullPath) {
+        continue;
+      }
+
+      try {
+        if (fsSync.existsSync(probe.fullPath) && fsSync.statSync(probe.fullPath).isFile()) {
+          matches.add(
+            path
+              .relative(probe.workspaceRoot, probe.fullPath)
+              .replace(/\\/g, "/")
+          );
+        }
+      } catch {}
+    }
+
+    return Array.from(matches).sort();
+  }
+
   _preferActivePathMatches(paths, activePath) {
     if (!Array.isArray(paths) || paths.length <= 1 || !activePath) {
       return Array.isArray(paths) ? paths : [];
@@ -3931,12 +5278,24 @@ ${(rawResponse || "").slice(0, 4000)}
 
   _resolveEditableTargets(userMessage, workspaceFolder, editorState) {
     const message = userMessage || "";
+    const pathHints = this._extractPathHints(message);
     const explicitPaths = this._preferActivePathMatches(
-      this._matchPathsFromHints(this._extractPathHints(message)),
+      [
+        ...new Set([
+          ...this._matchPathsFromHints(pathHints),
+          ...this._resolveHintPathsWithoutIndex(
+            pathHints,
+            workspaceFolder,
+            editorState
+          )
+        ])
+      ],
       editorState.activeTabPath
     );
     const targetPaths = new Set(explicitPaths);
     const isEditRequest = this._isEditRequest(message);
+    const workspaceScopedEditRequest =
+      isEditRequest && this._isWorkspaceScopedEditRequest(message);
     const intent = this._detectIntent(message);
 
     // For scan/create intent, don't auto-add active tab
@@ -3969,18 +5328,25 @@ ${(rawResponse || "").slice(0, 4000)}
       isEditRequest &&
       targetPaths.size === 0 &&
       editorState.activeTabPath &&
-      !/\bworkspace\b/i.test(message)
+      !workspaceScopedEditRequest
     ) {
       targetPaths.add(editorState.activeTabPath);
     }
 
-    const paths = Array.from(targetPaths).sort();
+    const paths = Array.from(targetPaths)
+      .map((filePath) => this._normalizeWorkspaceRelativePath(filePath))
+      .filter(Boolean)
+      .sort();
     return { scope: paths.length > 0 ? "restricted" : "workspace", paths };
   }
 
   _buildEditableTargetsContext(editableTargets) {
     if (editableTargets.scope !== "restricted") {
       return "Editable targets: workspace-wide. You may edit any indexed workspace file only when the user clearly asks for it.\n";
+    }
+
+    if (editableTargets.paths.length === 1) {
+      return `Editable targets (only edit this file):\nFile: ${editableTargets.paths[0]}\nPreserve all unrelated code in this file. Prefer one PATCH action for small localized changes.\n`;
     }
 
     return `Editable targets (only edit these files):\n${editableTargets.paths
@@ -4048,7 +5414,6 @@ ${(rawResponse || "").slice(0, 4000)}
     if (ext === ".java") return `javac ${rel}`;
     if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext))
       return `node -e "process.exit(0)" && echo "C/C++ syntax check requires a compiler - run: gcc -fsyntax-only ${rel}"`;
-    if (ext === ".json") return `node -e "JSON.parse(require('fs').readFileSync('${rel}', 'utf8'))"`;
     if (ext === ".html") return null; // HTML checked via parse5 in agent
     return null;
   }
@@ -4148,10 +5513,13 @@ ${(rawResponse || "").slice(0, 4000)}
     const ext = path.extname(relPath).toLowerCase();
     
     // Special handling for HTML - use parse5
-    if (ext === ".html") {
+    if (ext === ".html" || ext === ".htm") {
       try {
         const parse5 = await this._loadParse5();
-        const fullPath = workspaceFolder ? path.join(workspaceFolder, relPath) : relPath;
+        const fullPath =
+          workspaceFolder && !path.isAbsolute(relPath)
+            ? path.join(workspaceFolder, relPath)
+            : relPath;
         const content = fileContent || await require("fs").promises.readFile(fullPath, "utf8");
         if (parse5?.parse) {
           parse5.parse(content, { sourceCodeLocationInfo: true });
@@ -4174,6 +5542,25 @@ ${(rawResponse || "").slice(0, 4000)}
         return { success: true, output: "" };
       } catch (err) {
         return { success: false, error: `HTML parse error: ${err.message}`, output: err.message };
+      }
+    }
+
+    if (ext === ".json") {
+      try {
+        const fullPath =
+          workspaceFolder && !path.isAbsolute(relPath)
+            ? path.join(workspaceFolder, relPath)
+            : relPath;
+        const content =
+          fileContent ?? await require("fs").promises.readFile(fullPath, "utf8");
+        JSON.parse(content);
+        return { success: true, output: "" };
+      } catch (err) {
+        return {
+          success: false,
+          error: `JSON parse error: ${err.message}`,
+          output: err.message
+        };
       }
     }
     
@@ -4378,17 +5765,31 @@ ${(rawResponse || "").slice(0, 4000)}
     isTabQuestion,
     editableTargets,
     mode,
-    knowledgeGraphContext = ""
+    knowledgeGraphContext = "",
+    systemOverlay = "",
+    options = {}
   ) {
-    const history = this._buildPromptHistoryContext(isTabQuestion);
+    const intent =
+      typeof options.intentOverride === "string" && options.intentOverride.trim()
+        ? options.intentOverride.trim().toLowerCase()
+        : this._detectIntent(userMessage);
+    const history =
+      options.includeHistory === false
+        ? ""
+        : this._buildPromptHistoryContext(isTabQuestion, {
+            userOnly: this._isExecutionLikeIntent(intent)
+          });
 
-    const intent = this._detectIntent(userMessage);
-      const systemInstruction = this._buildSystemInstruction(
-        intent,
-        this.workspaceRoot,
-        mode,
-        this.showThinking
-      );
+    const systemInstruction = this._buildSystemInstruction(
+      intent,
+      this.workspaceRoot,
+      mode,
+      this.showThinking,
+      options.interactionStyle === "agent_loop" ? "agent_loop" : "default"
+    );
+    const effectiveSystemInstruction = systemOverlay
+      ? `${systemInstruction}\n\n${systemOverlay}`
+      : systemInstruction;
     const isCreateIntent = intent === "create";
     const MAX_PROMPT_CHARS =
       intent === "edit" || intent === "debug" || intent === "refactor"
@@ -4433,14 +5834,22 @@ ${(rawResponse || "").slice(0, 4000)}
 
     const editableTargetsContext =
       this._buildEditableTargetsContext(editableTargets);
+    const focusedEditLanguageHint =
+      (intent === "edit" || intent === "debug" || intent === "refactor") &&
+      editableTargets?.scope === "restricted"
+        ? this._buildFocusedEditLanguageHint(
+            editableTargets,
+            this.workspaceRoot
+          )
+        : "";
     const effectiveEditorState = isCreateIntent ? "" : editorStateContext;
     const effectiveActiveFile = isCreateIntent ? "" : activeFileContext;
     const effectiveTabContext = isCreateIntent ? "" : openTabSnippetContext;
     const effectiveKnowledgeGraph = isCreateIntent ? "" : knowledgeGraphContext;
 
-    return `${systemInstruction}
+    return `${effectiveSystemInstruction}
 Indexed files: ${this.codebaseContext.size}
-${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
+${effectiveKnowledgeGraph}${effectiveEditorState ? `${effectiveEditorState}\n` : ""}${editableTargetsContext}${focusedEditLanguageHint ? `${focusedEditLanguageHint}\n\n` : ""}${effectiveActiveFile ? `${effectiveActiveFile}\n\n` : ""}${effectiveTabContext}${context}
 ${history ? `${history}\n\n` : ""}
 ### USER_MESSAGE ###
 ${userMessage}`;
@@ -4454,11 +5863,16 @@ ${userMessage}`;
       const input = (rawPath || "").trim();
       if (!input) return { path: "", outsideWorkspace: false };
 
-      const normalizedRaw = input.replace(/\\/g, "/");
+      const normalizedRaw = this._normalizeWorkspaceRelativePath(input, {
+        stripLeadingDot: false
+      });
       const looksAbsolute =
         path.isAbsolute(input) || /^[a-z]:\//i.test(normalizedRaw);
       if (!looksAbsolute) {
-        return { path: normalizedRaw, outsideWorkspace: false };
+        return {
+          path: this._normalizeWorkspaceRelativePath(normalizedRaw),
+          outsideWorkspace: false
+        };
       }
 
       const probe = this._resolveWorkspacePath(input);
@@ -4541,6 +5955,9 @@ ${userMessage}`;
       markConsumedRange(match.index, match[0]);
     }
 
+    const incompleteStructuredEditWarning =
+      "Structured edit output appears incomplete; retrying may recover missing edits.";
+
     // Match FILE: with flexible code block format
     const fileRegex = /FILE:\s*([^\r\n`]+)\r?\n```[\w]*\r?\n?([\s\S]*?)```/g;
     while ((match = fileRegex.exec(response)) !== null) {
@@ -4568,34 +5985,78 @@ ${userMessage}`;
       markConsumedRange(match.index, match[0]);
     }
 
-    // Fallback: also try matching FILE: followed by content without code fences
-    if (actions.length === 0) {
-      const looseFIleRegex =
-        /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|MKDIR|CMD):|$)/g;
-      while ((match = looseFIleRegex.exec(response)) !== null) {
-        if (isWithinConsumedRange(match.index)) continue;
-        const pathInfo = normalizeActionPath(match[1]);
-        const normalizedPath = pathInfo.path;
-        const content = match[2].replace(/^```[\w]*\n?|```$/gm, "").trim();
-        if (!normalizedPath || normalizedPath.includes("\n") || !content)
-          continue;
-        if (
-          this.currentEditableTargets &&
-          !this.currentEditableTargets.has(normalizedPath)
-        ) {
-          warnings.push(
-            `Blocked edit outside allowed targets: ${normalizedPath}`
-          );
-          continue;
-        }
-        actions.push({
-          type: "file",
-          path: normalizedPath,
-          language: "text",
-          content
-        });
-        markConsumedRange(match.index, match[0]);
+    const readRegex = /^READ:\s*(.+)$/gm;
+    while ((match = readRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      if (!normalizedPath || normalizedPath.includes("\n")) continue;
+
+      actions.push({
+        type: "read",
+        path: normalizedPath
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    const grepRegex = /^GREP:\s*(.+)$/gm;
+    while ((match = grepRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const query = String(match[1] || "").trim();
+      if (!query) continue;
+
+      actions.push({
+        type: "grep",
+        query
+      });
+      markConsumedRange(match.index, match[0]);
+    }
+
+    // Fallback: also try matching FILE blocks without a closing fence so a
+    // partially streamed trailing edit does not get dropped when earlier
+    // actions already parsed successfully.
+    let recoveredIncompleteFileBlock = false;
+    const looseFIleRegex =
+      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = looseFIleRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      const pathInfo = normalizeActionPath(match[1]);
+      const normalizedPath = pathInfo.path;
+      const rawContent = String(match[2] || "")
+        .replace(/^```[\w-]*\r?\n?/, "")
+        .replace(/\r?\n?```$/, "");
+      const content = rawContent.startsWith("\n")
+        ? rawContent.slice(1)
+        : rawContent;
+      if (!normalizedPath || normalizedPath.includes("\n") || !content.trim()) {
+        continue;
       }
+      if (
+        this.currentEditableTargets &&
+        !this.currentEditableTargets.has(normalizedPath)
+      ) {
+        warnings.push(
+          `Blocked edit outside allowed targets: ${normalizedPath}`
+        );
+        continue;
+      }
+      actions.push({
+        type: "file",
+        path: normalizedPath,
+        language: "text",
+        content
+      });
+      recoveredIncompleteFileBlock = true;
+      markConsumedRange(match.index, match[0]);
+    }
+
+    if (recoveredIncompleteFileBlock) {
+      warnings.push(incompleteStructuredEditWarning);
+    } else if (
+      hasStandaloneToken(/PATCH:\s*[^\r\n`]+/i) ||
+      hasStandaloneToken(/FILE:\s*[^\r\n`]+/i)
+    ) {
+      warnings.push(incompleteStructuredEditWarning);
     }
 
     const cmdRegex = /^CMD:\s*(.+)$/gm;
@@ -4665,9 +6126,65 @@ ${userMessage}`;
     return { text: response, actions, warnings };
   }
 
-  _resolveWorkspacePath(inputPath) {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
+  _isPathInsideRoot(targetPath, rootPath) {
+    if (!targetPath || !rootPath) {
+      return false;
+    }
+
+    const relative = path.relative(rootPath, targetPath);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  }
+
+  _getPreferredWorkspaceRoot(inputPath, workspaceRootOverride = null) {
+    if (workspaceRootOverride) {
+      return path.resolve(workspaceRootOverride);
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+    const candidateRoots = [];
+
+    if (this.workspaceRoot) {
+      candidateRoots.push(this.workspaceRoot);
+    }
+
+    for (const folder of workspaceFolders) {
+      if (folder?.uri?.fsPath) {
+        candidateRoots.push(folder.uri.fsPath);
+      }
+    }
+
+    const normalizedInput =
+      typeof inputPath === "string" && path.isAbsolute(inputPath)
+        ? path.resolve(inputPath)
+        : null;
+
+    if (normalizedInput) {
+      const matchingRoot = candidateRoots.find((rootPath) =>
+        this._isPathInsideRoot(normalizedInput, rootPath)
+      );
+      if (matchingRoot) {
+        return matchingRoot;
+      }
+    }
+
+    const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor;
+    if (activeEditor?.document?.uri?.scheme === "file") {
+      const activeWorkspace = vscode.workspace.getWorkspaceFolder?.(
+        activeEditor.document.uri
+      )?.uri?.fsPath;
+      if (activeWorkspace) {
+        return activeWorkspace;
+      }
+    }
+
+    return candidateRoots[0] || null;
+  }
+
+  _resolveWorkspacePath(inputPath, workspaceRootOverride = null) {
+    const workspaceRoot = this._getPreferredWorkspaceRoot(
+      inputPath,
+      workspaceRootOverride
+    );
 
     if (!workspaceRoot) {
       return {
@@ -4691,20 +6208,32 @@ ${userMessage}`;
   }
 
   validateCommand(command) {
-    const normalized = command.trim().toLowerCase();
+    const raw = String(command || "").trim();
+    const normalized = raw.toLowerCase();
 
     if (!normalized) {
       return { allowed: false, reason: "Empty command" };
     }
 
+    if (/[\r\n]/.test(raw)) {
+      return {
+        allowed: false,
+        reason: "Use a single-line project-scoped command"
+      };
+    }
+
     const blockedPatterns = [
       /\bnpm\s+install\s+-g\b/,
       /\bnpm\s+i\s+-g\b/,
+      /\bnpm(?:\.cmd)?\s+(?:exec|install|update|audit|cache|config)\b/,
       /\bpip(?:3)?\s+install\b/,
       /\bcargo\s+install\b/,
       /\bgo\s+install\b/,
       /\byarn\s+global\b/,
+      /\byarn(?:\.cmd)?\s+(?:add|install|dlx|global|set|config|npm)\b/,
       /\bpnpm\s+add\s+-g\b/,
+      /\bpnpm(?:\.cmd)?\s+(?:add|install|dlx|setup|env)\b/,
+      /\bnpx(?:\.cmd)?\b(?!\s+--no-install\b)/,
       /\bchoco\s+install\b/,
       /\bwinget\s+install\b/,
       /\bapt(?:-get)?\s+install\b/,
@@ -4712,7 +6241,11 @@ ${userMessage}`;
       /\bwget\b/,
       /\binvoke-webrequest\b/,
       /\birm\b/,
-      /\bgit\s+clone\b/,
+      /\bnode\s+-e\b/,
+      /\bnpm\s+(?:publish|unpublish|login|logout|adduser|owner|access|team|org|token|profile|dist-tag|deprecate|hook)\b/,
+      /\byarn\s+(?:publish|login|logout|npm\s+publish|npm\s+login|npm\s+logout)\b/,
+      /\bpnpm\s+publish\b/,
+      /\bgit\s+(?:clone|push|pull|fetch|checkout|switch|restore|reset|merge|rebase|stash|tag|add|commit|cherry-pick|am|apply|remote)\b/,
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
@@ -4733,118 +6266,46 @@ ${userMessage}`;
       };
     }
 
-    const allowedPrefixes = [
-      "mkdir ",
-      "md ",
-      "findstr ",
-      "rg ",
-      "grep ",
-      "ls",
-      "dir",
-      "cat ",
-      "type ",
-      "get-content ",
-      "gc ",
-      "head ",
-      "tail ",
-      "echo ",
-      "pwd",
-      "cd ",
-      "tree ",
-      "find ",
-      "which ",
-      "where ",
-      "get-childitem ",
-      "gci ",
-      "select-string ",
-      "sls ",
-      "npm install",
-      "npm i",
-      "npm run",
-      "npm test",
-      "npm start",
-      "npm build",
-      "npm list",
-      "npm outdated",
-      "npm audit",
-      "npx ",
-      "yarn install",
-      "yarn add",
-      "yarn remove",
-      "yarn run",
-      "yarn test",
-      "yarn build",
-      "pnpm install",
-      "pnpm add",
-      "pnpm remove",
-      "pnpm run",
-      "pnpm test",
-      "node --check",
-      "node -e",
-      "node ",
-      "git status",
-      "git diff",
-      "git log",
-      "git show",
-      "git branch",
-      "git checkout",
-      "git add",
-      "git commit",
-      "git pull",
-      "git fetch",
-      "git merge",
-      "git rebase",
-      "git stash",
-      "git tag",
-      "git remote",
-      "git rev-parse",
-      "git push",
-      "python -m py_compile",
-      "python -m flake8",
-      "python -m pylint",
-      "python -m pytest",
-      "python -m unittest",
-      "pip list",
-      "pip3 list",
-      "python ",
-      "python3 -m py_compile",
-      "python3 -m flake8",
-      "python3 -m pylint",
-      "python3 -m pytest",
-      "python3 -m unittest",
-      "python3 ",
-      "pytest",
-      "eslint ",
-      "tsc ",
-      "javac ",
-      "java ",
-      "mvn clean",
-      "mvn compile",
-      "mvn test",
-      "mvn package",
-      "gradle build",
-      "gradle test",
-      "gradle clean",
-      "cargo build",
-      "cargo test",
-      "cargo check",
-      "cargo run",
-      "go build",
-      "go test",
-      "go run",
-      "dotnet build",
-      "dotnet test",
-      "dotnet run",
-      "arduino-cli lib list",
-      "arduino-cli lib search",
-      ".\\node_modules\\.bin\\",
-      "./node_modules/.bin/"
-    ];
-
-    if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+    if (/(^|\s)(>>?|<)(\s|$)/.test(raw) || /`|\$\(/.test(raw)) {
       return {
         allowed: false,
-        reason: "Only project-scoped commands are allowed"
+        reason: "Shell redirection and substitution are not allowed"
+      };
+    }
+
+    const allowedPatterns = [
+      /^(?:ls|dir|pwd|tree)(?:\s+.+)?$/i,
+      /^(?:get-childitem|gci|get-location|gl)(?:\s+.+)?$/i,
+      /^(?:cat|type|get-content|gc|get-item|gi|resolve-path|head|tail|echo|find|which|where|select-string|sls|grep|rg|findstr)(?:\s+.+)?$/i,
+      /^(?:mkdir|md)\s+.+$/i,
+      /^npm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+--.*)?|ls(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^yarn(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^pnpm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^npx(?:\.cmd)?\s+--no-install\s+\S+(?:\s+.*)?$/i,
+      /^node\s+(?:--check\s+\S.*|--version)$/i,
+      /^python(?:3)?\s+(?:--version|-m\s+(?:py_compile|flake8|pylint|pytest|unittest)\b.*)$/i,
+      /^(?:pip|pip3)\s+list\b.*$/i,
+      /^pytest(?:\s+.*)?$/i,
+      /^eslint\b.*$/i,
+      /^tsc\b.*$/i,
+      /^javac\b.+$/i,
+      /^java\s+-version$/i,
+      /^mvn\s+(?:clean|compile|test|package)\b.*$/i,
+      /^gradle\s+(?:build|test|clean)\b.*$/i,
+      /^cargo\s+(?:build|test|check)\b.*$/i,
+      /^go\s+(?:build|test)\b.*$/i,
+      /^dotnet\s+(?:build|test)\b.*$/i,
+      /^git\s+(?:status|diff|log|show|rev-parse)\b.*$/i,
+      /^arduino-cli\s+lib\s+(?:list|search)\b.*$/i,
+      /^(?:\.\/|\.\\)node_modules[\\/]\.bin[\\/][^\s]+(?:\s+.*)?$/i
+    ];
+
+    const allowed = allowedPatterns.some((pattern) => pattern.test(raw));
+
+    if (!allowed) {
+      return {
+        allowed: false,
+        reason: "Only project-scoped read, test, and build commands are allowed"
       };
     }
 
@@ -4957,11 +6418,18 @@ ${userMessage}`;
   }
   
   async _applyChangesInternal(context) {
-    const { filePath, newContent, allowOutsideWorkspace, allowEmpty, allowDocTruncate } = context;
+    const {
+      filePath,
+      newContent,
+      allowOutsideWorkspace,
+      allowEmpty,
+      allowDocTruncate,
+      workspaceRoot: workspaceRootOverride
+    } = context;
     
     try {
       const { workspaceRoot, fullPath, outsideWorkspace } =
-        this._resolveWorkspacePath(filePath);
+        this._resolveWorkspacePath(filePath, workspaceRootOverride);
 
       // If outside workspace and not explicitly allowed, ask for permission
       if (outsideWorkspace && !allowOutsideWorkspace) {
@@ -4971,6 +6439,13 @@ ${userMessage}`;
       let oldContent = "";
       let created = false;
       try {
+        const stat = await fs.stat(fullPath);
+        if (stat.isDirectory()) {
+          return {
+            success: false,
+            error: `Target path resolves to a directory, not a file: ${filePath}`
+          };
+        }
         oldContent = await fs.readFile(fullPath, "utf8");
       } catch (e) {
         if (e.code !== "ENOENT") throw e;
@@ -5048,11 +6523,12 @@ ${userMessage}`;
     }
   }
 
-  async createFolder(folderPath, allowOutsideWorkspace = false) {
+  async createFolder(folderPath, allowOutsideWorkspace = false, options = {}) {
     const context = {
       type: "mkdir",
       filePath: folderPath,
-      allowOutsideWorkspace
+      allowOutsideWorkspace,
+      ...options
     };
     
     // Use self-diagnosing retry
@@ -5064,7 +6540,11 @@ ${userMessage}`;
   }
   
   async _createFolderInternal(context) {
-    const { filePath: folderPath, allowOutsideWorkspace } = context;
+    const {
+      filePath: folderPath,
+      allowOutsideWorkspace,
+      workspaceRoot: workspaceRootOverride
+    } = context;
     
     try {
       const normalizedFolderPath = (folderPath || "").replace(/\\/g, "/").trim();
@@ -5075,7 +6555,10 @@ ${userMessage}`;
         targetPath = path.dirname(normalizedFolderPath);
       }
 
-      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(targetPath);
+      const { fullPath, outsideWorkspace } = this._resolveWorkspacePath(
+        targetPath,
+        workspaceRootOverride
+      );
       
       // If outside workspace and not explicitly allowed, return error for chat panel to handle
       if (outsideWorkspace && !allowOutsideWorkspace) {

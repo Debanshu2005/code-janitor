@@ -7,6 +7,7 @@ const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
   openrouter: [
+    "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free"
@@ -58,6 +59,18 @@ class ChatPanel {
       ...this.agent.getSessionState(),
       ...extra
     });
+  }
+
+  _postAssistantImages(images = []) {
+    if (!this.panel?.webview) return
+    const safeImages = Array.isArray(images)
+      ? images.filter((url) => typeof url === "string" && /^data:image\//i.test(url))
+      : []
+    if (safeImages.length === 0) return
+    this.panel.webview.postMessage({
+      type: "assistantImages",
+      images: safeImages
+    })
   }
 
   async _setThinkingMode(enabled) {
@@ -2017,6 +2030,17 @@ ${mermaidCode}
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
   }
 
+  async _isGitRepository(workspaceFolder) {
+    if (!workspaceFolder) return false;
+    const gitDir = path.join(workspaceFolder, '.git');
+    try {
+      const stat = await fs.promises.stat(gitDir);
+      return stat.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
   _resolveActionFilePath(workspaceFolder, filePath) {
     const targetPath = String(filePath || "").trim();
     if (!targetPath) {
@@ -2167,17 +2191,64 @@ ${mermaidCode}
   }
 
   _isEditLikeIntent(intent, message) {
-    if (intent === "edit" || intent === "create") return true;
-    if ((intent === "debug" || intent === "refactor") && this.agent._isEditRequest(message || "")) {
-      return true;
-    }
-    return false;
+    return !!this.agent?._shouldTreatAsEditIntent?.(intent, message || "");
   }
 
   _hasExplicitCommandRequest(message) {
-    return /\b(run|execute|exec|terminal|shell|command|cmd|powershell|bash)\b/i.test(
+    return /\b(run|execute|exec|terminal|shell|command|cmd|powershell|bash|npm|npx|pnpm|yarn|node|python|pytest|jest|eslint|git|rg|ripgrep|grep|findstr|select-string|get-content|cat|ls|dir)\b/i.test(
       message || ""
     );
+  }
+
+  _isContextInspectionCommand(command) {
+    const normalized = String(command || "").trim().toLowerCase();
+    if (!normalized) return false;
+    return /^(rg|grep|findstr|select-string|sls|get-content|gc|get-childitem|gci|get-item|gi|resolve-path|dir|ls|pwd|tree|type|cat|head|tail|find|which|where)\b/.test(
+      normalized
+    ) || /^(git\s+(status|diff|show|log|branch|rev-parse)\b)/.test(normalized) ||
+      /^(npm(\.cmd)?\s+(list|ls|outdated|audit|explain|query|pkg|root|prefix|view)\b)/.test(normalized) ||
+      /^(pnpm(\.cmd)?\s+(list|outdated|why)\b)/.test(normalized) ||
+      /^(yarn(\.cmd)?\s+(list|why|info)\b)/.test(normalized);
+  }
+
+  _isVerificationCommand(command) {
+    const normalized = String(command || "").trim().toLowerCase();
+    if (!normalized) return false;
+    return /^(npm(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(pnpm(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(yarn(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(node\s+--check\b|python3?\s+-m\s+(py_compile|flake8|pylint|pytest|unittest)\b|pytest\b|eslint\b|tsc\b|javac\b)/.test(
+      normalized
+    ) || /^(mvn\s+(clean|compile|test|package|verify)\b|gradle\s+(clean|build|test)\b|cargo\s+(build|test|check|run)\b|go\s+(build|test|run)\b|dotnet\s+(build|test|run)\b|arduino-cli\s+(compile|lib\s+list|lib\s+search|board\s+list)\b)/.test(
+      normalized
+    );
+  }
+
+  _shouldSuppressGeneratedCommand(
+    isEditLikeIntent,
+    hasExplicitCommandRequest,
+    actions = [],
+    command = ""
+  ) {
+    if (!isEditLikeIntent || hasExplicitCommandRequest) {
+      return false;
+    }
+
+    const hasEditAction = Array.isArray(actions)
+      ? actions.some(
+          (action) => action && (action.type === "file" || action.type === "patch")
+        )
+      : false;
+
+    if (!hasEditAction) {
+      return false;
+    }
+
+    return !this._isContextInspectionCommand(command) &&
+      !this._isVerificationCommand(command);
   }
 
   _isReadmePath(filePath) {
@@ -2718,6 +2789,7 @@ ${trimmedText}`;
               this.abortController.signal,
               {
                 mode: this.chatMode,
+                images: Array.isArray(message.images) ? message.images : [],
                 onStatus: (text) => { this.panel.webview.postMessage({ type: "status", text }); }
               }
             );
@@ -2758,6 +2830,7 @@ ${trimmedText}`;
           this.panel.webview.postMessage({ type: "stream", text: response.text });
         }
 
+        this._postAssistantImages(response.images)
         this.panel.webview.postMessage({ type: "done" });
         this._postSessionState();
 
@@ -2937,6 +3010,10 @@ ${trimmedText}`;
               .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
               .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
           );
+          
+          console.log(`[FileActions] Processing ${response.actions.length} actions`);
+          console.log(`[FileActions] Workspace: ${workspaceFolder}`);
+          
           for (const action of response.actions) {
             if (action.type === "patch") {
               const fullPath = this._resolveActionFilePath(
@@ -2954,12 +3031,14 @@ ${trimmedText}`;
                 insideActions.push({ action, result: null });
               }
             } else if (action.type === "file") {
+              console.log(`[FileAction] FILE: ${action.path}, content length: ${action.content?.length || 0}`);
               const probe = await this.agent.applyChanges(
                 action.path,
                 action.content,
                 false,
                 writeOptions
               );
+              console.log(`[FileAction] Result: success=${probe.success}, error=${probe.error}`);
               if (probe.error === "outside_workspace") {
                 outsideFiles.push({ action, path: probe.path });
               } else {
@@ -2984,7 +3063,14 @@ ${trimmedText}`;
                 insideActions.push({ action, result: probe });
               }
             } else if (action.type === "cmd") {
-              if (isEditLikeIntent && !hasExplicitCommandRequest) {
+              if (
+                this._shouldSuppressGeneratedCommand(
+                  isEditLikeIntent,
+                  hasExplicitCommandRequest,
+                  response.actions,
+                  action.command
+                )
+              ) {
                 this.panel.webview.postMessage({
                   type: "status",
                   text: `Suppressed command during edit request: ${action.command}`
@@ -3056,6 +3142,10 @@ ${trimmedText}`;
               if (!patchResult.matched) {
                 const lines = currentContent.split('\n');
                 const preview = lines.slice(0, 10).join('\n');
+                const searchPreview = (action.search || "").substring(0, 200);
+                console.log(`[PATCH] Failed to match in ${action.path}`);
+                console.log(`[PATCH] Search pattern: ${searchPreview}`);
+                console.log(`[PATCH] File preview: ${preview}`);
                 this.panel.webview.postMessage({
                   type: "error",
                   text:
@@ -3063,7 +3153,7 @@ ${trimmedText}`;
                       ? `Cannot patch ${action.path}: SEARCH block is empty.`
                       : patchResult.reason === "ambiguous_search"
                         ? `Cannot patch ${action.path}: SEARCH matched ${patchResult.matchCount || "multiple"} locations. Make the SEARCH block more specific so it matches exactly once.`
-                      : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${(action.search || "").substring(0, 200)}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
+                      : `Cannot patch ${action.path}: SEARCH content not found.\n\nExpected to find:\n${searchPreview}\n\nFile preview (first 10 lines):\n${preview}\n\nThe file may have changed or the search pattern is incorrect.`
                 });
                 continue;
               }
@@ -3111,6 +3201,7 @@ ${trimmedText}`;
                 this.panel.webview.postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
+              console.log(`[FileAction] Applying FILE: ${action.path}, outside=${outside}`);
               let result = outside
                 ? await this.agent.applyChanges(
                     action.path,
@@ -3119,6 +3210,7 @@ ${trimmedText}`;
                     writeOptions
                   )
                 : preResult;
+              console.log(`[FileAction] Applied: success=${result.success}, path=${result.path}`);
 
               if (
                 !result.success &&

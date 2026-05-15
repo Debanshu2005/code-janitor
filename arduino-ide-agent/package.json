@@ -98,8 +98,8 @@
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 300000,
-          "description": "AI timeout in milliseconds (default: 5 minutes). Increase if using slow models."
+          "default": 0,
+          "description": "AI timeout in milliseconds. Set to 0 to disable the timeout (default), or increase it if using slow models."
         }
       }
     },

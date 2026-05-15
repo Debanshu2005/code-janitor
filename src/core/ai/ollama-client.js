@@ -1,4 +1,9 @@
-const vscode = require("vscode");
+let vscode = null;
+try {
+  vscode = require("vscode");
+} catch {
+  vscode = null;
+}
 
 let babelParser;
 try {
@@ -17,22 +22,75 @@ const SUPPORTED_LANGUAGES = new Set([
   "cpp",
   "html"
 ]);
+const SUPPORTED_PROVIDERS = new Set(["ollama", "nvidia"]);
+const NVIDIA_DEFAULT_MODEL = "meta/llama-3.1-8b-instruct";
+const NVIDIA_MODEL_ALIASES = new Map([
+  ["nvidia/minimax-m2.7", "minimaxai/minimax-m2.7"],
+  ["nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.1-70b-instruct"],
+  ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
+  ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+]);
+let runtimeConfigOverride = null;
 
 class OllamaClient {
   constructor() {
     this.baseUrl = "http://localhost:11434";
-    this.model = "qwen2.5-coder:1.5b";
+    this.model = "qwen2.5-coder:7b";
     this._availabilityCache = null;
   }
 
+  static configureRuntime(config = null) {
+    runtimeConfigOverride = config ? { ...config } : null;
+  }
+
+  static clearRuntimeConfig() {
+    runtimeConfigOverride = null;
+  }
+
   getConfig() {
-    const config = vscode.workspace.getConfiguration("codeJanitor.ai");
+    const config = vscode?.workspace?.getConfiguration
+      ? vscode.workspace.getConfiguration("codeJanitor.ai")
+      : null;
+
+    const timeoutValue = runtimeConfigOverride?.timeout;
+    const provider = this._normalizeProvider(
+      runtimeConfigOverride?.provider || config?.get("provider", "ollama") || "ollama"
+    );
+    const rawModel =
+      runtimeConfigOverride?.model ||
+      (provider === "nvidia"
+        ? config?.get("nvidiaModel", NVIDIA_DEFAULT_MODEL)
+        : config?.get("model", this.model)) ||
+      this.model;
+    const resolvedModel =
+      provider === "nvidia" ? this._sanitizeNvidiaModel(rawModel) : String(rawModel || "").trim() || this.model;
+
     return {
-      enabled: config.get("enabled", true),
-      baseUrl: config.get("ollamaUrl", this.baseUrl),
-      model: config.get("model", this.model),
-      timeout: config.get("timeout", 20_000)
+      enabled: runtimeConfigOverride?.enabled ?? config?.get("enabled", true) ?? true,
+      provider,
+      baseUrl: this._normalizeOllamaUrl(
+        runtimeConfigOverride?.baseUrl || config?.get("ollamaUrl", this.baseUrl) || this.baseUrl
+      ),
+      model: resolvedModel,
+      nvidiaApiKey:
+        runtimeConfigOverride?.nvidiaApiKey ||
+        config?.get("nvidiaApiKey", "") ||
+        "",
+      timeout:
+        Number.isFinite(timeoutValue) && timeoutValue >= 0
+          ? timeoutValue
+          : this._normalizeTimeout(config?.get("timeout", 0), 0)
     };
+  }
+
+  _normalizeTimeout(timeoutMs, fallback = 0) {
+    const parsed = Number(timeoutMs);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  }
+
+  _createTimeoutSignal(timeoutMs) {
+    const normalizedTimeout = this._normalizeTimeout(timeoutMs, 0);
+    return normalizedTimeout > 0 ? AbortSignal.timeout(normalizedTimeout) : undefined;
   }
 
   async isAvailable(forceRefresh = false) {
@@ -46,6 +104,7 @@ class OllamaClient {
     if (
       !forceRefresh &&
       this._availabilityCache &&
+      this._availabilityCache.provider === config.provider &&
       this._availabilityCache.baseUrl === config.baseUrl &&
       now - this._availabilityCache.checkedAt < AVAILABILITY_CACHE_MS
     ) {
@@ -53,23 +112,47 @@ class OllamaClient {
     }
 
     try {
-      const response = await fetch(`${config.baseUrl}/api/tags`, {
-        method: "GET",
-        signal: AbortSignal.timeout(Math.min(config.timeout, 5_000))
-      });
+      if (config.provider === "nvidia") {
+        if (!config.nvidiaApiKey) {
+          this._availabilityCache = {
+            available: false,
+            provider: config.provider,
+            baseUrl: config.baseUrl,
+            checkedAt: now
+          };
+          return false;
+        }
+      }
+
+      const availabilityTimeout =
+        config.timeout > 0 ? Math.min(config.timeout, 5_000) : 0;
+      const response = config.provider === "nvidia"
+        ? await fetch("https://integrate.api.nvidia.com/v1/models", {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${config.nvidiaApiKey}`
+            },
+            signal: this._createTimeoutSignal(availabilityTimeout)
+          })
+        : await fetch(`${config.baseUrl}/api/tags`, {
+            method: "GET",
+            signal: this._createTimeoutSignal(availabilityTimeout)
+          });
 
       const available = response.ok;
       this._availabilityCache = {
         available,
+        provider: config.provider,
         baseUrl: config.baseUrl,
         checkedAt: now
       };
 
       return available;
     } catch (error) {
-      console.warn("Ollama not available:", error.message);
+      console.warn(`${this._getProviderDisplayName(config.provider)} not available:`, error.message);
       this._availabilityCache = {
         available: false,
+        provider: config.provider,
         baseUrl: config.baseUrl,
         checkedAt: now
       };
@@ -353,36 +436,19 @@ Final fixed code:`;
       return {
         shouldUseAI: false,
         fixedCode: safeRuleBased,
-        reason: "Ollama unavailable",
+        reason: `${this._getProviderDisplayName(config.provider)} unavailable`,
         securityIssues: []
       };
     }
 
     try {
       this._lastValidationLanguage = language;
-      const response = await fetch(`${config.baseUrl}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(config.timeout),
-        body: JSON.stringify({
-          model: config.model,
-          prompt: this.buildPrompt(safeOriginal, safeRuleBased, language),
-          stream: false,
-          options: {
-            temperature: 0,
-            num_predict: Math.min(768, Math.max(256, safeRuleBased.length / 4)),
-            top_k: 20,
-            top_p: 0.8
-          }
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const fixedCode = this.extractCode(data.response, safeRuleBased);
+      const fixedCode = await this._requestProviderFix(
+        config,
+        safeOriginal,
+        safeRuleBased,
+        language
+      );
 
       if (
         fixedCode !== safeOriginal &&
@@ -412,6 +478,105 @@ Final fixed code:`;
         securityIssues: []
       };
     }
+  }
+
+  _normalizeProvider(provider) {
+    const normalized = typeof provider === "string" ? provider.trim().toLowerCase() : "";
+    return SUPPORTED_PROVIDERS.has(normalized) ? normalized : "ollama";
+  }
+
+  _normalizeOllamaUrl(url) {
+    let normalized =
+      typeof url === "string" && url.trim()
+        ? url.trim()
+        : "http://localhost:11434";
+    normalized = normalized.replace(/\/+$/, "");
+    if (/\/api$/i.test(normalized)) {
+      normalized = normalized.replace(/\/api$/i, "");
+    }
+    return normalized || "http://localhost:11434";
+  }
+
+  _getProviderDisplayName(provider) {
+    return provider === "nvidia" ? "NVIDIA" : "Ollama";
+  }
+
+  _sanitizeNvidiaModel(model) {
+    const value = typeof model === "string" ? model.trim() : "";
+    if (!value) return NVIDIA_DEFAULT_MODEL;
+    if (NVIDIA_MODEL_ALIASES.has(value)) return NVIDIA_MODEL_ALIASES.get(value);
+    if (/^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(value)) return value;
+    return NVIDIA_DEFAULT_MODEL;
+  }
+
+  async _requestProviderFix(config, originalCode, ruleBasedFix, language) {
+    if (config.provider === "nvidia") {
+      return this._requestNvidiaFix(config, originalCode, ruleBasedFix, language);
+    }
+    return this._requestOllamaFix(config, originalCode, ruleBasedFix, language);
+  }
+
+  async _requestOllamaFix(config, originalCode, ruleBasedFix, language) {
+    const response = await fetch(`${config.baseUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: this._createTimeoutSignal(config.timeout),
+      body: JSON.stringify({
+        model: config.model,
+        prompt: this.buildPrompt(originalCode, ruleBasedFix, language),
+        stream: false,
+        options: {
+          temperature: 0,
+          num_predict: Math.min(768, Math.max(256, ruleBasedFix.length / 4)),
+          top_k: 20,
+          top_p: 0.8
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return this.extractCode(data.response, ruleBasedFix);
+  }
+
+  async _requestNvidiaFix(config, originalCode, ruleBasedFix, language) {
+    const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.nvidiaApiKey}`
+      },
+      signal: this._createTimeoutSignal(config.timeout),
+      body: JSON.stringify({
+        model: this._sanitizeNvidiaModel(config.model),
+        messages: [
+          {
+            role: "system",
+            content:
+              "You repair code with the smallest safe diff. Return only the fixed code with no markdown or explanations."
+          },
+          {
+            role: "user",
+            content: this.buildPrompt(originalCode, ruleBasedFix, language)
+          }
+        ],
+        stream: false,
+        temperature: 0.15,
+        top_p: 0.8,
+        max_tokens: Math.min(1024, Math.max(256, Math.ceil(ruleBasedFix.length / 3)))
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`NVIDIA API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content || "";
+    return this.extractCode(content, ruleBasedFix);
   }
 
   parseSecurityResponse(response, fallbackCode) {

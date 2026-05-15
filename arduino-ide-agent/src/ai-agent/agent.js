@@ -18,6 +18,12 @@ const REPETITION_WINDOW_HEAVY = 300  // Reduced from 400
 const SCAN_STALE_MS = 45_000  // Increased from 30000 to reduce rescans
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_COMMAND_OUTPUT_CHARS = 12_000
+const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+])
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -73,6 +79,7 @@ const NVIDIA_FALLBACK_MODELS = [
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
   openrouter: [
+    "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free"
@@ -812,6 +819,11 @@ class AIAgent {
       }
     }
 
+    if (/not a multimodal model|does not support image|image input is not supported/i.test(message)) {
+      const modelLabel = config?.model ? ` (${config.model})` : ""
+      return `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+    }
+
     return `AI error: ${message}`
   }
 
@@ -866,7 +878,215 @@ class AIAgent {
     return profile
   }
 
-  _buildRequestOptions(config, prompt, mode = "fast", intent = "general") {
+  _sanitizeImageAttachments(images) {
+    if (!Array.isArray(images)) return []
+
+    return images
+      .slice(0, 3)
+      .map((entry, index) => {
+        const mimeType = String(entry?.mimeType || entry?.mime || "")
+          .trim()
+          .toLowerCase()
+        const dataUrl = typeof entry?.dataUrl === "string" ? entry.dataUrl.trim() : ""
+        const name = String(entry?.name || `image-${index + 1}`).trim()
+        const match = /^data:([^;]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(dataUrl)
+
+        if (!SUPPORTED_CHAT_IMAGE_MIME_TYPES.has(mimeType) || !match) {
+          return null
+        }
+
+        const matchedMimeType = String(match[1] || "").trim().toLowerCase()
+        if (matchedMimeType !== mimeType) {
+          return null
+        }
+
+        return {
+          name,
+          mimeType,
+          dataUrl,
+          base64Data: String(match[2] || "").replace(/\s+/g, "")
+        }
+      })
+      .filter(Boolean)
+  }
+
+  _buildImageAttachmentHistoryNote(images) {
+    if (!Array.isArray(images) || images.length === 0) return ""
+    const names = images
+      .map((image) => image?.name)
+      .filter(Boolean)
+      .slice(0, 3)
+    return names.length > 0
+      ? `[Attached image${images.length === 1 ? "" : "s"}: ${names.join(", ")}]`
+      : `[Attached ${images.length} image${images.length === 1 ? "" : "s"}]`
+  }
+
+  _buildOpenAiCompatibleUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image_url",
+        image_url: {
+          url: image.dataUrl
+        }
+      }))
+    ]
+  }
+
+  _buildAnthropicUserContent(userContent, images = []) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return userContent
+    }
+
+    return [
+      {
+        type: "text",
+        text: userContent || "Please analyze the attached image(s)."
+      },
+      ...images.map((image) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: image.mimeType,
+          data: image.base64Data
+        }
+      }))
+    ]
+  }
+
+  _buildOllamaUserMessage(userContent, images = []) {
+    const message = {
+      role: "user",
+      content: userContent || "Please analyze the attached image(s)."
+    }
+
+    if (Array.isArray(images) && images.length > 0) {
+      message.images = images.map((image) => image.base64Data)
+    }
+
+    return message
+  }
+
+  _extractTextFromStructuredContent(content) {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return ""
+        if (typeof part.text === "string") return part.text
+        if (typeof part.content === "string") return part.content
+        return ""
+      })
+      .filter(Boolean)
+      .join("\n")
+  }
+
+  _extractOpenAiCompatibleImages(images) {
+    if (!Array.isArray(images)) return []
+    return images
+      .map((image) => {
+        const url =
+          image?.image_url?.url ||
+          image?.imageUrl?.url ||
+          image?.url ||
+          ""
+        return typeof url === "string" && /^data:image\//i.test(url) ? url : ""
+      })
+      .filter(Boolean)
+  }
+
+  _buildGeneratedImageSummary(images) {
+    const count = Array.isArray(images) ? images.length : 0
+    return count > 0
+      ? `Generated ${count} image${count === 1 ? "" : "s"}.`
+      : "Generated an image."
+  }
+
+  _isOpenRouterImageGenerationModel(model) {
+    const value = String(model || "").trim().toLowerCase()
+    return value === "google/gemini-2.5-flash-image" || /flash-image/.test(value)
+  }
+
+  _looksLikeVisionCapableModel(model) {
+    const value = String(model || "").trim().toLowerCase()
+    if (!value) return false
+
+    return (
+      /\b(vision|visual|multimodal|image|images|img|photo|picture)\b/.test(value) ||
+      /\b(vl|llava|bakllava|minicpm-v|pixtral)\b/.test(value) ||
+      /\b(gemini|gpt-4o|gpt-4\.1|claude-3|claude-4|gemma-3)\b/.test(value)
+    )
+  }
+
+  _modelSupportsImageInput(config = {}, model = "") {
+    const provider = String(config?.provider || "").trim().toLowerCase()
+    const selectedModel = String(model || config?.model || "").trim()
+    if (!selectedModel) return false
+
+    if (provider === "anthropic") {
+      return true
+    }
+
+    if (provider === "openrouter") {
+      return (
+        this._isOpenRouterImageGenerationModel(selectedModel) ||
+        this._looksLikeVisionCapableModel(selectedModel)
+      )
+    }
+
+    return this._looksLikeVisionCapableModel(selectedModel)
+  }
+
+  _shouldRequestOpenRouterImageOutput(model, userContent, images = [], intent = "general") {
+    if (!this._isOpenRouterImageGenerationModel(model)) {
+      return false
+    }
+
+    if (intent === "create") {
+      return true
+    }
+
+    const text = String(userContent || "").toLowerCase()
+    if (
+      /\b(generate|create|draw|make|render|illustrate|design|poster|banner|logo|icon|image|picture|photo|artwork|scene|portrait)\b/.test(
+        text
+      )
+    ) {
+      return true
+    }
+
+    return (
+      Array.isArray(images) &&
+      images.length > 0 &&
+      /\b(edit|modify|transform|restyle|remove|replace|add|erase|upscale|variation|variant)\b/.test(
+        text
+      )
+    )
+  }
+
+  async _readResponseOutput(reqOpts, response, options = {}) {
+    if (typeof reqOpts?.parseResponseBody === "function") {
+      const parsed = await reqOpts.parseResponseBody(response, options)
+      return {
+        text: typeof parsed?.text === "string" ? parsed.text : "",
+        images: Array.isArray(parsed?.images) ? parsed.images : []
+      }
+    }
+
+    const parseChunk =
+      typeof options.parseChunk === "function" ? options.parseChunk : reqOpts.parseChunk
+    const text = await this._readResponseText(response, parseChunk, options)
+    return { text, images: [] }
+  }
+
+  _buildRequestOptions(config, prompt, mode = "fast", intent = "general", images = []) {
     const isUnlimited = mode === "deep" && intent === "create"
     const latencyProfile = this._getLatencyProfile(config, mode, intent)
     const maxTokens = isUnlimited ? 8192 : latencyProfile.maxTokens
@@ -885,6 +1105,15 @@ class AIAgent {
             .replace(/\nAssistant:$/, "")
             .trim()
         : prompt
+    const userMessageContent = this._buildOpenAiCompatibleUserContent(
+      userContent,
+      images
+    )
+    const anthropicUserContent = this._buildAnthropicUserContent(
+      userContent,
+      images
+    )
+    const ollamaUserMessage = this._buildOllamaUserMessage(userContent, images)
 
     if (config.provider === "anthropic") {
       return {
@@ -899,7 +1128,7 @@ class AIAgent {
           max_tokens: maxTokens,
           stream: true,
           system: sysContent,
-          messages: [{ role: "user", content: userContent }]
+          messages: [{ role: "user", content: anthropicUserContent }]
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ")) return null
@@ -925,7 +1154,7 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: 0.2,
@@ -946,6 +1175,12 @@ class AIAgent {
       }
     }
     if (config.provider === "openrouter") {
+      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(
+        config.model,
+        userContent,
+        images,
+        intent
+      )
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
         headers: {
@@ -958,12 +1193,17 @@ class AIAgent {
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
-          stream: true,
+          stream: !requestImageOutput,
           temperature: 0.2,
           max_tokens: maxTokens,
-          top_p: 0.9
+          top_p: 0.9,
+          ...(requestImageOutput
+            ? {
+                modalities: ["image", "text"]
+              }
+            : {})
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -974,7 +1214,29 @@ class AIAgent {
           } catch {
             return null
           }
-        }
+        },
+        parseResponseBody: requestImageOutput
+          ? async (response, options = {}) => {
+              const data = await response.json()
+              const message = data?.choices?.[0]?.message || {}
+              const generatedImages = this._extractOpenAiCompatibleImages(
+                message.images || []
+              )
+              const text =
+                this._extractTextFromStructuredContent(message.content) ||
+                this._buildGeneratedImageSummary(generatedImages)
+              if (
+                generatedImages.length > 0 &&
+                typeof options.streamCallback === "function"
+              ) {
+                options.streamCallback(text)
+              }
+              return {
+                text,
+                images: generatedImages
+              }
+            }
+          : null
       }
     }
     if (config.provider === "nvidia") {
@@ -1018,7 +1280,7 @@ class AIAgent {
           model: resolvedModel,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userContent }
+            { role: "user", content: userMessageContent }
           ],
           stream: true,
           temperature: isMinimax ? 0.3 : isNemotron ? 0.7 : isLlama70b ? 0.15 : 0.2,
@@ -1051,7 +1313,7 @@ class AIAgent {
         model: config.model,
         messages: [
           { role: "system", content: sysContent },
-          { role: "user", content: userContent }
+          ollamaUserMessage
         ],
         stream: true,
         options: {
@@ -1590,6 +1852,10 @@ class AIAgent {
   ) {
     // IMPORTANT: Always get fresh config to respect provider switches
     const config = this.getConfig()
+    const imageAttachments = this._sanitizeImageAttachments(options.images)
+    if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
+      userMessage = "Please analyze the attached image(s)."
+    }
     const mode =
       options.mode === "deep"
         ? "deep"
@@ -1611,6 +1877,15 @@ class AIAgent {
     )
     if (!runtimeConfig.enabled) {
       return { error: "AI is disabled in Code Janitor settings." }
+    }
+    if (
+      imageAttachments.length > 0 &&
+      !this._modelSupportsImageInput(runtimeConfig, runtimeConfig.model)
+    ) {
+      const modelLabel = runtimeConfig.model ? ` (${runtimeConfig.model})` : ""
+      return {
+        error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+      }
     }
     if (runtimeConfig.provider === "groq" && !runtimeConfig.groqApiKey) {
       return {
@@ -1637,7 +1912,12 @@ class AIAgent {
       }
     }
 
-    this._appendConversationEntry("user", userMessage)
+    this._appendConversationEntry(
+      "user",
+      [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
+        .filter(Boolean)
+        .join("\n\n")
+    )
     const isTabQuestion = this._isTabQuestion(userMessage)
 
     // Arduino IDE chat does not use Graphify context.
@@ -1851,7 +2131,8 @@ ${resolvedMessage}`
         runtimeConfig,
         prompt,
         mode,
-        reqIntent
+        reqIntent,
+        imageAttachments
       )
       reportStatus?.(
         `Request ready: provider=${runtimeConfig.provider}, model=${runtimeConfig.model}`
@@ -1899,15 +2180,14 @@ ${resolvedMessage}`
       console.log(`[CodeJanitor] Response OK - Status: ${response.status}, Content-Type: ${response.headers.get('content-type')}`);
 
       let fullResponse = ""
+      let responseImages = []
       let repetitionDetected = false
       let sawFirstToken = false
 
-      fullResponse = await this._readResponseText(
-        response,
-        (line) => {
+      const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        parseChunk: (line) => {
           const token = reqOpts.parseChunk(line)
           if (token === null) {
-            // Log first few null responses to debug parsing
             if (fullResponse.length < 100) {
               console.log(`[CodeJanitor] Null token from line:`, line.substring(0, 100));
             }
@@ -1929,12 +2209,12 @@ ${resolvedMessage}`
           fullResponse = nextResponse
           return token
         },
-        {
-          streamCallback,
-          abortSignal,
-          shouldStop: () => repetitionDetected
-        }
-      )
+        streamCallback,
+        abortSignal,
+        shouldStop: () => repetitionDetected
+      })
+      fullResponse = initialResponse.text || fullResponse
+      responseImages = initialResponse.images || []
 
       if (repetitionDetected && abortSignal?.aborted) {
         repetitionDetected = false
@@ -1965,7 +2245,11 @@ ${resolvedMessage}`
         finalIntent,
         userMessage
       )
-      let assistantText = cleanedFinalText || finalText
+      let assistantText =
+        cleanedFinalText ||
+        (responseImages.length > 0
+          ? this._buildGeneratedImageSummary(responseImages)
+          : finalText)
       let firstRetryText = ""
 
       const shouldAllowClarification = this._isClarificationResponse(
@@ -2014,11 +2298,11 @@ ${resolvedMessage}`
           )
         }
 
-        const retryText = await this._readResponseText(
-          retryResponse,
-          retryOpts.parseChunk,
-          { abortSignal }
-        )
+        const retryText = (
+          await this._readResponseOutput(retryOpts, retryResponse, {
+            abortSignal
+          })
+        ).text
 
         firstRetryText = retryText || finalText
         parsedResponse = this._parseResponse(firstRetryText)
@@ -2067,11 +2351,11 @@ ${resolvedMessage}`
           )
         }
 
-        const fileOnlyRetryText = await this._readResponseText(
-          fileOnlyRetryResponse,
-          fileOnlyRetryOpts.parseChunk,
-          { abortSignal }
-        )
+        const fileOnlyRetryText = (
+          await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
+            abortSignal
+          })
+        ).text
 
         assistantText = fileOnlyRetryText || assistantText
         parsedResponse = this._parseResponse(assistantText)
@@ -2108,11 +2392,26 @@ ${resolvedMessage}`
 
       this._appendConversationEntry(
         "assistant",
-        assistantText ||
-          (repetitionDetected
-            ? `${fullResponse}\n\n[stopped repetitive output]`
-            : fullResponse || this._getEmptyResponseFallback(mode))
+        [
+          assistantText ||
+            (repetitionDetected
+              ? `${fullResponse}\n\n[stopped repetitive output]`
+              : fullResponse || this._getEmptyResponseFallback(mode)),
+          responseImages.length > 0
+            ? this._buildGeneratedImageSummary(responseImages)
+            : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
       )
+
+      if (responseImages.length > 0) {
+        parsedResponse = {
+          ...parsedResponse,
+          text: parsedResponse.text || assistantText,
+          images: responseImages
+        }
+      }
 
       return parsedResponse
     } catch (error) {
@@ -2658,6 +2957,17 @@ ${resolvedMessage}`
     )
   }
 
+  _shouldTreatAsEditIntent(intent, userMessage) {
+    if (intent === "edit" || intent === "create") return true
+    if (
+      (intent === "debug" || intent === "refactor") &&
+      this._isEditRequest(userMessage || "")
+    ) {
+      return true
+    }
+    return false
+  }
+
   _detectIntent(message) {
     const m = message.toLowerCase()
     const hasExplicitEditVerb =
@@ -2679,6 +2989,14 @@ ${resolvedMessage}`
       /\b(vercel|webpack|deploy|host|install|setup|bundle|build)\b/.test(m) ||
       this._mentionsEditorFiles(m) ||
       /\b(code|project|app|site|html|css|js|file|files)\b/.test(m)
+    const hasExplainIntent =
+      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(
+        m
+      )
+    const hasImperativeEditClause =
+      /(?:^|[.!?;:,]\s*|\band\s+)(?:edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/.test(
+        m
+      )
     if (
       /\b(hi|hello|hey|thanks|thank you|thx|good morning|good evening|how are you|what's up|sup)\b/.test(
         m
@@ -2701,11 +3019,7 @@ ${resolvedMessage}`
       )
     )
       return "create"
-    if (
-      /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference)\b/.test(
-        m
-      )
-    )
+    if (hasExplainIntent && !(hasApplyChangePhrase || hasImperativeEditClause))
       return "explain"
     if (hasApplyChangePhrase && hasImplementationContext) return "edit"
     if (hasExplicitEditVerb) return "edit"
@@ -2740,14 +3054,17 @@ ${resolvedMessage}`
       : ""
     
     const base =
-      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic" + thinkingInstruction
+      "You are a coding assistant embedded in Arduino IDE, named Code Janitor.\n\nCode Janitor capabilities:\n- Arduino-focused AI chat and structured file editing\n- Workspace scanning for relevant multi-file context\n- Source control integration, including branch, commit, push, pull, and status workflows\n- Image understanding for attached screenshots, wiring diagrams, circuit photos, and schematics when the selected model supports vision\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube search: When users ask for videos or tutorials, respond with: \"Use the YouTube search button (▶️) in the chat interface to search for [topic]. For example, search for 'Arduino [specific topic]' to find relevant tutorials.\"\n- Mermaid diagram rendering: You can create flowcharts, sequence diagrams, class diagrams, state diagrams, ER diagrams, and more using mermaid syntax in code blocks\n- Tutorial assistance: When users ask \"how do I\" or tutorial-style questions, after providing your explanation, suggest they use the YouTube search button to find video tutorials on the topic" + thinkingInstruction
     const operatingPrinciples = `Operational rules:
 - Be precise and minimal: use only the actions required to solve the request.
 - Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.
+- When an edit, debug, or verification request would benefit from real workspace evidence, use CMD: to inspect files, scripts, package metadata, git state, or command output instead of guessing.
 - Never claim a command/check was run unless it is actually in your action list.
 - If external or time-sensitive facts are required, say verification is needed instead of guessing.
 - If a command is likely to fail, propose a corrected safer command immediately.
 - For Arduino sketches, treat all ".ino" tabs in the same sketch folder as one program before claiming a function is missing.
+- Good CMD uses include: \`rg\`, \`Get-Content\`, \`Get-ChildItem\`, \`Select-String\`, \`git status\`, \`git diff\`, \`npm run <script>\`, \`npm test\`, and other focused workspace commands.
+- After code edits, it is good to verify the result with targeted CMD checks when they directly confirm the fix.
 - When asked to create diagrams, flowcharts, or visualizations, ALWAYS use mermaid syntax in code blocks.
 - For mermaid requests, prefer ONE diagram per answer unless the user explicitly asks for multiple diagrams.
 - For mermaid requests, keep node labels simple plain text. Avoid markdown, HTML, emojis, and nested punctuation inside labels.
@@ -2795,11 +3112,11 @@ ${resolvedMessage}`
       case "greeting":
         return `${base}
 ${operatingPrinciples}
-Reply naturally and briefly.`
+Reply naturally and helpfully.`
       case "show_graph":
         return `${base}
 ${operatingPrinciples}
-Graph visualization is not part of the Arduino IDE chat workflow. Explain that briefly and continue with a normal text answer.`
+Graph visualization is not part of the Arduino IDE chat workflow. Explain that clearly and continue with a normal text answer.`
       case "create": {
         const loc = workspaceFolder
           ? `Save files in: ${workspaceFolder.replace(/\\/g, "/")}`
@@ -2815,7 +3132,7 @@ Write professional, production-ready code by default:
 You have access to structured shell actions when needed. You may use:
 - FILE: to create or replace file contents
 - MKDIR: to create directories
-- CMD: to run a single workspace shell command only when strictly needed
+- CMD: to run one workspace shell command per line for inspection, package scripts, syntax checks, or verification when that materially helps
 Respond ONLY with executable FILE:, MKDIR:, or CMD: actions. No explanations or markdown outside code fences.
 Format:
 FILE: folder/file.ext
@@ -2871,6 +3188,7 @@ The user wants to edit a file. Write professional, production-ready code by defa
 - Include concrete fixes, not advisory text.
 - Never delete or empty README.md unless the user explicitly asks you to remove it.
 You have access to structured shell actions when needed. Prefer PATCH and FILE actions; use CMD only when file edits alone cannot solve the request.
+When the current file state is unclear, use CMD inspection first. When the fix should be proven, include focused CMD verification after the edit.
 
 Use PATCH by default for small, targeted edits:
 PATCH: <exact file path>
@@ -2912,11 +3230,9 @@ Answer helpfully. Use FILE: or CMD: directives only when the user explicitly ask
 
   _shouldForceStructuredEdit(intent, userMessage) {
     if (intent === "create") return true
-    if (intent === "edit" && this._isEditRequest(userMessage)) return true
     if (
-      (intent === "debug" || intent === "refactor") &&
-      this._isEditRequest(userMessage) &&
-      /\b(apply|fix|change|update|edit|modify|patch)\b/i.test(userMessage)
+      this._shouldTreatAsEditIntent(intent, userMessage) &&
+      this._isEditRequest(userMessage)
     ) {
       return true
     }
@@ -2935,7 +3251,7 @@ Rules:
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
 - If a previous command failed, return a corrected command that addresses the failure cause.
-- You have access to workspace shell commands through CMD:, but avoid CMD unless file edits alone cannot solve the request.
+- You have access to workspace shell commands through CMD:, and you should use them when they help inspect context or verify the applied fix.
 - Do not give explanations or tutorial steps.
 - Do not describe what to click in VS Code.
 - Use exact file paths.
@@ -3829,20 +4145,32 @@ ${userMessage}`
   }
 
   validateCommand(command) {
-    const normalized = command.trim().toLowerCase()
+    const raw = String(command || "").trim()
+    const normalized = raw.toLowerCase()
 
     if (!normalized) {
       return { allowed: false, reason: "Empty command" }
     }
 
+    if (/[\r\n]/.test(raw)) {
+      return {
+        allowed: false,
+        reason: "Use a single-line project-scoped command"
+      }
+    }
+
     const blockedPatterns = [
       /\bnpm\s+install\s+-g\b/,
       /\bnpm\s+i\s+-g\b/,
+      /\bnpm(?:\.cmd)?\s+(?:exec|install|update|audit|cache|config)\b/,
       /\bpip(?:3)?\s+install\b/,
       /\bcargo\s+install\b/,
       /\bgo\s+install\b/,
       /\byarn\s+global\b/,
+      /\byarn(?:\.cmd)?\s+(?:add|install|dlx|global|set|config|npm)\b/,
       /\bpnpm\s+add\s+-g\b/,
+      /\bpnpm(?:\.cmd)?\s+(?:add|install|dlx|setup|env)\b/,
+      /\bnpx(?:\.cmd)?\b(?!\s+--no-install\b)/,
       /\bchoco\s+install\b/,
       /\bwinget\s+install\b/,
       /\bapt(?:-get)?\s+install\b/,
@@ -3850,7 +4178,11 @@ ${userMessage}`
       /\bwget\b/,
       /\binvoke-webrequest\b/,
       /\birm\b/,
-      /\bgit\s+clone\b/,
+      /\bnode\s+-e\b/,
+      /\bnpm\s+(?:publish|unpublish|login|logout|adduser|owner|access|team|org|token|profile|dist-tag|deprecate|hook)\b/,
+      /\byarn\s+(?:publish|login|logout|npm\s+publish|npm\s+login|npm\s+logout)\b/,
+      /\bpnpm\s+publish\b/,
+      /\bgit\s+(?:clone|push|pull|fetch|checkout|switch|restore|reset|merge|rebase|stash|tag|add|commit|cherry-pick|am|apply|remote)\b/,
       /\bdel\b/,
       /\brm\b/,
       /\brmdir\b/,
@@ -3871,124 +4203,67 @@ ${userMessage}`
       }
     }
 
-    const allowedPrefixes = [
-      "mkdir ",
-      "md ",
-      "findstr ",
-      "rg ",
-      "grep ",
-      "ls",
-      "dir",
-      "cat ",
-      "type ",
-      "head ",
-      "tail ",
-      "echo ",
-      "pwd",
-      "cd ",
-      "tree ",
-      "find ",
-      "which ",
-      "where ",
-      "npm install",
-      "npm i",
-      "npm run ",
-      "npm test",
-      "npm start",
-      "npm build",
-      "npm list",
-      "npm outdated",
-      "npm audit",
-      "npx ",
-      "yarn install",
-      "yarn add",
-      "yarn remove",
-      "yarn run",
-      "yarn test",
-      "yarn build",
-      "pnpm install",
-      "pnpm add",
-      "pnpm remove",
-      "pnpm run",
-      "pnpm test",
-      "node --check",
-      "node -e",
-      "node ",
-      "git status",
-      "git diff",
-      "git log",
-      "git show",
-      "git branch",
-      "git checkout",
-      "git add",
-      "git commit",
-      "git pull",
-      "git fetch",
-      "git merge",
-      "git rebase",
-      "git stash",
-      "git tag",
-      "git remote",
-      "git rev-parse",
-      "git push",
-      "python -m py_compile",
-      "python -m flake8",
-      "python -m pylint",
-      "python -m pytest",
-      "python -m unittest",
-      "python ",
-      "python3 -m py_compile",
-      "python3 -m flake8",
-      "python3 -m pylint",
-      "python3 -m pytest",
-      "python3 -m unittest",
-      "python3 ",
-      "pytest",
-      "eslint ",
-      "tsc ",
-      "javac ",
-      "java ",
-      "mvn clean",
-      "mvn compile",
-      "mvn test",
-      "mvn package",
-      "gradle build",
-      "gradle test",
-      "gradle clean",
-      "cargo build",
-      "cargo test",
-      "cargo check",
-      "cargo run",
-      "go build",
-      "go test",
-      "go run",
-      "dotnet build",
-      "dotnet test",
-      "dotnet run",
-      ".\\node_modules\\.bin\\",
-      "./node_modules/.bin/",
-      "wmic path win32_pnpentity",
-      "mode",
-      "arduino-cli board list",
-      "arduino-cli lib list",
-      "arduino-cli lib search",
-      "arduino-cli lib install",
-      "arduino-cli compile",
-      "arduino-cli upload",
-      "pip list",
-      "pip3 list",
-      "pip show",
-      "pip3 show"
-    ]
-
-    if (!allowedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+    if (/(^|\s)(>>?|<)(\s|$)/.test(raw) || /`|\$\(/.test(raw)) {
       return {
         allowed: false,
-        reason: "Only project-scoped commands are allowed"
+        reason: "Shell redirection and substitution are not allowed"
+      }
+    }
+
+    const allowedPatterns = [
+      /^(?:ls|dir|pwd|tree)(?:\s+.+)?$/i,
+      /^(?:get-childitem|gci|get-location|gl)(?:\s+.+)?$/i,
+      /^(?:cat|type|get-content|gc|get-item|gi|resolve-path|head|tail|echo|find|which|where|select-string|sls|grep|rg|findstr)(?:\s+.+)?$/i,
+      /^(?:mkdir|md)\s+.+$/i,
+      /^npm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+--.*)?|ls(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^yarn(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^pnpm(?:\.cmd)?\s+(?:--version|version|test(?:\s+.*)?|run\s+[a-z0-9][a-z0-9:._-]*(?:\s+.*)?|list(?:\s+.*)?)$/i,
+      /^npx(?:\.cmd)?\s+--no-install\s+\S+(?:\s+.*)?$/i,
+      /^node\s+(?:--check\s+\S.*|--version)$/i,
+      /^python(?:3)?\s+(?:--version|-m\s+(?:py_compile|flake8|pylint|pytest|unittest)\b.*)$/i,
+      /^(?:pip|pip3)\s+(?:list|show)\b.*$/i,
+      /^pytest(?:\s+.*)?$/i,
+      /^eslint\b.*$/i,
+      /^tsc\b.*$/i,
+      /^javac\b.+$/i,
+      /^java\s+-version$/i,
+      /^mvn\s+(?:clean|compile|test|package)\b.*$/i,
+      /^gradle\s+(?:build|test|clean)\b.*$/i,
+      /^cargo\s+(?:build|test|check)\b.*$/i,
+      /^go\s+(?:build|test)\b.*$/i,
+      /^dotnet\s+(?:build|test)\b.*$/i,
+      /^git\s+(?:status|diff|log|show|rev-parse)\b.*$/i,
+      /^(?:\.\/|\.\\)node_modules[\\/]\.bin[\\/][^\s]+(?:\s+.*)?$/i,
+      /^wmic\s+path\s+win32_pnpentity\b.*$/i,
+      /^mode(?:\s+.+)?$/i,
+      /^arduino-cli\s+board\s+list\b.*$/i,
+      /^arduino-cli\s+lib\s+(?:list|search)\b.*$/i,
+      /^arduino-cli\s+compile\b.*$/i
+    ]
+
+    const allowed = allowedPatterns.some((pattern) => pattern.test(raw))
+
+    if (!allowed) {
+      return {
+        allowed: false,
+        reason: "Only project-scoped read, test, and build commands are allowed"
       }
     }
 
     return { allowed: true }
+  }
+
+  _shouldUsePowerShellForCommand(command) {
+    if (process.platform !== "win32") {
+      return false
+    }
+
+    const normalized = String(command || "").trim().toLowerCase()
+    if (!normalized) {
+      return false
+    }
+
+    return true
   }
 
   _summarizeLineChanges(oldContent, newContent) {
@@ -4213,11 +4488,8 @@ ${userMessage}`
     }
 
     return new Promise((resolve) => {
-      const { exec } = require("child_process")
-      exec(
-        command,
-        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
-        (error, stdout, stderr) => {
+      const { exec, execFile } = require("child_process")
+      const handleResult = (error, stdout, stderr) => {
           const rawOutput = [stdout, stderr].filter(Boolean).join("\n")
           const outputInfo = this._truncateCommandOutput(rawOutput)
           const hitMaxBuffer =
@@ -4253,6 +4525,32 @@ ${userMessage}`
             outputTruncated: outputInfo.truncated
           })
         }
+
+      if (this._shouldUsePowerShellForCommand(command)) {
+        execFile(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command
+          ],
+          {
+            cwd: workspaceFolder,
+            maxBuffer: MAX_COMMAND_BUFFER_BYTES,
+            windowsHide: true
+          },
+          handleResult
+        )
+        return
+      }
+
+      exec(
+        command,
+        { cwd: workspaceFolder, maxBuffer: MAX_COMMAND_BUFFER_BYTES },
+        handleResult
       )
     })
   }

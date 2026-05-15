@@ -5,9 +5,20 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const AIAgent = require("./agent");
+const {
+  buildGStackEditGateOverlay,
+  buildGStackHelpText,
+  parseGStackCommand
+} = require("./gstack");
 const { formatFetchedPreview } = require("./web-content-utils");
 const PerformanceMonitor = require("../self-healing/performance-monitor");
+const { buildFixInsights } = require("../core/fix-insights");
+const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
+const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
+const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
+const MAX_INSPECTION_RESULT_CHARS = 16000;
+const MAX_INSPECTION_MATCHES = 25;
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -15,7 +26,13 @@ const MODELS_BY_PROVIDER = {
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
   nvidia: ["meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","meta/llama-3.1-70b-instruct","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
 };
-const OLLAMA_FALLBACK_MODELS = ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"];
+const OLLAMA_FALLBACK_MODELS = [
+  "qwen2.5-coder:7b",
+  "qwen2.5-coder:3b",
+  "qwen2.5-coder:1.5b",
+  "codellama:latest",
+  "llama3:latest"
+];
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
@@ -35,11 +52,15 @@ class ChatPanel {
     this._confirmResolve = null;
     this._boundWebviews = new WeakSet();
     this._queuedModeOverride = null;
+    this._userStoppedGeneration = false;
     this._undoStack = [];
     this._undoIdCounter = 0;
 
     this.agent.setActiveEditor(this.lastActiveEditor);
     this.agent.showThinking = this.showThinking;
+    this.performanceMonitor.onStateChange = () => {
+      this._postAutoHealState();
+    };
     this.performanceMonitor.loadMetrics();
     
     // Expose performance monitor globally for agent to log issues
@@ -64,7 +85,27 @@ class ChatPanel {
   }
 
   _shouldSuppressInternalStatus(text) {
-    return /replied with prose/i.test(text || "");
+    const value = String(text || "");
+    return (
+      /replied with prose/i.test(value) ||
+      /model output looked incomplete/i.test(value) ||
+      /structured edits still looked incomplete/i.test(value) ||
+      /retrying with strict edit format/i.test(value) ||
+      /retrying with file-only format/i.test(value)
+    );
+  }
+
+  _shouldSuppressGStackGateStatus(text) {
+    const value = String(text || "");
+    return (
+      this._shouldSuppressInternalStatus(value) ||
+      /fetching\s+\d+\s+referenced links/i.test(value) ||
+      /scanning\s+(active files|workspace)/i.test(value) ||
+      /contacting\s+[a-z0-9._:/ -]+/i.test(value) ||
+      /studying workspace before responding/i.test(value) ||
+      /active file in focus:/i.test(value) ||
+      /relevant files:/i.test(value)
+    );
   }
 
   _queueModeOverride(mode) {
@@ -79,6 +120,262 @@ class ChatPanel {
     const queued = this._queuedModeOverride || null;
     this._queuedModeOverride = null;
     return queued;
+  }
+
+  _getInteractionStyleForRequest(isEditLikeIntent) {
+    return isEditLikeIntent ? "agent_loop" : undefined;
+  }
+
+  _findStructuredActionStart(text) {
+    const value = String(text || "");
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+      value
+    );
+    if (!match) {
+      return -1;
+    }
+    return match.index + (match[1] ? match[1].length : 0);
+  }
+
+  _createStreamDisplayController(options = {}) {
+    let bufferedText = "";
+    let emittedContent = false;
+    let visibleText = "";
+
+    const emit = (text, options = {}) => {
+      const value = String(text || "");
+      if (!value) {
+        return;
+      }
+      emittedContent = true;
+      visibleText += value;
+      const message = { type: "stream", text: value };
+      if (typeof options.rawText === "string") {
+        message.rawText = options.rawText;
+      }
+      this._postMessage(message);
+    };
+
+    const replace = (text, options = {}) => {
+      const value = String(text || "");
+      if (!value) {
+        return;
+      }
+      emittedContent = true;
+      visibleText = value;
+      const message = { type: "streamReplace", text: value };
+      if (typeof options.rawText === "string") {
+        message.rawText = options.rawText;
+      }
+      this._postMessage(message);
+    };
+
+    return {
+      push: (chunk) => {
+        const value = String(chunk || "");
+        if (!value) {
+          return;
+        }
+        bufferedText += value;
+        emit(value);
+      },
+      ensureFinalTextVisible: (text, options = {}) => {
+        const rawText =
+          typeof options.rawText === "string" ? options.rawText : "";
+        const value = String(text || "").trim() ? String(text || "") : rawText;
+        if (!value.trim()) {
+          return;
+        }
+        const finalRawText = rawText || value;
+        const alreadyBufferedFinalText =
+          !!bufferedText &&
+          (bufferedText === value || bufferedText === finalRawText);
+        if (!emittedContent) {
+          emit(value);
+          return;
+        }
+        if (alreadyBufferedFinalText) {
+          return;
+        }
+        if (value !== visibleText) {
+          replace(value);
+        }
+      },
+      hasEmittedContent: () => emittedContent
+    };
+  }
+
+  _stripStructuredActionsFromText(text) {
+    let cleaned = String(text || "");
+
+    if (!cleaned.trim()) {
+      return "";
+    }
+
+    const blockPatterns = [
+      /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
+      /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi
+    ];
+
+    for (const pattern of blockPatterns) {
+      cleaned = cleaned.replace(pattern, "");
+    }
+
+    const linePatterns = [
+      /^\s*(READ|GREP)\s*:\s*.+$/gim,
+      /^\s*(CMD|MKDIR)\s*:\s*.+$/gim,
+      /^\s*GRAPHIFY\s*:\s*open\s*$/gim,
+      /^\s*LINT\s*:\s*active\s*$/gim,
+      /^\s*VALIDATE\s*:\s*frontend\s*$/gim,
+      /^\s*PREVIEW\s*:\s*(open|inspect)\s*$/gim,
+      /^\s*PERFORMANCE\s*:\s*show\s*$/gim,
+      /^\s*FETCH\s*:\s*https?:\/\/\S+\s*$/gim
+    ];
+
+    for (const pattern of linePatterns) {
+      cleaned = cleaned.replace(pattern, "");
+    }
+
+    // If any structured-action token remains after removing complete blocks,
+    // treat it as an incomplete trailing action and hide it from the chat bubble.
+    const trailingStructuredStart = this._findStructuredActionStart(cleaned);
+    if (trailingStructuredStart !== -1) {
+      cleaned = cleaned.slice(0, trailingStructuredStart);
+    }
+
+    return cleaned
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  _buildStructuredActionDisplaySummary(actions = []) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return "";
+    }
+
+    const counts = {
+      patch: 0,
+      file: 0,
+      read: 0,
+      grep: 0,
+      mkdir: 0,
+      cmd: 0,
+      other: 0
+    };
+
+    for (const action of actions) {
+      if (!action || !action.type) continue;
+      if (Object.prototype.hasOwnProperty.call(counts, action.type)) {
+        counts[action.type] += 1;
+      } else {
+        counts.other += 1;
+      }
+    }
+
+    const parts = [];
+    if (counts.patch) {
+      parts.push(`${counts.patch} patch${counts.patch === 1 ? "" : "es"}`);
+    }
+    if (counts.file) {
+      parts.push(`${counts.file} file update${counts.file === 1 ? "" : "s"}`);
+    }
+    if (counts.read) {
+      parts.push(`${counts.read} file read${counts.read === 1 ? "" : "s"}`);
+    }
+    if (counts.grep) {
+      parts.push(`${counts.grep} workspace search${counts.grep === 1 ? "" : "es"}`);
+    }
+    if (counts.mkdir) {
+      parts.push(`${counts.mkdir} folder change${counts.mkdir === 1 ? "" : "s"}`);
+    }
+    if (counts.cmd) {
+      parts.push(`${counts.cmd} command${counts.cmd === 1 ? "" : "s"}`);
+    }
+    if (counts.other) {
+      parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
+    }
+
+    if (parts.length === 0) {
+      return "";
+    }
+
+    const lines = ["Model prepared executable changes."];
+    const previewableActions = actions
+      .filter((action) => action && action.type)
+      .slice(0, 4);
+
+    for (const action of previewableActions) {
+      if (action.type === "patch") {
+        lines.push(`- Patch ${action.path || "the active file"}`);
+      } else if (action.type === "file") {
+        lines.push(`- Update ${action.path || "a file"}`);
+      } else if (action.type === "read") {
+        lines.push(`- Read ${action.path || "a file"}`);
+      } else if (action.type === "grep") {
+        lines.push(`- Search ${action.query || "the workspace"}`);
+      } else if (action.type === "mkdir") {
+        lines.push(`- Create folder ${action.path || "(unnamed)"}`);
+      } else if (action.type === "cmd") {
+        lines.push(`- Run ${action.command || "a command"}`);
+      } else {
+        lines.push(`- ${action.type} action`);
+      }
+    }
+
+    if (actions.length > previewableActions.length) {
+      const remaining = actions.length - previewableActions.length;
+      lines.push(`- ${remaining} more action${remaining === 1 ? "" : "s"}`);
+    }
+
+    lines.push(`Applying ${parts.join(", ")} now.`);
+    return lines.join("\n");
+  }
+
+  _buildVisibleAssistantText(response, options = {}) {
+    return String(response?.text || "");
+  }
+
+  _postAssistantImages(images = []) {
+    const safeImages = Array.isArray(images)
+      ? images.filter((url) => typeof url === "string" && /^data:image\//i.test(url))
+      : [];
+    if (safeImages.length === 0) {
+      return;
+    }
+    this._postMessage({
+      type: "assistantImages",
+      images: safeImages
+    });
+  }
+
+  _buildInterruptedStreamMessage(error) {
+    if (error?.name === "AbortError") {
+      return "Code Janitor hid a partial response because generation stopped before completion. Retry with a faster model or increase the timeout in settings.";
+    }
+
+    return "Code Janitor hid a partial response because the AI stream ended before completion. Retry the request to get a complete answer.";
+  }
+
+  _handleChatStreamFailure(error, streamController) {
+    const userStopped = this._userStoppedGeneration === true;
+    this._userStoppedGeneration = false;
+
+    if (userStopped) {
+      return { suppressed: true };
+    }
+
+    const errorMsg =
+      error?.name === "AbortError"
+        ? "Generation stopped or timed out. Try a faster model or increase timeout in settings."
+        : `AI error: ${error.message}`;
+
+    this._postMessage({ type: "error", text: errorMsg });
+    this._postMessage({ type: "done" });
+    return { suppressed: false, errorMsg };
+  }
+
+  _resolveGStackRequest(message) {
+    return parseGStackCommand(message);
   }
 
   async runBugScan(editor) {
@@ -177,9 +474,11 @@ class ChatPanel {
   _registerEditForUndo({ filePath, before, after, label }) {
     if (typeof before !== "string" || typeof after !== "string") return null;
     if (before === after) return null;
+    const sessionId = this._getCurrentChatSessionId();
     const id = `undo-${++this._undoIdCounter}-${Date.now()}`;
     this._undoStack.push({
       id,
+      sessionId: sessionId || null,
       filePath: String(filePath || ""),
       before,
       after,
@@ -188,7 +487,33 @@ class ChatPanel {
     });
     // Bound the stack so a long session does not retain unbounded buffers
     if (this._undoStack.length > 50) this._undoStack.shift();
+    this._postUndoState();
     return id;
+  }
+
+  _getCurrentChatSessionId() {
+    return this.agent?.getSessionState?.().currentSessionId || null;
+  }
+
+  _getLatestUndoEntry(targetSessionId = this._getCurrentChatSessionId()) {
+    for (let idx = this._undoStack.length - 1; idx >= 0; idx -= 1) {
+      const entry = this._undoStack[idx];
+      if (
+        !targetSessionId ||
+        !entry?.sessionId ||
+        entry.sessionId === targetSessionId
+      ) {
+        return { entry, idx };
+      }
+    }
+    return { entry: null, idx: -1 };
+  }
+
+  _discardUndoEntriesForSession(sessionId) {
+    if (!sessionId) return;
+    this._undoStack = this._undoStack.filter(
+      (entry) => !entry?.sessionId || entry.sessionId !== sessionId
+    );
   }
 
   _findEditorForFile(filePath) {
@@ -206,10 +531,15 @@ class ChatPanel {
   // omitted). On success, the entry is removed from the stack. On failure,
   // it is restored so the user can retry.
   async _undoEdit(id) {
-    if (this._undoStack.length === 0) {
+    const currentSessionId = this._getCurrentChatSessionId();
+    const latestForSession = this._getLatestUndoEntry(currentSessionId);
+    if (this._undoStack.length === 0 || (!id && !latestForSession.entry)) {
+      this._postUndoState();
       this._postMessage({
         type: "status",
-        text: "Nothing to undo."
+        text: currentSessionId
+          ? "Nothing to undo in this chat."
+          : "Nothing to undo."
       });
       return { success: false, error: "empty_stack" };
     }
@@ -218,14 +548,25 @@ class ChatPanel {
     if (id) {
       idx = this._undoStack.findIndex((e) => e.id === id);
       if (idx < 0) {
-        this._postMessage({
-          type: "status",
-          text: "That edit has already been undone."
-        });
-        return { success: false, error: "not_found" };
+        const sessionEntries = this._undoStack.filter(
+          (entry) =>
+            !currentSessionId ||
+            !entry?.sessionId ||
+            entry.sessionId === currentSessionId
+        );
+        if (sessionEntries.length === 1 && latestForSession.idx >= 0) {
+          idx = latestForSession.idx;
+        } else {
+          this._postUndoState();
+          this._postMessage({
+            type: "status",
+            text: "That edit has already been undone."
+          });
+          return { success: false, error: "not_found" };
+        }
       }
     } else {
-      idx = this._undoStack.length - 1;
+      idx = latestForSession.idx;
     }
 
     const entry = this._undoStack.splice(idx, 1)[0];
@@ -245,6 +586,7 @@ class ChatPanel {
     }
 
     if (result && result.success) {
+      this._postUndoState();
       this._postMessage({
         type: "editUndone",
         id: entry.id
@@ -259,6 +601,7 @@ class ChatPanel {
 
     // Restore the entry so the user can retry the undo.
     this._undoStack.splice(idx, 0, entry);
+    this._postUndoState();
     this._postMessage({
       type: "error",
       text: `Undo failed for ${baseName}: ${result?.error || "unknown error"}`
@@ -937,6 +1280,69 @@ class ChatPanel {
     }
   }
 
+
+  _getEffectiveWorkspaceFolder() {
+    const activeEditor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
+    if (activeEditor?.document?.uri?.scheme === "file") {
+      const activeFilePath = activeEditor.document.fileName;
+      const activeWorkspace = vscode.workspace.getWorkspaceFolder?.(
+        activeEditor.document.uri
+      )?.uri?.fsPath;
+      if (activeWorkspace) {
+        return activeWorkspace;
+      }
+      if (activeFilePath) {
+        return path.dirname(activeFilePath);
+      }
+    }
+
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+  }
+
+  _withWorkspaceRoot(writeOptions = {}, workspaceFolder) {
+    return workspaceFolder
+      ? { ...writeOptions, workspaceRoot: workspaceFolder }
+      : writeOptions;
+  }
+
+  async _findGitRoot(startPath) {
+    if (!startPath) return null;
+
+    let currentPath = startPath;
+    try {
+      const stat = await fs.stat(currentPath);
+      if (stat.isFile()) {
+        currentPath = path.dirname(currentPath);
+      }
+    } catch {
+      currentPath = path.dirname(currentPath);
+    }
+
+    let probePath = currentPath;
+    const filesystemRoot = path.parse(probePath).root;
+
+    while (probePath) {
+      try {
+        const gitStat = await fs.stat(path.join(probePath, ".git"));
+        if (gitStat.isDirectory() || gitStat.isFile()) {
+          return probePath;
+        }
+      } catch {
+        // Keep walking upward.
+      }
+
+      if (probePath === filesystemRoot) {
+        break;
+      }
+      probePath = path.dirname(probePath);
+    }
+
+    return null;
+  }
+
+  async _isGitRepository(workspaceFolder, filePath = null) {
+    return !!(await this._findGitRoot(filePath || workspaceFolder));
+  }
   _getCurrentFileEditor() {
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor && activeEditor.document.uri.scheme === "file") {
@@ -949,32 +1355,151 @@ class ChatPanel {
     return null;
   }
 
-  _validateGeneratedFileContent(originalContent, nextContent, language, relativePath) {
-    const candidate = typeof nextContent === "string" ? nextContent.trim() : "";
-    const original = typeof originalContent === "string" ? originalContent : "";
-
-    if (!candidate) {
-      return { ok: false, reason: "AI returned an empty file." };
-    }
-
+  _looksLikePlaceholderGeneratedContent(content) {
+    const candidate = String(content || "");
+    const normalizedCandidate = candidate
+      // Allow normal HTML/CSS placeholder usage such as
+      // `placeholder="Email"` and `input::placeholder`.
+      .replace(/\bplaceholder\s*=\s*(["'])[\s\S]*?\1/gi, " ")
+      .replace(/::placeholder\b/gi, " ");
     const placeholderPatterns = [
       /\.\.\.\s*\(unchanged/i,
       /unchanged\s+(html|css|javascript|js|content|code)/i,
-      /placeholder/i,
+      /\bplaceholder\s+(text|content|copy|markup|html|css|javascript|js|code)\b/i,
+      /\b(?:replace|fill in|insert|add)\s+(?:the|your)\s+(?:rest of the\s+)?(html|css|javascript|js|content|code)\b/i,
+      /\b(?:existing|your)\s+(html|css|javascript|js|content|code)\s+(?:here|goes here)\b/i,
+      /\[\s*(?:placeholder|existing [^\]]+|your [^\]]+)\s*\]/i,
       /your code here/i,
-      /existing (html|css|javascript|js|code)/i
+      /existing (html|css|javascript|js|code)(?:\s+here|\s+goes\s+here)?/i
     ];
 
-    if (placeholderPatterns.some((pattern) => pattern.test(candidate))) {
+    return placeholderPatterns.some((pattern) => pattern.test(normalizedCandidate));
+  }
+
+  _assessAiReplacementSafety(originalContent, nextContent, relativePath = "") {
+    const candidate = typeof nextContent === "string" ? nextContent : "";
+    const original = typeof originalContent === "string" ? originalContent : "";
+    const targetLabel = relativePath || "the file";
+    const trimmedCandidate = candidate.trim();
+
+    if (!trimmedCandidate) {
+      return { ok: false, reason: "AI returned an empty file." };
+    }
+
+    if (this._looksLikePlaceholderGeneratedContent(trimmedCandidate)) {
       return {
         ok: false,
-        reason: `AI returned placeholder content for ${relativePath || "the file"} instead of a full file.`
+        reason: `AI returned placeholder content for ${targetLabel} instead of a complete file.`
       };
     }
 
-    if (original.trim() && candidate === original.trim()) {
+    if (original.trim() && trimmedCandidate === original.trim()) {
       return { ok: false, reason: "AI did not produce any file changes." };
     }
+
+    const isCodeLikeTarget =
+      /\.(js|jsx|ts|tsx|py|java|c|cpp|cc|cxx|h|hpp|html?|json|css|scss|sass|less)$/i.test(
+        targetLabel
+      );
+    if (!isCodeLikeTarget) {
+      return { ok: true };
+    }
+
+    const originalTrimmed = original.trim();
+    if (
+      originalTrimmed.length > 120 &&
+      trimmedCandidate.length < Math.max(80, Math.floor(originalTrimmed.length * 0.5))
+    ) {
+      return {
+        ok: false,
+        reason: `AI output for ${targetLabel} is much shorter than the existing code and may be truncated.`
+      };
+    }
+
+    const originalNonEmptyLines = original
+      .split(/\r?\n/)
+      .filter((line) => line.trim()).length;
+    const candidateNonEmptyLines = candidate
+      .split(/\r?\n/)
+      .filter((line) => line.trim()).length;
+    if (
+      originalNonEmptyLines >= 8 &&
+      candidateNonEmptyLines < Math.max(3, Math.floor(originalNonEmptyLines * 0.5))
+    ) {
+      return {
+        ok: false,
+        reason: `AI output for ${targetLabel} removes too much non-empty code and may be incomplete.`
+      };
+    }
+
+    return { ok: true };
+  }
+
+  async _assessEditSafetyBeforeApply(
+    workspaceFolder,
+    filePath,
+    originalContent,
+    nextContent
+  ) {
+    const replacementSafety = this._assessAiReplacementSafety(
+      originalContent,
+      nextContent,
+      filePath
+    );
+    if (!replacementSafety.ok) {
+      return replacementSafety;
+    }
+
+    const syntaxCheck = await this.agent._runSyntaxCheck(
+      filePath,
+      workspaceFolder,
+      nextContent
+    );
+    if (syntaxCheck && !syntaxCheck.success && !syntaxCheck.skipped) {
+      return {
+        ok: false,
+        reason: `Refusing to apply syntax-invalid update to ${filePath}: ${syntaxCheck.error || syntaxCheck.output || "Syntax check failed"}`
+      };
+    }
+
+    return { ok: true };
+  }
+
+  _hasExecutableFileAction(actions) {
+    if (!Array.isArray(actions)) {
+      return false;
+    }
+
+    return actions.some((action) => {
+      if (!action) return false;
+      if (action.type === "file") {
+        return typeof action.content === "string" && action.content.trim().length > 0;
+      }
+      if (action.type === "patch") {
+        return typeof action.search === "string" && typeof action.replace === "string";
+      }
+      return false;
+    });
+  }
+
+  _shouldBlockIncompleteStructuredExecution(response) {
+    if (!this._hasExecutableFileAction(response?.actions)) {
+      return false;
+    }
+
+    return !!this.agent?._hasIncompleteStructuredEditWarning?.(response?.warnings);
+  }
+
+  _validateGeneratedFileContent(originalContent, nextContent, language, relativePath) {
+    const replacementSafety = this._assessAiReplacementSafety(
+      originalContent,
+      nextContent,
+      relativePath
+    );
+    if (!replacementSafety.ok) {
+      return replacementSafety;
+    }
+    const candidate = typeof nextContent === "string" ? nextContent.trim() : "";
 
     if (language === "html") {
       const hasHtmlShell =
@@ -991,6 +1516,193 @@ class ChatPanel {
     }
 
     return { ok: true };
+  }
+
+  _sanitizeSyntaxErrorOutput(errorOutput) {
+    return String(errorOutput || "")
+      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g, "")
+      .replace(/\d{2}:\d{2}:\d{2}/g, "")
+      .replace(/\d{2}\/\d{2}\/\d{4}/g, "")
+      .replace(/\[\d{4}-\d{2}-\d{2}.*?\]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  _getSyntaxFixLanguage(fileName) {
+    const ext = path.extname(String(fileName || "")).toLowerCase();
+    const langMap = {
+      ".js": "javascript",
+      ".jsx": "javascript",
+      ".ts": "typescript",
+      ".tsx": "typescript",
+      ".py": "python",
+      ".java": "java",
+      ".c": "c",
+      ".cpp": "cpp",
+      ".h": "c",
+      ".hpp": "cpp",
+      ".html": "html",
+      ".htm": "html"
+    };
+    return langMap[ext] || "code";
+  }
+
+  _buildSyntaxFixPrompt(relativePath, fileName, fileContent, syntaxCheck) {
+    const language = this._getSyntaxFixLanguage(fileName);
+    const rawError = syntaxCheck?.error || syntaxCheck?.output || "Unknown syntax error";
+    const errorOutput = this._sanitizeSyntaxErrorOutput(rawError);
+    const prompt = `Fix the syntax errors in this ${language} file. Return exactly one FILE action with the complete corrected file.\n\nFile: ${relativePath}\n\nSyntax errors:\n${errorOutput}\n\nCurrent file content:\n\`\`\`${language}\n${fileContent}\n\`\`\``;
+    return { prompt, language, errorOutput };
+  }
+
+  async _requestSyntaxFixAction(
+    fileName,
+    relativePath,
+    fileContent,
+    syntaxCheck,
+    workspaceFolder,
+    runtimeConfig,
+    streamCallback = null
+  ) {
+    const { prompt, language, errorOutput } = this._buildSyntaxFixPrompt(
+      relativePath,
+      fileName,
+      fileContent,
+      syntaxCheck
+    );
+
+    const response = await this.agent.chat(
+      prompt,
+      workspaceFolder,
+      streamCallback,
+      null,
+      { mode: "heavy", runtimeConfig }
+    );
+
+    if (response.error) {
+      return { success: false, error: response.error, errorOutput };
+    }
+
+    const fileAction = (response.actions || []).find(
+      (action) => action.type === "file" && action.content
+    );
+    if (!fileAction) {
+      return {
+        success: false,
+        error:
+          "AI did not generate a file fix. Try rephrasing your request or use a different AI model.",
+        errorOutput
+      };
+    }
+
+    const generatedContentCheck = this._validateGeneratedFileContent(
+      fileContent,
+      fileAction.content,
+      language,
+      relativePath
+    );
+    if (!generatedContentCheck.ok) {
+      return {
+        success: false,
+        error: generatedContentCheck.reason,
+        errorOutput
+      };
+    }
+
+    return {
+      success: true,
+      fileAction,
+      language,
+      errorOutput
+    };
+  }
+
+  async _repairSyntaxForWorkspaceFile(
+    relativePath,
+    workspaceFolder,
+    syntaxCheck,
+    writeOptions = {},
+    runtimeConfig = null
+  ) {
+    const fullPath = path.join(workspaceFolder, relativePath);
+    let fileContent = "";
+    try {
+      fileContent = await fs.readFile(fullPath, "utf8");
+    } catch (error) {
+      return {
+        success: false,
+        error: `Unable to read ${relativePath} for syntax repair: ${error.message}`
+      };
+    }
+
+    const repairPlan = await this._requestSyntaxFixAction(
+      fullPath,
+      relativePath,
+      fileContent,
+      syntaxCheck,
+      workspaceFolder,
+      runtimeConfig
+    );
+    if (!repairPlan.success) {
+      return repairPlan;
+    }
+
+    const applyResult = await this.agent.applyChanges(
+      relativePath,
+      repairPlan.fileAction.content,
+      false,
+      this._withWorkspaceRoot(writeOptions, workspaceFolder)
+    );
+    if (!applyResult.success) {
+      return {
+        success: false,
+        error: applyResult.error || `Failed to apply syntax repair to ${relativePath}`
+      };
+    }
+
+    const verifyCheck = await this.agent._runSyntaxCheck(
+      fullPath,
+      workspaceFolder,
+      applyResult.newContent || repairPlan.fileAction.content
+    );
+    const verificationPassed =
+      !verifyCheck || verifyCheck.success || verifyCheck.skipped;
+
+    if (!verificationPassed) {
+      let rollbackNote = "";
+      if (
+        applyResult.success &&
+        !applyResult.created &&
+        typeof applyResult.previousContent === "string"
+      ) {
+        const rollbackResult = await this.agent.applyChanges(
+          relativePath,
+          applyResult.previousContent,
+          false,
+          this._withWorkspaceRoot(
+            { ...writeOptions, allowEmpty: true, allowDocTruncate: true },
+            workspaceFolder
+          )
+        );
+        rollbackNote = rollbackResult.success
+          ? " Restored the previous file contents."
+          : ` Failed to restore the previous file contents: ${rollbackResult.error}`;
+      }
+
+      return {
+        success: false,
+        applyResult,
+        verification: verifyCheck,
+        error: `Syntax repair did not fully resolve ${relativePath}: ${verifyCheck.error || verifyCheck.output || "Unknown syntax error"}.${rollbackNote}`
+      };
+    }
+
+    return {
+      success: true,
+      applyResult,
+      verification: verifyCheck,
+      error: null
+    };
   }
 
   async _runActiveSyntaxFix(workspaceFolder) {
@@ -1051,74 +1763,35 @@ class ChatPanel {
     }
 
     // Syntax errors found - use AI to fix
-    let errorOutput = syntaxCheck.error || syntaxCheck.output || "Unknown syntax error";
-    
-    // Clean up error output: remove timestamps and date/time patterns
-    errorOutput = errorOutput
-      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g, "") // YYYY-MM-DD HH:MM:SS
-      .replace(/\d{2}:\d{2}:\d{2}/g, "") // HH:MM:SS
-      .replace(/\d{2}\/\d{2}\/\d{4}/g, "") // MM/DD/YYYY
-      .replace(/\[\d{4}-\d{2}-\d{2}.*?\]/g, "") // [YYYY-MM-DD ...]
-      .replace(/\s{2,}/g, " ") // collapse multiple spaces
-      .trim();
-    
+    const { errorOutput } = this._buildSyntaxFixPrompt(
+      relativePath,
+      fileName,
+      fileContent,
+      syntaxCheck
+    );
+
     this._postMessage({
       type: "stream",
       text: `Syntax errors detected:\n${errorOutput}\n\nGenerating fix...`
     });
 
-    const ext = path.extname(fileName).toLowerCase();
-    const langMap = {
-      ".js": "javascript",
-      ".jsx": "javascript",
-      ".ts": "typescript",
-      ".tsx": "typescript",
-      ".py": "python",
-      ".java": "java",
-      ".c": "c",
-      ".cpp": "cpp",
-      ".h": "c",
-      ".hpp": "cpp"
-    };
-    const language = langMap[ext] || "code";
-
-    const fixPrompt = `Fix the syntax errors in this ${language} file. Return exactly one FILE action with the complete corrected file.\n\nFile: ${relativePath}\n\nSyntax errors:\n${errorOutput}\n\nCurrent file content:\n\`\`\`${language}\n${fileContent}\n\`\`\``;
-
     const runtimeConfig = await this._getEffectiveAiConfig();
-    const response = await this.agent.chat(
-      fixPrompt,
-      workspaceFolder,
-      (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
-      null,
-      { mode: "heavy", runtimeConfig }
-    );
-
-    if (response.error) {
-      this._postMessage({ type: "error", text: response.error });
-      this._postMessage({ type: "done" });
-      return;
-    }
-
-    const fileAction = (response.actions || []).find(a => a.type === "file" && a.content);
-    if (!fileAction) {
-      this._postMessage({
-        type: "error",
-        text: "AI did not generate a file fix. Try rephrasing your request or use a different AI model."
-      });
-      this._postMessage({ type: "done" });
-      return;
-    }
-
-    const generatedContentCheck = this._validateGeneratedFileContent(
+    const repairPlan = await this._requestSyntaxFixAction(
+      fileName,
+      relativePath,
       fileContent,
-      fileAction.content,
-      language,
-      relativePath
+      syntaxCheck,
+      workspaceFolder,
+      runtimeConfig,
+      (chunk) => {
+        this._postMessage({ type: "stream", text: chunk });
+      }
     );
-    if (!generatedContentCheck.ok) {
+
+    if (!repairPlan.success) {
       this._postMessage({
         type: "error",
-        text: generatedContentCheck.reason
+        text: repairPlan.error
       });
       this._postMessage({ type: "done" });
       return;
@@ -1126,7 +1799,10 @@ class ChatPanel {
 
     // Apply the fix surgically and register it on the undo stack so the user
     // can revert via the chat Undo button, /undo, or Ctrl+Z.
-    const applyResult = await this._applyToEditor(activeEditor, fileAction.content);
+    const applyResult = await this._applyToEditor(
+      activeEditor,
+      repairPlan.fileAction.content
+    );
     if (!applyResult.success) {
       this._postMessage({
         type: "error",
@@ -1157,7 +1833,8 @@ class ChatPanel {
       workspaceFolder,
       activeEditor.document.getText()
     );
-    if (verifyCheck && verifyCheck.success) {
+    const verificationPassed = !!(verifyCheck && verifyCheck.success);
+    if (verificationPassed) {
       this._postMessage({
         type: "stream",
         text: "\n\nSyntax errors fixed successfully!"
@@ -1168,6 +1845,18 @@ class ChatPanel {
         text: "\n\nWarning: Fix applied, but some syntax issues may remain. Please review the changes."
       });
     }
+
+    this._postFixInsights(
+      applyResult.path,
+      applyResult.previousContent,
+      applyResult.newContent,
+      {
+        syntaxErrorOutput: errorOutput,
+        verificationPassed,
+        knownSyntaxBefore: false,
+        knownSyntaxAfter: verificationPassed
+      }
+    );
 
     this._postMessage({ type: "done" });
   }
@@ -1428,8 +2117,37 @@ class ChatPanel {
     this._postMessage({
       type: "sessionState",
       ...this.agent.getSessionState(),
+      ...this._getUndoState(),
       ...extra
     });
+  }
+
+  _getUndoState() {
+    const latestEntry = this._getLatestUndoEntry().entry;
+    return {
+      canUndo: !!latestEntry,
+      latestUndoId: latestEntry?.id || null
+    };
+  }
+
+  _postUndoState() {
+    this._postMessage({
+      type: "undoState",
+      ...this._getUndoState()
+    });
+  }
+
+  _deleteSessionAndRefresh(sessionId) {
+    if (!sessionId) return false;
+    this._discardUndoEntriesForSession(sessionId);
+    this.agent.deleteSession(sessionId);
+    this._outsideWorkspaceAllowed = false;
+    this._postSessionState();
+    this._postMessage({
+      type: "status",
+      text: "Chat deleted."
+    });
+    return true;
   }
 
   _getFallbackModelsForProvider(provider) {
@@ -1509,25 +2227,25 @@ class ChatPanel {
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "openrouter" && !openrouterApiKey) {
       console.log("[ChatPanel] CRITICAL: OpenRouter selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "anthropic" && !anthropicApiKey) {
       console.log("[ChatPanel] CRITICAL: Anthropic selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     } else if (selectedProvider === "nvidia" && !nvidiaApiKey) {
       console.log("[ChatPanel] CRITICAL: NVIDIA selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
-      config.model = "qwen2.5-coder:1.5b";
+      config.model = this._getDefaultModelForProvider("ollama");
     }
 
     if (customProvider) {
@@ -1755,6 +2473,48 @@ class ChatPanel {
     };
   }
 
+  _postFixInsights(filePath, beforeCode, afterCode, options = {}) {
+    if (
+      typeof beforeCode !== "string" ||
+      typeof afterCode !== "string" ||
+      beforeCode === afterCode
+    ) {
+      return;
+    }
+
+    try {
+      const insights = buildFixInsights({
+        filePath,
+        beforeCode,
+        afterCode,
+        syntaxErrorOutput: options.syntaxErrorOutput || "",
+        verificationPassed:
+          typeof options.verificationPassed === "boolean"
+            ? options.verificationPassed
+            : null,
+        knownSyntaxBefore:
+          typeof options.knownSyntaxBefore === "boolean"
+            ? options.knownSyntaxBefore
+            : null,
+        knownSyntaxAfter:
+          typeof options.knownSyntaxAfter === "boolean"
+            ? options.knownSyntaxAfter
+            : null
+      });
+
+      if (!insights) {
+        return;
+      }
+
+      this._postMessage({
+        type: "fixInsights",
+        insights
+      });
+    } catch (error) {
+      console.warn("Could not generate fix insights:", error.message);
+    }
+  }
+
   _shouldInspectPreviewRequest(message) {
     const text = String(message || "");
     return /\b(preview|render|runtime|page|ui)\b/i.test(text) &&
@@ -1841,7 +2601,7 @@ ${document.getText()}
       workspaceFolder,
       null,
       null,
-      { mode: "heavy", runtimeConfig }
+      { mode: "heavy", runtimeConfig, skipHistory: true }
     );
 
     if (response.error) {
@@ -1861,6 +2621,16 @@ ${document.getText()}
       };
     }
 
+    const safetyCheck = await this._assessEditSafetyBeforeApply(
+      workspaceFolder,
+      relativePath,
+      document.getText(),
+      fileAction.content
+    );
+    if (!safetyCheck.ok) {
+      return { success: false, error: safetyCheck.reason };
+    }
+
     const result = await this._applyToEditor(activeEditor, fileAction.content);
     if (!result.success) {
       return result;
@@ -1878,6 +2648,7 @@ ${document.getText()}
     return {
       success: true,
       path: relativePath,
+      applyResult: result,
       verification
     };
   }
@@ -1933,12 +2704,13 @@ ${document.getText()}
     if (!targetPath) {
       return "";
     }
-    if (!workspaceFolder) {
+    const baseRoot = workspaceFolder || this._getEffectiveWorkspaceFolder();
+    if (!baseRoot) {
       return path.resolve(targetPath);
     }
     return path.isAbsolute(targetPath)
       ? path.resolve(targetPath)
-      : path.resolve(workspaceFolder, targetPath);
+      : path.resolve(baseRoot, targetPath);
   }
 
   _normalizeActionPathForMatch(filePath) {
@@ -2055,6 +2827,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       mode: recoveryMode,
       intentOverride: "edit",
       runtimeConfig,
+      skipHistory: true,
       onStatus: (text) => {
         if (this._shouldSuppressInternalStatus(text)) {
           return;
@@ -2076,6 +2849,10 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     writeOptions,
     runtimeConfig = null
   ) {
+    const effectiveWriteOptions = this._withWorkspaceRoot(
+      writeOptions,
+      workspaceFolder
+    );
     this._postMessage({
       type: "status",
       text: `Patch did not match ${action.path}. Retrying with broader file context...`
@@ -2121,7 +2898,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
           retryPatch.path,
           patched.content,
           outside,
-          writeOptions
+          effectiveWriteOptions
         );
       }
     }
@@ -2135,7 +2912,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
         retryFile.path,
         retryFile.content,
         outside,
-        writeOptions
+        effectiveWriteOptions
       );
     }
 
@@ -2185,7 +2962,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       fileAction.path,
       fileAction.content,
       outside,
-      writeOptions
+      effectiveWriteOptions
     );
   }
 
@@ -2327,11 +3104,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
   }
 
   _isEditLikeIntent(intent, message) {
-    if (intent === "edit" || intent === "create") return true;
-    if ((intent === "debug" || intent === "refactor") && this.agent._isEditRequest(message || "")) {
-      return true;
-    }
-    return false;
+    return !!this.agent?._shouldTreatAsEditIntent?.(intent, message || "");
   }
 
   _hasExplicitCommandRequest(message) {
@@ -2340,20 +3113,830 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     );
   }
 
+  _isContextInspectionCommand(command) {
+    const normalized = String(command || "").trim().toLowerCase();
+    if (!normalized) return false;
+    return /^(rg|grep|findstr|select-string|sls|get-content|gc|get-childitem|gci|get-item|gi|resolve-path|dir|ls|pwd|tree|type|cat|head|tail|find|which|where)\b/.test(
+      normalized
+    ) || /^(git\s+(status|diff|show|log|branch|rev-parse)\b)/.test(normalized) ||
+      /^(npm(\.cmd)?\s+(list|ls|outdated|audit|explain|query|pkg|root|prefix|view)\b)/.test(normalized) ||
+      /^(pnpm(\.cmd)?\s+(list|outdated|why)\b)/.test(normalized) ||
+      /^(yarn(\.cmd)?\s+(list|why|info)\b)/.test(normalized);
+  }
+
+  _isVerificationCommand(command) {
+    const normalized = String(command || "").trim().toLowerCase();
+    if (!normalized) return false;
+    return /^(npm(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(pnpm(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(yarn(\.cmd)?\s+(test\b|run\s+(lint|typecheck|build|test|check|verify|validate)\b))/.test(
+      normalized
+    ) || /^(node\s+--check\b|python3?\s+-m\s+(py_compile|flake8|pylint|pytest|unittest)\b|pytest\b|eslint\b|tsc\b|javac\b)/.test(
+      normalized
+    ) || /^(mvn\s+(clean|compile|test|package|verify)\b|gradle\s+(clean|build|test)\b|cargo\s+(build|test|check|run)\b|go\s+(build|test|run)\b|dotnet\s+(build|test|run)\b|arduino-cli\s+(compile|lib\s+list|lib\s+search|board\s+list)\b)/.test(
+      normalized
+    );
+  }
+
+  _isInspectionAction(action) {
+    if (!action || typeof action.type !== "string") {
+      return false;
+    }
+
+    if (action.type === "read") {
+      return typeof action.path === "string" && action.path.trim().length > 0;
+    }
+
+    if (action.type === "grep") {
+      return typeof action.query === "string" && action.query.trim().length > 0;
+    }
+
+    if (action.type === "cmd") {
+      return this._isContextInspectionCommand(action.command);
+    }
+
+    return false;
+  }
+
+  _hasOnlyInspectionActions(actions = []) {
+    return Array.isArray(actions) &&
+      actions.length > 0 &&
+      actions.every((action) => this._isInspectionAction(action));
+  }
+
+  _formatInspectionTranscript(label, content, language = "") {
+    const source = String(content || "");
+    if (!source.trim()) {
+      return `${label}\n\`\`\`${language}\n[no output]\n\`\`\``;
+    }
+
+    if (source.length <= MAX_INSPECTION_RESULT_CHARS) {
+      return `${label}\n\`\`\`${language}\n${source}\n\`\`\``;
+    }
+
+    const headChars = Math.max(6000, Math.floor(MAX_INSPECTION_RESULT_CHARS * 0.6));
+    const tailChars = Math.max(3000, MAX_INSPECTION_RESULT_CHARS - headChars);
+    const head = source.slice(0, headChars);
+    const tail = source.slice(-tailChars);
+    const omitted = Math.max(0, source.length - head.length - tail.length);
+
+    return `${label}\n\`\`\`${language}\n${head}\n...\n[truncated ${omitted} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _buildInspectionMatcher(query) {
+    const raw = String(query || "").trim();
+    if (!raw) {
+      return {
+        description: "",
+        test: () => false
+      };
+    }
+
+    const regexMatch = raw.match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
+    if (regexMatch) {
+      try {
+        const flags = regexMatch[2].replace(/g/g, "");
+        const regex = new RegExp(regexMatch[1], flags);
+        return {
+          description: raw,
+          test: (line) => regex.test(line)
+        };
+      } catch {
+        // Fall back to literal matching below.
+      }
+    }
+
+    const lowered = raw.toLowerCase();
+    return {
+      description: raw,
+      test: (line) => String(line || "").toLowerCase().includes(lowered)
+    };
+  }
+
+  _displayInspectionPath(workspaceFolder, fullPath, fallbackPath = "") {
+    if (!fullPath) {
+      return String(fallbackPath || "");
+    }
+    if (!workspaceFolder) {
+      return fullPath.replace(/\\/g, "/");
+    }
+
+    const relativePath = path.relative(workspaceFolder, fullPath);
+    if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      return fullPath.replace(/\\/g, "/");
+    }
+
+    return relativePath.replace(/\\/g, "/");
+  }
+
+  async _runReadInspectionAction(action, workspaceFolder) {
+    const targetPath = String(action?.path || "").trim();
+    if (!targetPath) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "READ: [invalid path]",
+          "Error: READ path was empty."
+        )
+      };
+    }
+
+    const fullPath = this._resolveActionFilePath(workspaceFolder, targetPath);
+    const editor = this._findEditorForFile(fullPath) || this._getCurrentFileEditor();
+    let content = "";
+
+    try {
+      if (
+        editor?.document?.uri?.scheme === "file" &&
+        path.resolve(editor.document.fileName) === path.resolve(fullPath)
+      ) {
+        content = editor.document.getText();
+      } else {
+        content = await fs.readFile(fullPath, "utf8");
+      }
+    } catch (error) {
+      const displayPath = this._displayInspectionPath(
+        workspaceFolder,
+        fullPath,
+        targetPath
+      );
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `READ: ${displayPath}`,
+          `Error: ${error.message}`
+        )
+      };
+    }
+
+    const displayPath = this._displayInspectionPath(
+      workspaceFolder,
+      fullPath,
+      targetPath
+    );
+    const language = path.extname(displayPath).replace(/^\./, "");
+    return {
+      success: true,
+      transcript: this._formatInspectionTranscript(
+        `READ: ${displayPath}`,
+        content,
+        language
+      )
+    };
+  }
+
+  async _runGrepInspectionAction(action, workspaceFolder) {
+    const query = String(action?.query || "").trim();
+    if (!query) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "GREP: [empty query]",
+          "Error: GREP query was empty."
+        )
+      };
+    }
+
+    if (!workspaceFolder) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `GREP: ${query}`,
+          "Error: GREP requires an open workspace."
+        )
+      };
+    }
+
+    await this.agent.ensureCodebaseScanned(workspaceFolder);
+    const matcher = this._buildInspectionMatcher(query);
+    const matches = [];
+
+    for (const [relativePath, fileData] of this.agent.codebaseContext.entries()) {
+      const content = String(fileData?.content || "");
+      if (!content) continue;
+
+      const lines = content.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        if (!matcher.test(line)) continue;
+
+        matches.push(
+          `${relativePath}:${index + 1}: ${String(line || "").trim().slice(0, 220)}`
+        );
+        if (matches.length >= MAX_INSPECTION_MATCHES) {
+          break;
+        }
+      }
+
+      if (matches.length >= MAX_INSPECTION_MATCHES) {
+        break;
+      }
+    }
+
+    const output = matches.length > 0
+      ? matches.join("\n")
+      : "No matches found in indexed workspace files.";
+
+    return {
+      success: matches.length > 0,
+      transcript: this._formatInspectionTranscript(
+        `GREP: ${matcher.description || query}`,
+        output,
+        "text"
+      )
+    };
+  }
+
+  async _runInspectionCommandAction(action, workspaceFolder) {
+    const command = String(action?.command || "").trim();
+    if (!command) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          "CMD: [empty command]",
+          "Error: inspection command was empty."
+        )
+      };
+    }
+
+    if (!this._isContextInspectionCommand(command)) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `CMD: ${command}`,
+          "Error: only read-only inspection commands can run in the grounding phase."
+        )
+      };
+    }
+
+    const validation = this.agent.validateCommand(command);
+    if (!validation.allowed) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          `CMD: ${command}`,
+          `Error: ${validation.reason}`
+        )
+      };
+    }
+
+    const result = await this.agent.executeCommand(command, workspaceFolder);
+    const output = result.success
+      ? result.output || "Done."
+      : `${result.error || "Command failed"}${result.output ? `\n${result.output}` : ""}`;
+    return {
+      success: result.success,
+      transcript: this._formatInspectionTranscript(
+        `CMD: ${command}`,
+        output,
+        "text"
+      )
+    };
+  }
+
+  async _runInspectionAction(action, workspaceFolder) {
+    if (action?.type === "read") {
+      return this._runReadInspectionAction(action, workspaceFolder);
+    }
+    if (action?.type === "grep") {
+      return this._runGrepInspectionAction(action, workspaceFolder);
+    }
+    if (action?.type === "cmd") {
+      return this._runInspectionCommandAction(action, workspaceFolder);
+    }
+    return {
+      success: false,
+      transcript: this._formatInspectionTranscript(
+        `UNKNOWN: ${action?.type || "action"}`,
+        "Error: unsupported inspection action."
+      )
+    };
+  }
+
+  _buildInspectionFollowUpPrompt(originalRequest, inspectionResults = []) {
+    const transcript = inspectionResults
+      .map((result) => String(result?.transcript || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+    return `You are continuing an edit request after a real workspace inspection round.
+Return executable structured actions only.
+
+Original user request:
+${originalRequest}
+
+Inspection results:
+${transcript || "[no inspection output]"}
+
+Now continue the professional edit loop:
+- Use the inspection results above as ground truth.
+- If you now have enough evidence, return PATCH: or FILE: actions to make the change.
+- Prefer PATCH for existing files and keep SEARCH blocks unique.
+- Preserve unrelated code, comments, formatting, and behavior.
+- Add focused verification CMD: only when it materially proves the fix.
+- Do not repeat the same READ:, GREP:, or inspection CMD: actions unless the earlier result failed or was insufficient.
+- Do not output explanations.`;
+  }
+
+  async _runAgenticInspectionRound(
+    originalRequest,
+    actions,
+    workspaceFolder,
+    runtimeConfig,
+    requestMode
+  ) {
+    const inspectionActions = Array.isArray(actions)
+      ? actions.filter((action) => this._isInspectionAction(action))
+      : [];
+    if (inspectionActions.length === 0) {
+      return {
+        error: "No inspection actions were available to run."
+      };
+    }
+
+    const inspectionResults = [];
+    for (const action of inspectionActions) {
+      inspectionResults.push(await this._runInspectionAction(action, workspaceFolder));
+    }
+
+    const nextMode = requestMode === "fast" ? "heavy" : requestMode;
+    return this.agent.chat(
+      this._buildInspectionFollowUpPrompt(originalRequest, inspectionResults),
+      workspaceFolder,
+      null,
+      null,
+      {
+        mode: nextMode,
+        intentOverride: "edit",
+        interactionStyle: this._getInteractionStyleForRequest(true),
+        runtimeConfig,
+        skipHistory: true,
+        onStatus: (text) => {
+          if (this._shouldSuppressInternalStatus(text)) {
+            return;
+          }
+          this._postMessage({
+            type: "status",
+            text: `Inspection follow-up: ${text}`
+          });
+        }
+      }
+    );
+  }
+
   _shouldSuppressGeneratedCommand(
     isEditLikeIntent,
     hasExplicitCommandRequest,
-    actions = []
+    actions = [],
+    command = ""
   ) {
     if (!isEditLikeIntent || hasExplicitCommandRequest) {
       return false;
     }
 
-    return Array.isArray(actions)
+    const hasEditAction = Array.isArray(actions)
       ? actions.some(
           (action) => action && (action.type === "file" || action.type === "patch")
         )
       : false;
+
+    if (!hasEditAction) {
+      return false;
+    }
+
+    return !this._isContextInspectionCommand(command) &&
+      !this._isVerificationCommand(command);
+  }
+
+  _getGStackGateMode() {
+    const rawMode = String(
+      vscode.workspace
+        .getConfiguration("codeJanitor.ai")
+        .get("gstackGateMode", "smart") || "smart"
+    )
+      .trim()
+      .toLowerCase();
+
+    return rawMode === "off" || rawMode === "always" ? rawMode : "smart";
+  }
+
+  _normalizeGStackGateMode(mode) {
+    const rawMode = String(mode || "")
+      .trim()
+      .toLowerCase();
+    return rawMode === "off" || rawMode === "always" ? rawMode : "smart";
+  }
+
+  _postGStackGateModeState(mode = this._getGStackGateMode()) {
+    this._postMessage({
+      type: "gstackGateModeState",
+      value: this._normalizeGStackGateMode(mode)
+    });
+  }
+
+  _postAutoHealState() {
+    this._postMessage({
+      type: "autoHealState",
+      ...this.performanceMonitor.getAutoHealUiState()
+    });
+  }
+
+  _getEditableActions(actions = []) {
+    return Array.isArray(actions)
+      ? actions.filter(
+          (action) =>
+            action &&
+            (action.type === "file" ||
+              action.type === "patch" ||
+              action.type === "mkdir")
+        )
+      : [];
+  }
+
+  _hasOversizedGateFileAction(actions = []) {
+    return this._getEditableActions(actions).some(
+      (action) =>
+        action?.type === "file" &&
+        typeof action.content === "string" &&
+        action.content.length > GSTACK_GATE_MAX_FILE_REVIEW_CHARS
+    );
+  }
+
+  _isRiskyEditPath(filePath) {
+    const normalized = String(filePath || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+
+    if (!normalized) {
+      return false;
+    }
+
+    return /(^|\/)(package(-lock)?\.json|readme\.md|src\/extension\.js|src\/ai-agent\/agent\.js|src\/ai-agent\/chat-panel\.(js|html)|src\/core\/|scripts\/)/i.test(
+      normalized
+    );
+  }
+
+  _isDocumentationPath(filePath) {
+    const normalized = String(filePath || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      normalized.endsWith(".md") ||
+      normalized.startsWith("docs/") ||
+      /(^|\/)(readme|changelog|contributing|license)(\.[a-z0-9]+)?$/i.test(
+        normalized
+      )
+    );
+  }
+
+  _getGStackGateDecision(
+    requestText,
+    actions = [],
+    options = {}
+  ) {
+    const gateMode =
+      typeof options.gateMode === "string" && options.gateMode.trim()
+        ? options.gateMode.trim().toLowerCase()
+        : this._getGStackGateMode();
+    const editableActions = this._getEditableActions(actions);
+
+    if (
+      gateMode === "off" ||
+      editableActions.length === 0
+    ) {
+      return {
+        enabled: false,
+        gateMode,
+        editableActions,
+        reasons: []
+      };
+    }
+
+    // The gate prompt intentionally truncates large FILE contents for review.
+    // If we let the gate rewrite those actions, it can accidentally replace a
+    // full-file plan with a partial one derived from the truncated preview.
+    if (this._hasOversizedGateFileAction(actions)) {
+      return {
+        enabled: false,
+        gateMode,
+        editableActions,
+        reasons: []
+      };
+    }
+
+    if (gateMode === "always") {
+      return {
+        enabled: true,
+        gateMode,
+        editableActions,
+        reasons: ["always mode"]
+      };
+    }
+
+    if (options.requestMode === "bugfix" || options.requestMode === "audit") {
+      return {
+        enabled: false,
+        gateMode,
+        editableActions,
+        reasons: []
+      };
+    }
+
+    const touchedFiles = Array.from(
+      new Set(
+        editableActions
+          .map((action) => String(action.path || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const isSingleDocEdit =
+      touchedFiles.length === 1 &&
+      touchedFiles.every((filePath) => this._isDocumentationPath(filePath));
+    if (isSingleDocEdit && !actions.some((action) => action?.type === "cmd")) {
+      return {
+        enabled: false,
+        gateMode,
+        editableActions,
+        reasons: []
+      };
+    }
+    const reasons = [];
+    const text = String(requestText || "");
+
+    if (touchedFiles.length > 1) {
+      reasons.push("multiple files");
+    }
+    if (editableActions.some((action) => action.type === "file")) {
+      reasons.push("full-file rewrite or creation");
+    }
+    if (actions.some((action) => action?.type === "cmd")) {
+      reasons.push("command execution alongside edits");
+    }
+    if (touchedFiles.some((filePath) => this._isRiskyEditPath(filePath))) {
+      reasons.push("high-impact path");
+    }
+    if (
+      /\b(refactor|rewrite|migrate|architecture|auth|authentication|authorization|database|schema|state management|router|provider|config|deployment|build pipeline|release)\b/i.test(
+        text
+      )
+    ) {
+      reasons.push("high-risk request");
+    }
+    if (
+      editableActions.some(
+        (action) =>
+          action.type === "patch" &&
+          Math.max(
+            String(action.search || "").length,
+            String(action.replace || "").length
+          ) > 1800
+      )
+    ) {
+      reasons.push("large patch");
+    }
+
+    return {
+      enabled: reasons.length > 0,
+      gateMode,
+      editableActions,
+      reasons
+    };
+  }
+
+  _truncateGateSnippet(text, maxChars = 1800) {
+    const value = String(text || "");
+    if (value.length <= maxChars) {
+      return value;
+    }
+
+    const headChars = Math.max(Math.floor(maxChars * 0.7), 900);
+    const tailChars = Math.max(maxChars - headChars, 300);
+    return `${value.slice(0, headChars)}\n...\n[truncated ${value.length - headChars - tailChars} chars]\n...\n${value.slice(-tailChars)}`;
+  }
+
+  async _buildGStackGatePrompt(
+    requestText,
+    actions,
+    workspaceFolder,
+    reasons = []
+  ) {
+    const sections = [
+      "Review these planned Code Janitor edits before execution.",
+      "Reply with EXACTLY `APPROVE` if the plan is safe and well-scoped.",
+      "If changes are required, return a complete replacement set of executable structured actions only.",
+      `Original user request:\n${requestText}`
+    ];
+
+    if (reasons.length > 0) {
+      sections.push(`Why this was gated:\n- ${reasons.join("\n- ")}`);
+    }
+
+    const planLines = [];
+    for (const action of actions || []) {
+      if (!action) continue;
+      if (action.type === "file") {
+        planLines.push(`FILE ${action.path || "(missing path)"}`);
+      } else if (action.type === "patch") {
+        planLines.push(`PATCH ${action.path || "(missing path)"}`);
+      } else if (action.type === "mkdir") {
+        planLines.push(`MKDIR ${action.path || "(missing path)"}`);
+      } else if (action.type === "cmd") {
+        planLines.push(`CMD ${action.command || "(missing command)"}`);
+      }
+    }
+    if (planLines.length > 0) {
+      sections.push(`Planned actions:\n${planLines.map((line) => `- ${line}`).join("\n")}`);
+    }
+
+    const detailBlocks = [];
+    for (const action of (actions || []).slice(0, 6)) {
+      if (!action) continue;
+      if (action.type === "file") {
+        detailBlocks.push(
+          [
+            `FILE target: ${action.path}`,
+            "Planned content:",
+            "```",
+            this._truncateGateSnippet(action.content, 2200),
+            "```"
+          ].join("\n")
+        );
+        continue;
+      }
+
+      if (action.type === "patch") {
+        let currentContext = "";
+        if (workspaceFolder && action.path) {
+          try {
+            const fullPath = this._resolveActionFilePath(workspaceFolder, action.path);
+            const currentContent = await fs.readFile(fullPath, "utf8");
+            currentContext = this._buildRecoveryFileContext(action.path, currentContent);
+          } catch (_) {
+            currentContext = `Current file content for ${action.path} could not be loaded.`;
+          }
+        }
+
+        detailBlocks.push(
+          [
+            `PATCH target: ${action.path}`,
+            "SEARCH:",
+            "```",
+            this._truncateGateSnippet(action.search, 1200),
+            "```",
+            "REPLACE:",
+            "```",
+            this._truncateGateSnippet(action.replace, 1600),
+            "```",
+            currentContext
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+        continue;
+      }
+
+      if (action.type === "cmd") {
+        detailBlocks.push(`CMD:\n\`\`\`\n${action.command || ""}\n\`\`\``);
+      }
+    }
+
+    if (detailBlocks.length > 0) {
+      sections.push(detailBlocks.join("\n\n"));
+    }
+
+    return sections.join("\n\n");
+  }
+
+  async _runGStackEditGate(
+    requestText,
+    response,
+    workspaceFolder,
+    runtimeConfig,
+    options = {}
+  ) {
+    const decision = this._getGStackGateDecision(requestText, response?.actions, {
+      gateMode: options.gateMode,
+      requestMode: options.requestMode,
+      explicitWorkflowId: options.explicitWorkflowId
+    });
+
+    if (!decision.enabled) {
+      return {
+        response,
+        gateApplied: false,
+        gateApproved: false,
+        gateRevised: false
+      };
+    }
+
+    const reasonText = decision.reasons.join(", ");
+    this._postMessage({
+      type: "status",
+      text: `GStack edit gate: reviewing plan before execution${reasonText ? ` (${reasonText})` : ""}...`
+    });
+
+    const reviewPrompt = await this._buildGStackGatePrompt(
+      requestText,
+      response.actions,
+      workspaceFolder,
+      decision.reasons
+    );
+    const gateResponse = await this.agent.chat(
+      reviewPrompt,
+      workspaceFolder,
+      null,
+      null,
+      {
+        mode: "heavy",
+        intentOverride: "edit",
+        runtimeConfig,
+        systemOverlay: buildGStackEditGateOverlay(),
+        skipHistory: true,
+        onStatus: (text) => {
+          if (this._shouldSuppressGStackGateStatus(text)) {
+            return;
+          }
+          this._postMessage({
+            type: "status",
+            text: `GStack edit gate: ${text}`
+          });
+        }
+      }
+    );
+
+    if (gateResponse.error) {
+      this._postMessage({
+        type: "status",
+        text: `GStack edit gate failed open: ${gateResponse.error}`
+      });
+      return {
+        response,
+        gateApplied: true,
+        gateApproved: false,
+        gateRevised: false
+      };
+    }
+
+    const gateText = String(gateResponse.text || "").trim();
+    const revisedActions = Array.isArray(gateResponse.actions)
+      ? gateResponse.actions
+      : [];
+    const hasRevisedActions = revisedActions.length > 0;
+    const approved =
+      !hasRevisedActions &&
+      /^approve$/i.test(gateText.replace(/[`*_]/g, "").trim());
+
+    if (approved) {
+      this._postMessage({
+        type: "status",
+        text: "GStack edit gate approved the plan."
+      });
+      return {
+        response,
+        gateApplied: true,
+        gateApproved: true,
+        gateRevised: false
+      };
+    }
+
+    if (hasRevisedActions) {
+      this._postMessage({
+        type: "status",
+        text: `GStack edit gate revised the plan (${revisedActions.length} action(s)).`
+      });
+      return {
+        response: {
+          ...response,
+          text: gateResponse.text || response.text,
+          actions: revisedActions,
+          warnings: [
+            ...(response.warnings || []),
+            "GStack edit gate revised the execution plan before applying changes."
+          ]
+        },
+        gateApplied: true,
+        gateApproved: false,
+        gateRevised: true
+      };
+    }
+
+    this._postMessage({
+      type: "status",
+      text: "GStack edit gate returned non-executable feedback, continuing with the original plan."
+    });
+    return {
+      response,
+      gateApplied: true,
+      gateApproved: false,
+      gateRevised: false
+    };
   }
 
   _isMermaidRequest(message) {
@@ -2507,6 +4090,7 @@ ${trimmedText}`;
       null,
       {
         mode: this.chatMode,
+        skipHistory: true,
         onStatus: (text) => {
           if (this._shouldSuppressInternalStatus(text)) {
             return;
@@ -2542,7 +4126,7 @@ ${trimmedText}`;
       readmeAction.path,
       readmeAction.content,
       false,
-      writeOptions
+      this._withWorkspaceRoot(writeOptions, workspaceFolder)
     );
   }
 
@@ -2582,10 +4166,16 @@ ${trimmedText}`;
     }
 
     // Check git status for this file (only show if modified)
-    const gitStatus = !isOutsideWorkspace
+    const gitRoot = !isOutsideWorkspace
+      ? await this._findGitRoot(fullPath)
+      : null;
+    const gitRelativePath = gitRoot
+      ? path.relative(gitRoot, fullPath).replace(/\\/g, "/")
+      : "";
+    const gitStatus = gitRoot && gitRelativePath
       ? await this.agent.executeCommand(
-          `git status --short "${relativePath}"`,
-          workspaceFolder
+          `git status --short "${gitRelativePath}"`,
+          gitRoot
         )
       : null;
     if (gitStatus?.success && gitStatus.output.trim()) {
@@ -2617,7 +4207,12 @@ ${trimmedText}`;
     return results;
   }
 
-  async _runPostEditVerification(workspaceFolder, changedFiles) {
+  async _runPostEditVerification(
+    workspaceFolder,
+    changedFiles,
+    runtimeConfig = null,
+    writeOptions = {}
+  ) {
     if (!workspaceFolder || !Array.isArray(changedFiles) || changedFiles.length === 0) {
       return { success: true, checks: [] };
     }
@@ -2627,13 +4222,14 @@ ${trimmedText}`;
     // Categorize changed files by type
     const fileTypes = {
       js: changedFiles.filter(file => /\.(js|jsx|ts|tsx)$/i.test(file)),
+      css: changedFiles.filter(file => /\.(css|scss|sass|less)$/i.test(file)),
       py: changedFiles.filter(file => /\.py$/i.test(file)),
       java: changedFiles.filter(file => /\.java$/i.test(file)),
       html: changedFiles.filter(file => /\.html?$/i.test(file)),
       c: changedFiles.filter(file => /\.(c|cpp|h|hpp)$/i.test(file))
     };
 
-    // Run syntax checks for each file type (only report errors)
+    // Run syntax checks for each file type and auto-repair when we can.
     for (const [lang, files] of Object.entries(fileTypes)) {
       if (files.length === 0 || lang === 'c') continue; // Skip C/C++ (needs compiler)
       
@@ -2642,10 +4238,60 @@ ${trimmedText}`;
         const result = await this.agent._runSyntaxCheck(fullPath, workspaceFolder, null);
         
         if (result && !result.success && !result.skipped) {
+          this._postMessage({
+            type: "status",
+            text: `\u26a0\ufe0f Syntax error in ${file}. Attempting automatic repair...`
+          });
+
+          const repairResult = await this._repairSyntaxForWorkspaceFile(
+            file,
+            workspaceFolder,
+            result,
+            writeOptions,
+            runtimeConfig
+          );
+
+          if (repairResult.success && repairResult.applyResult?.success) {
+            const syntaxUndoId = !repairResult.applyResult.created
+              ? this._registerEditForUndo({
+                  filePath: repairResult.applyResult.path || file,
+                  before: repairResult.applyResult.previousContent,
+                  after: repairResult.applyResult.newContent,
+                  label: "syntax-fix"
+                })
+              : null;
+            this._postMessage({
+              type: "applied",
+              filePath: repairResult.applyResult.path,
+              undoId: syntaxUndoId,
+              text: `\u2705 Auto-fixed syntax in ${repairResult.applyResult.relativePath || file}\n${repairResult.applyResult.changeSummary || ""}`
+            });
+            this._postFixInsights(
+              repairResult.applyResult.path || file,
+              repairResult.applyResult.previousContent,
+              repairResult.applyResult.newContent,
+              {
+                syntaxErrorOutput: result.error || result.output || "",
+                verificationPassed: true,
+                knownSyntaxBefore: false,
+                knownSyntaxAfter: true
+              }
+            );
+            await this._revealWorkspaceFile(repairResult.applyResult.path);
+            results.checks.push({
+              file,
+              check: `${lang}-syntax-auto-fix`,
+              passed: true
+            });
+            continue;
+          }
+
           results.success = false;
           results.errors.push({ 
             file, 
-            error: (result.error || result.output).substring(0, 300), 
+            error: String(
+              repairResult.error || result.error || result.output || "Unknown syntax error"
+            ).substring(0, 300), 
             type: "syntax" 
           });
           this._postMessage({
@@ -2656,6 +4302,35 @@ ${trimmedText}`;
           results.checks.push({ file, check: `${lang}-syntax`, passed: true });
         }
       }
+    }
+
+    const frontendFiles = Array.from(
+      new Set([...fileTypes.html, ...fileTypes.css, ...fileTypes.js])
+    );
+    for (const file of frontendFiles) {
+      const verification = await this._runFrontendVerificationForFile(
+        workspaceFolder,
+        file
+      );
+      if (!verification.success) {
+        results.success = false;
+        results.errors.push({
+          file,
+          error: verification.error,
+          type: "frontend"
+        });
+        this._postMessage({
+          type: "status",
+          text: `Frontend validation found issues in ${file}`
+        });
+        continue;
+      }
+
+      results.checks.push({
+        file,
+        check: "frontend-dependencies",
+        passed: true
+      });
     }
 
     // Warn about C/C++ files (need manual compilation)
@@ -2731,6 +4406,34 @@ ${trimmedText}`;
     }
 
     return results;
+  }
+
+  async _runFrontendVerificationForFile(workspaceFolder, relativePath) {
+    try {
+      const fullPath = path.join(workspaceFolder, relativePath);
+      const content = await fs.readFile(fullPath, "utf8");
+      const validation = new FrontendValidator(fullPath, content).validate();
+      if (!validation.hasIssues) {
+        return { success: true, issues: [] };
+      }
+
+      const summary = validation.issues
+        .slice(0, 3)
+        .map((issue) => issue.message)
+        .join("; ");
+
+      return {
+        success: false,
+        issues: validation.issues,
+        error: `${validation.issues.length} frontend issue(s): ${summary}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        issues: [],
+        error: `Frontend validation failed for ${relativePath}: ${error.message}`
+      };
+    }
   }
 
   async _fetchAndSendModels(forceProvider = null) {
@@ -2822,14 +4525,44 @@ ${trimmedText}`;
   }
 
   _getDefaultModelForProvider(provider) {
-    if (provider === "ollama") return "qwen2.5-coder:1.5b";
+    if (provider === "ollama") return OLLAMA_FALLBACK_MODELS[0];
     if (provider === "nvidia") return "meta/llama-3.1-8b-instruct";
     const customProvider = this._getCustomProviderById(provider);
     if (customProvider?.defaultModel) return customProvider.defaultModel;
     const providerModels = MODELS_BY_PROVIDER[provider];
     return Array.isArray(providerModels) && providerModels.length > 0
       ? providerModels[0]
-      : "qwen2.5-coder:1.5b";
+      : OLLAMA_FALLBACK_MODELS[0];
+  }
+
+  _getImageInputCapability(provider, model) {
+    const customProvider = this._getCustomProviderById(provider);
+    const enabled = this.agent._modelSupportsImageInput(
+      {
+        provider,
+        model,
+        customProvider
+      },
+      model
+    );
+
+    return {
+      imageInputEnabled: enabled,
+      imageInputReason: enabled
+        ? "Attach images for vision-capable models."
+        : "Selected model does not appear to support image input. Switch to a vision-capable model or remove attachments."
+    };
+  }
+
+  _postImageInputCapability(provider, model) {
+    if (!this.panel) return;
+    const capability = this._getImageInputCapability(provider, model);
+
+    this._postMessage({
+      type: "setImageInputAvailability",
+      enabled: capability.imageInputEnabled,
+      reason: capability.imageInputReason
+    });
   }
 
   _getProviderModelStateKey(provider) {
@@ -3099,23 +4832,16 @@ ${trimmedText}`;
     this._boundWebviews.add(webview);
     webview.onDidReceiveMessage(async (message) => {
       console.log("[ChatPanel] Received message:", message.type);
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workspaceFolder = this._getEffectiveWorkspaceFolder();
 
       if (message.type === "chat") {
         try {
           console.log("[ChatPanel] Processing chat message:", message.text?.substring(0, 50));
           const trimmedText = (message.text || "").trim();
-        const requestMode = this._getRequestMode();
-        const intent = this.agent._detectIntent(trimmedText);
-        const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
-        let hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
-        const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
-        const hasExplicitDestructiveWriteIntent =
-          /\b(delete|remove|clear|empty|truncate|wipe|blank\s*out)\b/i.test(trimmedText);
-        const writeOptions = {
-          allowEmpty: hasExplicitDestructiveWriteIntent,
-          allowDocTruncate: hasExplicitDestructiveWriteIntent
-        };
+        let requestText = trimmedText;
+        let requestMode = this._getRequestMode();
+        let systemOverlay = "";
+        let activeRuntimeConfig = null;
 
         if (/^\/undo\b/i.test(trimmedText) || this._isUndoRequest(trimmedText)) {
           await this._undoEdit();
@@ -3124,7 +4850,7 @@ ${trimmedText}`;
         }
         if (/^\/ollama$/i.test(trimmedText)) {
           await this._updateAiConfig("provider", "ollama");
-          await this._updateAiConfig("model", "qwen2.5-coder:1.5b");
+          await this._updateAiConfig("model", this._getDefaultModelForProvider("ollama"));
           this._postMessage({ type: "status", text: "Provider forced to Ollama. Reloading..." });
           await this._fetchAndSendModels("ollama");
           this._postMessage({ type: "done" });
@@ -3203,7 +4929,12 @@ ${trimmedText}`;
                 this._postMessage({ type: "error", text: `Ollama returned status ${res.status}` });
               }
             } else {
-              this._postMessage({ type: "stream", text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${config.timeout}ms` });
+              this._postMessage({
+                type: "stream",
+                text: `Provider: ${config.provider}\nModel: ${config.model}\nTimeout: ${
+                  config.timeout > 0 ? `${config.timeout}ms` : "disabled"
+                }`
+              });
             }
           } catch (err) {
             this._postMessage({ type: "error", text: `Connection failed: ${err.message}\n\nMake sure Ollama is running: ollama serve` });
@@ -3212,6 +4943,38 @@ ${trimmedText}`;
           return;
         }
 
+        const gstackRequest = this._resolveGStackRequest(trimmedText);
+        const explicitWorkflowId = gstackRequest?.workflow?.id || "";
+        const workflowIntentOverride = gstackRequest?.intentOverride || "";
+        const workflowForceStructuredEdits =
+          gstackRequest?.forceStructuredEdits === true;
+        if (gstackRequest?.type === "help") {
+          this._postMessage({ type: "stream", text: buildGStackHelpText() });
+          this._postMessage({ type: "done" });
+          return;
+        }
+        if (gstackRequest?.type === "workflow") {
+          requestText = gstackRequest.userMessage;
+          requestMode = gstackRequest.mode || requestMode;
+          systemOverlay = gstackRequest.systemOverlay || "";
+          this._postMessage({
+            type: "status",
+            text: gstackRequest.statusText
+          });
+        }
+
+        const intent =
+          workflowIntentOverride || this.agent._detectIntent(requestText);
+        const isEditLikeIntent = this._isEditLikeIntent(intent, requestText);
+        let hasExplicitCommandRequest = this._hasExplicitCommandRequest(requestText);
+        const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(requestText);
+        const hasExplicitDestructiveWriteIntent =
+          /\b(delete|remove|clear|empty|truncate|wipe|blank\s*out)\b/i.test(requestText);
+        const writeOptions = {
+          allowEmpty: hasExplicitDestructiveWriteIntent,
+          allowDocTruncate: hasExplicitDestructiveWriteIntent
+        };
+
         // In audit/bugfix modes, skip auto-routing interceptors so the
         // mode-specific system instruction controls the response. Without
         // this guard, the Alt+B trigger ("bug fix loop on the active file")
@@ -3219,14 +4982,14 @@ ${trimmedText}`;
         const isModeWithCustomSystemPrompt =
           requestMode === "audit" || requestMode === "bugfix";
 
-        if (!isModeWithCustomSystemPrompt && this._isSyntaxFixRequest(trimmedText)) {
+        if (!isModeWithCustomSystemPrompt && this._isSyntaxFixRequest(requestText)) {
           await this._runActiveSyntaxFix(workspaceFolder);
           return;
         }
 
         if (
           !isModeWithCustomSystemPrompt &&
-          this._isExplicitBugScanRequest(trimmedText) &&
+          this._isExplicitBugScanRequest(requestText) &&
           requestMode !== "bugfix"
         ) {
           const editor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
@@ -3234,7 +4997,7 @@ ${trimmedText}`;
           return;
         }
 
-        if (!isModeWithCustomSystemPrompt && this._isMermaidRequest(trimmedText)) {
+        if (!isModeWithCustomSystemPrompt && this._isMermaidRequest(requestText)) {
           this._postMessage({ type: "thinking" });
           this._postMessage({ type: "status", text: "Generating diagram..." });
           const runtimeConfig = await this._getEffectiveAiConfig();
@@ -3242,7 +5005,7 @@ ${trimmedText}`;
           const fileContext = activeEditor
             ? `\n\nActive file: ${path.basename(activeEditor.document.fileName)}\n\`\`\`\n${activeEditor.document.getText().slice(0, 4000)}\n\`\`\``
             : "";
-          const mermaidPrompt = `${trimmedText}${fileContext}\n\nReturn ONLY a mermaid code block. No explanations outside the code block.`;
+          const mermaidPrompt = `${requestText}${fileContext}\n\nReturn ONLY a mermaid code block. No explanations outside the code block.`;
           const mermaidResponse = await this.agent.chat(
             mermaidPrompt,
             workspaceFolder,
@@ -3262,9 +5025,9 @@ ${trimmedText}`;
           return;
         }
 
-        if (!isModeWithCustomSystemPrompt && this._isSyntaxQuestion(trimmedText)) {
-          const activeOnly = /\b(active|current|open|this)\s+(file|tab|editor)\b/i.test(trimmedText) ||
-            !/\b(workspace|repo|repository|project|codebase|all files|entire project)\b/i.test(trimmedText);
+        if (!isModeWithCustomSystemPrompt && this._isSyntaxQuestion(requestText)) {
+          const activeOnly = /\b(active|current|open|this)\s+(file|tab|editor)\b/i.test(requestText) ||
+            !/\b(workspace|repo|repository|project|codebase|all files|entire project)\b/i.test(requestText);
           const activeEditor = this._getCurrentFileEditor();
           const activeFiles =
             activeOnly && workspaceFolder && activeEditor
@@ -3277,12 +5040,12 @@ ${trimmedText}`;
           return;
         }
 
-        if (!isModeWithCustomSystemPrompt && this._isLibraryAuditRequest(trimmedText)) {
+        if (!isModeWithCustomSystemPrompt && this._isLibraryAuditRequest(requestText)) {
           await this._runLibraryAudit(workspaceFolder);
           return;
         }
 
-        const directStructuredResponse = this.agent._parseResponse(trimmedText);
+        const directStructuredResponse = this.agent._parseResponse(requestText);
         if (this.chatMode === "audit" && Array.isArray(directStructuredResponse.actions)) {
           const blockedTypes = new Set(["file", "patch", "cmd", "mkdir"]);
           const stripped = directStructuredResponse.actions.filter((a) => !blockedTypes.has(a?.type));
@@ -3305,6 +5068,7 @@ ${trimmedText}`;
         }
 
         let response = directStructuredResponse;
+        let streamController = null;
         if (hasDirectStructuredActions) {
           this._postMessage({
             type: "status",
@@ -3312,13 +5076,13 @@ ${trimmedText}`;
           });
         } else {
           this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-          if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, trimmedText, requestMode)) {
+          if (workspaceFolder && this._shouldPrepareWorkspaceContext(intent, requestText, requestMode)) {
             const forcePrep =
               requestMode === "heavy" ||
               requestMode === "deep" ||
               intent === "scan";
             this._postMessage({ type: "status", text: "Studying workspace before responding..." });
-            const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
+            const prep = await this.agent.prepareWorkspaceContext(requestText, workspaceFolder, { force: forcePrep });
             this._postMessage({
               type: "status",
               text: `Studied workspace: indexed ${prep.indexedFiles} file(s).`
@@ -3336,21 +5100,28 @@ ${trimmedText}`;
               });
             }
             if (["edit", "debug", "refactor"].includes(intent)) {
-              const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
-              if (gitStatus.success) {
-                this._postMessage({
-                  type: "status",
-                  text: this._summarizeGitStatus(gitStatus.output)
-                });
+              const gitRoot = await this._findGitRoot(
+                this._getCurrentFileEditor()?.document?.fileName || workspaceFolder
+              );
+              if (gitRoot) {
+                const gitStatus = await this.agent.executeCommand("git status --short", gitRoot);
+                if (gitStatus.success) {
+                  this._postMessage({
+                    type: "status",
+                    text: this._summarizeGitStatus(gitStatus.output)
+                  });
+                }
               }
             }
           }
           this._postMessage({ type: "thinking" });
+          this._userStoppedGeneration = false;
           this.abortController = new AbortController();
 
           // Add timeout warning for slow models
           const config = await this._getEffectiveAiConfig();
-          const timeoutMs = config.timeout || 300000;
+          activeRuntimeConfig = config;
+          const timeoutMs = Number.isFinite(config.timeout) ? config.timeout : 0;
           
           // Warn immediately for known slow models
           if (config.model === "minimaxai/minimax-m2.7") {
@@ -3377,15 +5148,27 @@ ${trimmedText}`;
               timeout: timeoutMs,
               mode: requestMode
             });
+            streamController = this._createStreamDisplayController({
+              bufferStructuredActions: isEditLikeIntent
+            });
             this._consumeQueuedModeOverride();
             response = await this.agent.chat(
-              trimmedText,
+              requestText,
               workspaceFolder,
-              (chunk) => { this._postMessage({ type: "stream", text: chunk }); },
+              (chunk) => {
+                streamController.push(chunk);
+              },
               this.abortController.signal,
               {
                 mode: requestMode,
+                systemOverlay,
+                intentOverride: workflowIntentOverride || undefined,
+                interactionStyle: this._getInteractionStyleForRequest(
+                  isEditLikeIntent
+                ),
+                forceStructuredEdits: workflowForceStructuredEdits,
                 runtimeConfig: config,
+                images: Array.isArray(message.images) ? message.images : [],
                 onStatus: (text) => {
                   if (this._shouldSuppressInternalStatus(text)) {
                     return;
@@ -3403,17 +5186,15 @@ ${trimmedText}`;
               duration,
               !response.error
             );
+            this._postAutoHealState();
           } catch (chatError) {
             console.error("[ChatPanel] Error in agent.chat:", chatError);
-            const errorMsg = chatError.name === "AbortError" 
-              ? "Generation stopped or timed out. Try a faster model or increase timeout in settings."
-              : `AI error: ${chatError.message}`;
-            this._postMessage({ type: "error", text: errorMsg });
-            this._postMessage({ type: "done" });
+            this._handleChatStreamFailure(chatError, streamController);
             return;
           } finally {
             clearTimeout(warningTimer);
             this.abortController = null;
+            this._userStoppedGeneration = false;
           }
         }
 
@@ -3422,6 +5203,16 @@ ${trimmedText}`;
           this._postMessage({ type: "done" });
           return;
         }
+
+        streamController?.ensureFinalTextVisible(
+          this._buildVisibleAssistantText(response, {
+            preferStructuredSummary: isEditLikeIntent
+          }),
+          {
+            rawText: typeof response.text === "string" ? response.text : ""
+          }
+        );
+        this._postAssistantImages(response.images);
 
         this._postMessage({ type: "done" });
         this._postSessionState();
@@ -3462,10 +5253,27 @@ ${trimmedText}`;
           await this._appendAuditRefusalLog(workspaceFolder, trimmedText, response.text);
         }
 
-        if (response.warnings && response.warnings.length > 0) {
+        const blockedIncompleteStructuredExecution =
+          this._shouldBlockIncompleteStructuredExecution(response);
+
+        if (
+          response.warnings &&
+          response.warnings.length > 0 &&
+          !blockedIncompleteStructuredExecution
+        ) {
           for (const warning of response.warnings) {
             this._postMessage({ type: "status", text: warning });
           }
+        }
+
+        if (blockedIncompleteStructuredExecution) {
+          this._postMessage({
+            type: "error",
+            text:
+              response.text ||
+              "Structured edit output was incomplete, so Code Janitor blocked the generated file changes."
+          });
+          return;
         }
 
         const debugConfig = vscode.workspace.getConfiguration("codeJanitor.ai");
@@ -3475,12 +5283,57 @@ ${trimmedText}`;
           const actionSummary = response.actions.map(a => {
             if (a.type === "graphify") return "graphify:open";
             if (a.type === "preview_inspect") return "preview:inspect";
-            return `${a.type}:${a.path || a.command || ""}`;
+            return `${a.type}:${a.path || a.query || a.command || ""}`;
           }).join(", ");
           this._postMessage({ type: "status", text: `Parsed ${response.actions.length} action(s): ${actionSummary}` });
         }
 
         if (response.actions && response.actions.length > 0) {
+          let inspectionRounds = 0;
+          while (
+            isEditLikeIntent &&
+            this._hasOnlyInspectionActions(response.actions) &&
+            inspectionRounds < MAX_AGENTIC_INSPECTION_ROUNDS
+          ) {
+            inspectionRounds += 1;
+            this._postMessage({
+              type: "status",
+              text: `Inspection round ${inspectionRounds}: gathering workspace evidence before editing...`
+            });
+            response = await this._runAgenticInspectionRound(
+              requestText,
+              response.actions,
+              workspaceFolder,
+              activeRuntimeConfig || (await this._getEffectiveAiConfig()),
+              requestMode
+            );
+            if (!response || response.error) {
+              this._postMessage({
+                type: "error",
+                text: response?.error || "Inspection follow-up failed."
+              });
+              return;
+            }
+          }
+
+          if (
+            !hasDirectStructuredActions &&
+            isEditLikeIntent &&
+            !this._hasOnlyInspectionActions(response.actions)
+          ) {
+            const gateResult = await this._runGStackEditGate(
+              requestText,
+              response,
+              workspaceFolder,
+              activeRuntimeConfig || (await this._getEffectiveAiConfig()),
+              {
+                requestMode,
+                explicitWorkflowId
+              }
+            );
+            response = gateResult.response;
+          }
+
           const hasFileAction = response.actions.some(
             (action) =>
               (action.type === "file" &&
@@ -3494,7 +5347,7 @@ ${trimmedText}`;
             (action) => action.type === "preview_inspect"
           ) || (
             response.actions.some((action) => action.type === "preview") &&
-            this._shouldInspectPreviewRequest(trimmedText)
+            this._shouldInspectPreviewRequest(requestText)
           );
           if (isEditLikeIntent && !hasFileAction && !hasPreviewInspectionAction) {
             this._postMessage({
@@ -3548,6 +5401,13 @@ ${trimmedText}`;
                       : `\u2705 Opened draft ${result.path}`
                     : result.error
                 });
+                if (result.success && shouldApplyToOpenFile) {
+                  this._postFixInsights(
+                    result.path || action.path,
+                    result.previousContent,
+                    result.newContent
+                  );
+                }
               } else if (action.type === "patch") {
                 const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
                 const activeFileName = activeEditor?.document?.fileName || "";
@@ -3617,6 +5477,13 @@ ${trimmedText}`;
                     ? `\u2705 Patched open file ${result.relativePath || result.path}`
                     : result.error
                 });
+                if (result.success) {
+                  this._postFixInsights(
+                    result.path || action.path,
+                    result.previousContent,
+                    result.newContent
+                  );
+                }
               } else if (action.type === "mkdir") {
                 this._postMessage({
                   type: "status",
@@ -3627,7 +5494,8 @@ ${trimmedText}`;
                   this._shouldSuppressGeneratedCommand(
                     isEditLikeIntent,
                     hasExplicitCommandRequest,
-                    response.actions
+                    response.actions,
+                    action.command
                   )
                 ) {
                   this._postMessage({
@@ -3648,6 +5516,10 @@ ${trimmedText}`;
           // Collect outside-workspace file actions and ask permission once
           const outsideFiles = [];
           const insideActions = [];
+          const effectiveWriteOptions = this._withWorkspaceRoot(
+            writeOptions,
+            workspaceFolder
+          );
           const fileActionPaths = new Set(
             response.actions
               .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
@@ -3671,16 +5543,19 @@ ${trimmedText}`;
                 insideActions.push({ action, result: null });
               }
             } else if (action.type === "file") {
-              const probe = await this.agent.applyChanges(
-                action.path,
-                action.content,
-                false,
-                writeOptions
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
               );
-              if (probe.error === "outside_workspace") {
-                outsideFiles.push({ action, path: probe.path });
+              const relativePath = workspaceFolder
+                ? path.relative(workspaceFolder, fullPath)
+                : action.path;
+              const isOutside = relativePath.startsWith("..") || path.isAbsolute(relativePath);
+
+              if (isOutside) {
+                outsideFiles.push({ action, path: fullPath });
               } else {
-                insideActions.push({ action, result: probe });
+                insideActions.push({ action, result: null });
               }
             } else if (action.type === "mkdir") {
               const mkdirPath = (action.path || "").replace(/\\/g, "/").toLowerCase();
@@ -3694,7 +5569,11 @@ ${trimmedText}`;
               }
 
               // applyChanges creates parent dirs automatically.
-              const probe = await this.agent.createFolder(action.path);
+              const probe = await this.agent.createFolder(
+                action.path,
+                false,
+                effectiveWriteOptions
+              );
               if (probe.error === "outside_workspace") {
                 outsideFiles.push({ action, path: probe.path });
               } else {
@@ -3705,7 +5584,8 @@ ${trimmedText}`;
                 this._shouldSuppressGeneratedCommand(
                   isEditLikeIntent,
                   hasExplicitCommandRequest,
-                  response.actions
+                  response.actions,
+                  action.command
                 )
               ) {
                 this._postMessage({
@@ -3820,13 +5700,13 @@ ${trimmedText}`;
               if (!patchResult.matched) {
                 const recoveryResult = isEditLikeIntent
                   ? await this._recoverFailedPatch(
-                      trimmedText,
+                      requestText,
                       workspaceFolder,
                       action,
                       currentContent,
                       outside,
                       writeOptions,
-                      config
+                      activeRuntimeConfig
                     )
                   : null;
 
@@ -3849,6 +5729,13 @@ ${trimmedText}`;
                       ? `\u2705 Recovered edit ${recoveryResult.relativePath || action.path}\n${recoveryResult.changeSummary || ""}`
                       : recoveryResult.error
                   });
+                  if (recoveryResult.success) {
+                    this._postFixInsights(
+                      recoveryResult.path || action.path,
+                      recoveryResult.previousContent,
+                      recoveryResult.newContent
+                    );
+                  }
 
                   if (recoveryResult.success && !outside) {
                     changedFiles.push(recoveryResult.relativePath || action.path);
@@ -3872,11 +5759,25 @@ ${trimmedText}`;
               }
               
               // Apply the patched content
+              const patchSafety = await this._assessEditSafetyBeforeApply(
+                workspaceFolder,
+                action.path,
+                currentContent,
+                patchResult.content
+              );
+              if (!patchSafety.ok) {
+                this._postMessage({
+                  type: "error",
+                  text: patchSafety.reason
+                });
+                continue;
+              }
+
               const result = await this.agent.applyChanges(
                 action.path,
                 patchResult.content,
                 outside,
-                writeOptions
+                effectiveWriteOptions
               );
 
               const patchUndoId = result.success
@@ -3896,6 +5797,13 @@ ${trimmedText}`;
                   ? `\u2705 Patched ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              if (result.success) {
+                this._postFixInsights(
+                  result.path || action.path,
+                  result.previousContent,
+                  result.newContent
+                );
+              }
               
               if (result.success && !outside) {
                 changedFiles.push(result.relativePath || action.path);
@@ -3906,14 +5814,44 @@ ${trimmedText}`;
                 this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
-              let result = outside
-                ? await this.agent.applyChanges(
-                    action.path,
-                    action.content,
-                    true,
-                    writeOptions
-                  )
-                : preResult;
+              const fullPath = this._resolveActionFilePath(
+                workspaceFolder,
+                action.path
+              );
+              let currentContent = "";
+              try {
+                currentContent = await fs.readFile(fullPath, "utf8");
+              } catch (error) {
+                if (error.code !== "ENOENT") {
+                  this._postMessage({
+                    type: "error",
+                    text: `Unable to read ${action.path} before applying changes: ${error.message}`
+                  });
+                  continue;
+                }
+              }
+              const fileSafety = await this._assessEditSafetyBeforeApply(
+                workspaceFolder,
+                action.path,
+                currentContent,
+                action.content
+              );
+              if (!fileSafety.ok) {
+                this._postMessage({
+                  type: "error",
+                  text: fileSafety.reason
+                });
+                continue;
+              }
+              let result = preResult;
+              if (!result || outside) {
+                result = await this.agent.applyChanges(
+                  action.path,
+                  action.content,
+                  outside,
+                  effectiveWriteOptions
+                );
+              }
 
               if (
                 !result.success &&
@@ -3926,9 +5864,9 @@ ${trimmedText}`;
                   text: "README guard blocked truncation. Retrying with strict full-file README rewrite..."
                 });
                 result = await this._retryReadmeRewrite(
-                  trimmedText,
+                  requestText,
                   workspaceFolder,
-                  writeOptions
+                  effectiveWriteOptions
                 );
                 if (!result.success) {
                   this._postMessage({
@@ -3969,6 +5907,13 @@ ${trimmedText}`;
                     : `\u2705 Updated ${result.relativePath || action.path}\n${result.changeSummary || ""}`
                   : result.error
               });
+              if (result.success && !result.created) {
+                this._postFixInsights(
+                  result.path || action.path,
+                  result.previousContent,
+                  result.newContent
+                );
+              }
               if (result.success && !outside) {
                 changedFiles.push(result.relativePath || action.path);
                 await this._revealWorkspaceFile(result.path);
@@ -3982,23 +5927,17 @@ ${trimmedText}`;
                   });
                 }
               }
-              if (result.success && result.syntaxCheckCmd) {
-                const checkResult = await this.agent.executeCommand(result.syntaxCheckCmd, workspaceFolder);
-                const ok = checkResult.success && !(checkResult.output || "").trim();
-                this._postMessage({
-                  type: "status",
-                  text: ok
-                    ? `\u2705 No syntax errors in ${result.relativePath}`
-                    : `\u274c Syntax issues in ${result.relativePath}:\n${checkResult.error || checkResult.output || ""}`
-                });
-              }
             } else if (action.type === "mkdir") {
               if (outside && !allowOutside) {
                 this._postMessage({ type: "status", text: `\u274c Denied: ${action.path}` });
                 continue;
               }
               const result = outside
-                ? await this.agent.createFolder(action.path, true)
+                ? await this.agent.createFolder(
+                    action.path,
+                    true,
+                    effectiveWriteOptions
+                  )
                 : preResult;
               this._postMessage({
                 type: result.success ? "applied" : "error",
@@ -4067,7 +6006,7 @@ ${trimmedText}`;
                 });
               }
 } else if (action.type === "preview") {
-              const shouldInspectPreview = this._shouldInspectPreviewRequest(trimmedText);
+              const shouldInspectPreview = this._shouldInspectPreviewRequest(requestText);
               if (shouldInspectPreview) {
                 this._postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
                 try {
@@ -4085,7 +6024,7 @@ ${trimmedText}`;
                     });
                     const runtimeConfig = await this._getEffectiveAiConfig();
                     const fixResult = await this._fixActiveFileFromPreviewDiagnostics(
-                      trimmedText,
+                      requestText,
                       workspaceFolder,
                       diagnostics,
                       runtimeConfig
@@ -4097,14 +6036,24 @@ ${trimmedText}`;
                         text: fixResult.error
                       });
                     } else {
+                      const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                      const cleanPreview = verificationDiagnostics
+                        ? !this._previewDiagnosticsHasIssues(verificationDiagnostics)
+                        : null;
                       this._postMessage({
                         type: "applied",
                         text: `Updated ${fixResult.path} using preview diagnostics.`
                       });
+                      this._postFixInsights(
+                        fixResult.applyResult?.path || fixResult.path,
+                        fixResult.applyResult?.previousContent,
+                        fixResult.applyResult?.newContent,
+                        {
+                          verificationPassed: cleanPreview
+                        }
+                      );
 
-                      const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                       if (verificationDiagnostics) {
-                        const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
                         this._postMessage({
                           type: cleanPreview ? "applied" : "status",
                           text: cleanPreview
@@ -4152,7 +6101,7 @@ ${trimmedText}`;
                   });
                   const runtimeConfig = await this._getEffectiveAiConfig();
                   const fixResult = await this._fixActiveFileFromPreviewDiagnostics(
-                    trimmedText,
+                    requestText,
                     workspaceFolder,
                     diagnostics,
                     runtimeConfig
@@ -4164,14 +6113,24 @@ ${trimmedText}`;
                       text: fixResult.error
                     });
                   } else {
+                    const verificationDiagnostics = fixResult.verification?.diagnostics || null;
+                    const cleanPreview = verificationDiagnostics
+                      ? !this._previewDiagnosticsHasIssues(verificationDiagnostics)
+                      : null;
                     this._postMessage({
                       type: "applied",
                         text: `Updated ${fixResult.path} using preview diagnostics.`
                     });
+                    this._postFixInsights(
+                      fixResult.applyResult?.path || fixResult.path,
+                      fixResult.applyResult?.previousContent,
+                      fixResult.applyResult?.newContent,
+                      {
+                        verificationPassed: cleanPreview
+                      }
+                    );
 
-                    const verificationDiagnostics = fixResult.verification?.diagnostics || null;
                     if (verificationDiagnostics) {
-                      const cleanPreview = !this._previewDiagnosticsHasIssues(verificationDiagnostics);
                       this._postMessage({
                         type: cleanPreview ? "applied" : "status",
                         text: cleanPreview
@@ -4236,7 +6195,8 @@ ${trimmedText}`;
                 this._shouldSuppressGeneratedCommand(
                   isEditLikeIntent,
                   hasExplicitCommandRequest,
-                  response.actions
+                  response.actions,
+                  action.command
                 )
               ) {
                 this._postMessage({
@@ -4275,10 +6235,16 @@ ${trimmedText}`;
             return;
           }
 
-          await this._runPostEditVerification(workspaceFolder, changedFiles);
+          await this._runPostEditVerification(
+            workspaceFolder,
+            changedFiles,
+            activeRuntimeConfig,
+            writeOptions
+          );
         }
         } catch (error) {
           console.error("[ChatPanel] Error in chat handler:", error);
+          this._userStoppedGeneration = false;
           this._postMessage({ type: "error", text: `Chat error: ${error.message}` });
           this._postMessage({ type: "done" });
         }
@@ -4290,6 +6256,7 @@ ${trimmedText}`;
         }
       } else if (message.type === "stop") {
         if (this.abortController) {
+          this._userStoppedGeneration = true;
           this.abortController.abort();
           this.abortController = null;
           this._postMessage({ type: "done" });
@@ -4306,6 +6273,11 @@ ${trimmedText}`;
             : result.error
         });
         if (result.success) {
+          this._postFixInsights(
+            result.path || message.filePath,
+            result.previousContent,
+            result.newContent
+          );
           await this._revealWorkspaceFile(result.path);
         }
       } else if (message.type === "clear") {
@@ -4346,19 +6318,26 @@ ${trimmedText}`;
           // Send provider/key state immediately; live models are discovered below.
           const customProvider = this._getCustomProviderById(selectedProvider);
           const defaultModels = this._getModelsForInitialProviderState(selectedProvider);
+          const selectedModel =
+            this._getSavedProviderModel(selectedProvider) ||
+            customProvider?.defaultModel ||
+            savedConfig.model;
           
           this._postMessage({
             type: "setCurrentProvider",
             provider: selectedProvider,
-            model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+            model: selectedModel,
             providers: this._buildProviderCatalog(),
             keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Default, will update
-            models: defaultModels
+            models: defaultModels,
+            ...this._getImageInputCapability(selectedProvider, selectedModel)
           });
           this._postMessage({
             type: "thinkingState",
             enabled: this.showThinking
           });
+          this._postGStackGateModeState();
+          this._postAutoHealState();
           this._postSessionState();
           
           // Fetch real key presence in background
@@ -4367,10 +6346,11 @@ ${trimmedText}`;
               this._postMessage({
                 type: "setCurrentProvider",
                 provider: selectedProvider,
-                model: this._getSavedProviderModel(selectedProvider) || customProvider?.defaultModel || savedConfig.model,
+                model: selectedModel,
                 providers: this._buildProviderCatalog(),
                 keyPresence,
-                models: defaultModels
+                models: defaultModels,
+                ...this._getImageInputCapability(selectedProvider, selectedModel)
               });
             }
           }).catch(err => {
@@ -4384,6 +6364,18 @@ ${trimmedText}`;
         this.agent.createSession();
         this._outsideWorkspaceAllowed = false;
         this._postSessionState();
+      } else if (message.type === "confirmDeleteSession") {
+        const sessionLabel = String(message.label || "this chat").trim() || "this chat";
+        const choice = await vscode.window.showWarningMessage(
+          `Delete "${sessionLabel}"? This removes the saved chat history.`,
+          { modal: true },
+          "Delete"
+        );
+        if (choice === "Delete") {
+          this._deleteSessionAndRefresh(message.sessionId);
+        }
+      } else if (message.type === "deleteSession") {
+        this._deleteSessionAndRefresh(message.sessionId);
       } else if (message.type === "switchSession") {
         this.agent.switchSession(message.sessionId);
         this._outsideWorkspaceAllowed = false;
@@ -4405,6 +6397,24 @@ ${trimmedText}`;
           type: "status",
           text: `Thinking mode ${this.showThinking ? "enabled" : "disabled"}.`
         });
+      } else if (message.type === "setAutoHealEnabled") {
+        const nextEnabled = message.enabled !== false;
+        const cfg = vscode.workspace.getConfiguration("codeJanitor.ai.selfHealing");
+        await cfg.update("enabled", nextEnabled, vscode.ConfigurationTarget.Global);
+        this.performanceMonitor.setAutoHealEnabled(nextEnabled);
+        this._postAutoHealState();
+        this._postMessage({
+          type: "status",
+          text: `Auto-heal ${nextEnabled ? "enabled" : "disabled"}.`
+        });
+      } else if (message.type === "setGstackGateMode") {
+        const nextMode = this._normalizeGStackGateMode(message.value);
+        await this._updateAiConfig("gstackGateMode", nextMode);
+        this._postGStackGateModeState(nextMode);
+        this._postMessage({
+          type: "status",
+          text: `GStack gate mode set to ${nextMode}.`
+        });
       } else if (message.type === "setModel") {
         const provider = this._getSelectedProviderId() || vscode.workspace.getConfiguration("codeJanitor.ai").get("provider", "ollama");
         const nextModel = await this._setProviderModel(provider, message.model);
@@ -4414,6 +6424,7 @@ ${trimmedText}`;
             text: `Model switched to ${nextModel}.`
           });
         }
+        this._postImageInputCapability(provider, nextModel);
       } else if (message.type === "setProvider") {
         try {
           console.log("[ChatPanel] setProvider message received:", message.provider);
@@ -4444,7 +6455,8 @@ ${trimmedText}`;
               model: nextModel,
               providers: this._buildProviderCatalog(),
               keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Will update in background
-              models: defaultModels
+              models: defaultModels,
+              ...this._getImageInputCapability(message.provider, nextModel)
             });
             this._postMessage({
               type: "status",
@@ -4463,7 +6475,8 @@ ${trimmedText}`;
                 model: nextModel,
                 providers: this._buildProviderCatalog(),
                 keyPresence,
-                models: defaultModels
+                models: defaultModels,
+                ...this._getImageInputCapability(message.provider, nextModel)
               });
             }
           }).catch(err => {
@@ -4489,7 +6502,8 @@ ${trimmedText}`;
               model: provider.defaultModel,
               providers: this._buildProviderCatalog(),
               keyPresence,
-              models: provider.models
+              models: provider.models,
+              ...this._getImageInputCapability(provider.id, provider.defaultModel)
             });
             this._postMessage({
               type: "status",
@@ -4506,7 +6520,7 @@ ${trimmedText}`;
         }
       } else if (message.type === "showPerformanceReport") {
         const analysis = this.performanceMonitor.analyzePerformance();
-        this.performanceMonitor._showPerformanceReport(analysis);
+        await this.performanceMonitor.showPerformanceReview(analysis);
       } else if (message.type === "getAutoHealHistory") {
         const history = await this.performanceMonitor.getAutoHealHistory();
         this._postMessage({ type: "autoHealHistory", history });

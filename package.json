@@ -1,12 +1,17 @@
 {
   "name": "code-janitor",
   "displayName": "Code Janitor",
+<<<<<<< HEAD
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, and intelligent code analysis.",
 <<<<<<< HEAD
   "version": "1.17.4",
 =======
   "version": "1.17.2",
 >>>>>>> 5b0c3a9de1053d32c3c65fbd71e43f2fbb474dd8
+=======
+  "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
+  "version": "1.20.6",
+>>>>>>> 915a1775e314fe3f8321364ee1b93c0626882cbf
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -46,6 +51,9 @@
     "Linters",
     "Other"
   ],
+  "bin": {
+    "code-janitor": "./bin/cli.js"
+  },
   "main": "./src/extension.js",
   "activationEvents": [
     "onStartupFinished",
@@ -161,13 +169,23 @@
         },
         "codeJanitor.ai.timeout": {
           "type": "number",
-          "default": 300000,
-          "description": "AI request timeout in milliseconds (default: 5 minutes, increase if using slow models like MiniMax M2.7)"
+          "default": 0,
+          "description": "AI request timeout in milliseconds. Set to 0 to disable the timeout (default), or increase it if using slow models like MiniMax M2.7."
         },
         "codeJanitor.ai.showParsedActionsDebug": {
           "type": "boolean",
           "default": false,
           "description": "Show parsed AI actions in chat status messages for debugging"
+        },
+        "codeJanitor.ai.gstackGateMode": {
+          "type": "string",
+          "default": "smart",
+          "enum": [
+            "off",
+            "smart",
+            "always"
+          ],
+          "description": "Run a GStack-inspired pre-execution review gate for AI-generated edits. smart reviews only riskier edits, always reviews every AI-generated edit, off disables it."
         },
         "codeJanitor.ai.selfHealing.enabled": {
           "type": "boolean",

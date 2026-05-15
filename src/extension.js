@@ -218,6 +218,13 @@ function getDocumentPathCandidates(document, workspaceFolder) {
   return candidates;
 }
 
+function getWorkspaceFolderForDocument(document) {
+  return (
+    vscode.workspace.getWorkspaceFolder?.(document.uri)?.uri?.fsPath ||
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  );
+}
+
 function getIdentifierSet(code) {
   return new Set((code.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []).slice(0, 500));
 }
@@ -306,7 +313,7 @@ async function getPreferredSyntaxFixRuntimeConfig(context) {
   }
   
   const ollamaUrl = config.get("ollamaUrl", "http://localhost:11434");
-  const timeout = config.get("timeout", 90_000);
+  const timeout = config.get("timeout", 0);
 
   if (nvidiaApiKey) {
     return {
@@ -925,16 +932,9 @@ async function activate(context) {
             console.log("[Extension] Creating new ChatPanel instance");
             chatPanelInstance = new ChatPanel(context);
           }
-          if (chatPanelInstance.panel) {
-            console.log("[Extension] Closing legacy popup panel");
-            chatPanelInstance.panel.dispose();
-            chatPanelInstance.panel = null;
-          }
-          console.log("[Extension] Revealing sidebar chat view");
-          await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
-          await new Promise(resolve => setTimeout(resolve, 150));
-          await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
-          console.log("[Extension] Sidebar chat view focused successfully");
+          console.log("[Extension] Opening full-size chat panel");
+          await chatPanelInstance.show();
+          console.log("[Extension] Full-size chat panel opened successfully");
         } catch (error) {
           console.error("[Extension] CRITICAL ERROR in openChat command:", error);
           console.error("[Extension] Error stack:", error.stack);
@@ -959,9 +959,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
           if (!chatPanelInstance) {
             chatPanelInstance = new ChatPanel(context);
           }
-          await vscode.commands.executeCommand("workbench.view.extension.codeJanitorSidebar");
-          await new Promise(resolve => setTimeout(resolve, 150));
-          await vscode.commands.executeCommand("codeJanitor.chatSidebar.focus");
+          await chatPanelInstance.show();
           await chatPanelInstance.runBugScan(editor);
         } catch (error) {
           console.error("[Extension] Error in bugFixScan command:", error);
@@ -990,10 +988,10 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   // 7. Performance Report Command
   const performanceDisposable = vscode.commands.registerCommand(
     "codeJanitor.showPerformance",
-    () => {
+    async () => {
       if (chatPanelInstance && chatPanelInstance.performanceMonitor) {
         const analysis = chatPanelInstance.performanceMonitor.analyzePerformance();
-        chatPanelInstance.performanceMonitor._showPerformanceReport(analysis);
+        await chatPanelInstance.performanceMonitor.showPerformanceReview(analysis);
       } else {
         vscode.window.showInformationMessage("Performance monitoring not available. Open AI Chat first.");
       }
@@ -1297,7 +1295,7 @@ async function applyAIFixes(document, editor, syntaxErrorOutput = "") {
   const code = document.getText();
   const languageId = document.languageId;
   const fileName = document.fileName;
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const workspaceFolder = getWorkspaceFolderForDocument(document);
 
   try {
     const aiAgent = new AIAgent();

@@ -1,0 +1,56 @@
+// Add this method before _getCurrentFileEditor (around line 1139)
+
+  async _isGitRepository(workspaceFolder) {
+    if (!workspaceFolder) return false;
+    const gitDir = path.join(workspaceFolder, ".git");
+    try {
+      const stat = await fs.stat(gitDir);
+      return stat.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+// Replace line 3317-3323 (in _runPreEditDiagnostics method):
+// OLD:
+    const gitStatus = !isOutsideWorkspace
+      ? await this.agent.executeCommand(
+          `git status --short "${relativePath}"`,
+          workspaceFolder
+        )
+      : null;
+
+// NEW:
+    const isGitRepo = !isOutsideWorkspace && await this._isGitRepository(workspaceFolder);
+    const gitStatus = isGitRepo
+      ? await this.agent.executeCommand(
+          `git status --short "${relativePath}"`,
+          workspaceFolder
+        )
+      : null;
+
+// Replace line 4141-4147 (in chat message handler):
+// OLD:
+            if (["edit", "debug", "refactor"].includes(intent)) {
+              const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
+              if (gitStatus.success) {
+                this._postMessage({
+                  type: "status",
+                  text: this._summarizeGitStatus(gitStatus.output)
+                });
+              }
+            }
+
+// NEW:
+            if (["edit", "debug", "refactor"].includes(intent)) {
+              const isGitRepo = await this._isGitRepository(workspaceFolder);
+              if (isGitRepo) {
+                const gitStatus = await this.agent.executeCommand("git status --short", workspaceFolder);
+                if (gitStatus.success) {
+                  this._postMessage({
+                    type: "status",
+                    text: this._summarizeGitStatus(gitStatus.output)
+                  });
+                }
+              }
+            }

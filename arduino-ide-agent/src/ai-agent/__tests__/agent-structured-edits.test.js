@@ -75,4 +75,44 @@ describe("Arduino AIAgent structured edit parsing", () => {
       "src/ai-agent/chat-panel.html"
     ])
   })
+
+  test("prefers edit intent when an explanation request also asks for a fix", () => {
+    const agent = new AIAgent()
+
+    expect(agent._detectIntent("Why is this broken, fix it.")).toBe("edit")
+  })
+
+  test("keeps advisory how-do-i fix questions in explain intent", () => {
+    const agent = new AIAgent()
+
+    expect(agent._detectIntent("How do I fix this?")).toBe("explain")
+  })
+
+  test("treats refactor requests with explicit file changes as structured edits", () => {
+    const agent = new AIAgent()
+
+    expect(
+      agent._shouldForceStructuredEdit("refactor", "clean up this file for me")
+    ).toBe(true)
+  })
+
+  test("blocks unsafe command execution escape hatches", () => {
+    const agent = new AIAgent()
+
+    expect(agent.validateCommand("arduino-cli compile --fqbn arduino:avr:uno sketch")).toEqual({
+      allowed: true
+    })
+    expect(agent.validateCommand("arduino-cli upload -p COM3 --fqbn arduino:avr:uno sketch")).toEqual({
+      allowed: false,
+      reason: "Only project-scoped read, test, and build commands are allowed"
+    })
+    expect(agent.validateCommand('node -e "console.log(1)"')).toEqual({
+      allowed: false,
+      reason: "Blocked unsafe, global, or network command"
+    })
+    expect(agent.validateCommand("git push origin main")).toEqual({
+      allowed: false,
+      reason: "Blocked unsafe, global, or network command"
+    })
+  })
 })
