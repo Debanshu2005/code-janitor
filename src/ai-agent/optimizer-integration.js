@@ -12,12 +12,29 @@ const { FeedbackLoopOptimizer } = require('./feedback-loop-optimizer');
 function createOptimizedAgent(agent) {
   const optimizer = new PerformanceOptimizer();
   const feedbackOptimizer = new FeedbackLoopOptimizer();
+  const normalizeWorkspaceRelativePath =
+    typeof agent._normalizeWorkspaceRelativePath === "function"
+      ? agent._normalizeWorkspaceRelativePath.bind(agent)
+      : (input) => String(input || "").trim().replace(/\\/g, "/");
   
   // Store original methods
   const original = {
-    parseStructuredActions: agent._parseStructuredActions.bind(agent),
-    normalizeWorkspaceRelativePath: agent._normalizeWorkspaceRelativePath.bind(agent)
+    parseResponse:
+      typeof agent._parseResponse === "function"
+        ? agent._parseResponse.bind(agent)
+        : null,
+    normalizeWorkspaceRelativePath
   };
+
+  // Older optimizer builds expected a private _parseStructuredActions hook that
+  // no longer exists on AIAgent. If the current agent shape does not expose the
+  // hooks we need, skip installing the parser override instead of crashing
+  // extension activation before commands are registered.
+  if (!original.parseResponse) {
+    agent.performanceOptimizer = optimizer;
+    agent.feedbackLoopOptimizer = feedbackOptimizer;
+    return agent;
+  }
 
   // Override with optimized versions
   agent._parseStructuredActionsOptimized = function(response) {
