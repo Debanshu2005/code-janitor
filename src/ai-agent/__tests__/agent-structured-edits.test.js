@@ -59,6 +59,34 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("normalizes leading dot segments in structured edit paths", () => {
+    const agent = new AIAgent();
+    agent.currentEditableTargets = new Set(["src/example.js"]);
+
+    const parsed = agent._parseResponse(
+      [
+        "PATCH: ./src/example.js",
+        "SEARCH:",
+        "```js",
+        "const answer = 41;",
+        "```",
+        "REPLACE:",
+        "```js",
+        "const answer = 42;",
+        "```"
+      ].join("\n")
+    );
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "patch",
+        path: "src/example.js",
+        search: "const answer = 41;\n",
+        replace: "const answer = 42;\n"
+      }
+    ]);
+  });
+
   test("normalizes terminated streaming errors into a helpful provider message", () => {
     const agent = new AIAgent();
 
@@ -591,6 +619,25 @@ describe("AIAgent structured edit parsing", () => {
     expect(result).toEqual({
       scope: "restricted",
       paths: ["README.md"]
+    });
+  });
+
+  test("keeps workspace-scoped edit requests writable across the project", () => {
+    const agent = new AIAgent();
+
+    const result = agent._resolveEditableTargets(
+      "please update the auth wiring across the project workspace",
+      "/workspace",
+      {
+        activeTabPath: "src/extension.js",
+        visibleTabs: ["src/extension.js"],
+        allOpenTabs: ["src/extension.js"]
+      }
+    );
+
+    expect(result).toEqual({
+      scope: "workspace",
+      paths: []
     });
   });
 

@@ -3110,6 +3110,23 @@ ${resolvedMessage}`;
     return normalizedPath.replace(/\\/g, "/");
   }
 
+  _normalizeWorkspaceRelativePath(filePath, options = {}) {
+    const stripLeadingDot = options.stripLeadingDot !== false;
+    const raw = String(filePath || "")
+      .trim()
+      .replace(/^["'`]|["'`]$/g, "")
+      .replace(/\\/g, "/");
+    if (!raw) {
+      return "";
+    }
+
+    let normalized = path.posix.normalize(raw);
+    if (stripLeadingDot) {
+      normalized = normalized.replace(/^\.\/+/, "");
+    }
+    return normalized === "." ? "" : normalized;
+  }
+
   _formatContextPath(filePath, workspaceFolder) {
     if (!filePath) {
       return "untitled";
@@ -3595,7 +3612,7 @@ ${resolvedMessage}`;
   _isEditRequest(message) {
     if (this._isGreetingOnly(message)) return false;
     return (
-      /\b(edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/i.test(
+      /\b(add|edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply|implement|write|create|set|wire|hook\s+up|integrate|support|adjust|handle)\b/i.test(
         message || ""
       ) ||
       /\b(do|make)\s+(this|these|it)\s+for\s+me\b/i.test(message || "") ||
@@ -3606,6 +3623,24 @@ ${resolvedMessage}`;
       /\binstall\s+it\b/i.test(message || "") ||
       /\b(set|wire)\s+it\s+up\b/i.test(message || "") ||
       /\b(host|deploy)\s+it\b/i.test(message || "")
+    );
+  }
+
+  _isWorkspaceScopedEditRequest(message) {
+    const text = String(message || "").toLowerCase();
+    if (!text) return false;
+
+    if (
+      /\b(workspace|repo|repository|project|codebase)\b/.test(text) ||
+      /\b(across|throughout)\s+the\s+(workspace|repo|repository|project|codebase|app|site)\b/.test(text)
+    ) {
+      return true;
+    }
+
+    return (
+      /\b(multiple|several|all)\s+(files|folders|modules|components|pages|routes)\b/.test(text) ||
+      (/\b(files|folders|modules|components|pages|routes)\b/.test(text) &&
+        /\b(across|throughout|project|workspace|repo|repository|codebase)\b/.test(text))
     );
   }
 
@@ -5168,6 +5203,8 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
     );
     const targetPaths = new Set(explicitPaths);
     const isEditRequest = this._isEditRequest(message);
+    const workspaceScopedEditRequest =
+      isEditRequest && this._isWorkspaceScopedEditRequest(message);
     const intent = this._detectIntent(message);
 
     // For scan/create intent, don't auto-add active tab
@@ -5200,12 +5237,15 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       isEditRequest &&
       targetPaths.size === 0 &&
       editorState.activeTabPath &&
-      !/\bworkspace\b/i.test(message)
+      !workspaceScopedEditRequest
     ) {
       targetPaths.add(editorState.activeTabPath);
     }
 
-    const paths = Array.from(targetPaths).sort();
+    const paths = Array.from(targetPaths)
+      .map((filePath) => this._normalizeWorkspaceRelativePath(filePath))
+      .filter(Boolean)
+      .sort();
     return { scope: paths.length > 0 ? "restricted" : "workspace", paths };
   }
 
@@ -5732,11 +5772,16 @@ ${userMessage}`;
       const input = (rawPath || "").trim();
       if (!input) return { path: "", outsideWorkspace: false };
 
-      const normalizedRaw = input.replace(/\\/g, "/");
+      const normalizedRaw = this._normalizeWorkspaceRelativePath(input, {
+        stripLeadingDot: false
+      });
       const looksAbsolute =
         path.isAbsolute(input) || /^[a-z]:\//i.test(normalizedRaw);
       if (!looksAbsolute) {
-        return { path: normalizedRaw, outsideWorkspace: false };
+        return {
+          path: this._normalizeWorkspaceRelativePath(normalizedRaw),
+          outsideWorkspace: false
+        };
       }
 
       const probe = this._resolveWorkspacePath(input);
