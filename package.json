@@ -328,6 +328,21 @@
         "command": "codeJanitor.bugFixScan",
         "title": "Scan Active File for Bugs",
         "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.generateEdgeCases",
+        "title": "Generate Edge Cases for Active File",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.executeTests",
+        "title": "Execute Tests with Report",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.generateDocumentation",
+        "title": "Generate Repository Documentation",
+        "category": "Code Janitor"
       }
     ],
     "menus": {
@@ -403,6 +418,21 @@
         "command": "codeJanitor.bugFixScan",
         "key": "alt+b",
         "mac": "alt+b"
+      },
+      {
+        "command": "codeJanitor.generateEdgeCases",
+        "key": "alt+e",
+        "mac": "alt+e"
+      },
+      {
+        "command": "codeJanitor.executeTests",
+        "key": "alt+t",
+        "mac": "alt+t"
+      },
+      {
+        "command": "codeJanitor.generateDocumentation",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d"
       }
     ]
   },

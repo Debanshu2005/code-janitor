@@ -953,6 +953,208 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   } catch (regErr) {
     console.error("[Extension] Failed to register codeJanitor.bugFixScan — likely a duplicate Code Janitor install. Continuing activation.", regErr);
   }
+  // Generate Edge Cases Command
+  const generateEdgeCasesDisposable = vscode.commands.registerCommand(
+    "codeJanitor.generateEdgeCases",
+    async () => {
+      try {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+          vscode.window.showInformationMessage("No active editor found!");
+          return;
+        }
+
+        const document = editor.document;
+        const filePath = document.fileName;
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        if (!workspaceRoot) {
+          vscode.window.showErrorMessage("No workspace folder open!");
+          return;
+        }
+
+        vscode.window.showInformationMessage("Generating edge cases...");
+
+        const { generateEdgeCases } = require("./ai-agent/tools/generate-edge-cases");
+        const relativePath = vscode.workspace.asRelativePath(filePath);
+        const result = await generateEdgeCases(relativePath, workspaceRoot);
+
+        if (result.success) {
+          const message = `Generated ${result.edgeCaseCount} edge cases for ${relativePath}`;
+          const action = await vscode.window.showInformationMessage(
+            message,
+            "View Test Code",
+            "Save Test File"
+          );
+
+          if (action === "View Test Code") {
+            const doc = await vscode.workspace.openTextDocument({
+              content: result.testCode,
+              language: result.language
+            });
+            await vscode.window.showTextDocument(doc);
+          } else if (action === "Save Test File") {
+            const testFilePath = vscode.Uri.file(
+              require("path").join(workspaceRoot, result.testFilePath)
+            );
+            const fs = require("fs").promises;
+            await fs.mkdir(require("path").dirname(testFilePath.fsPath), { recursive: true });
+            await fs.writeFile(testFilePath.fsPath, result.testCode);
+            vscode.window.showInformationMessage(`Test file saved: ${result.testFilePath}`);
+          }
+        } else {
+          vscode.window.showErrorMessage(`Edge case generation failed: ${result.error}`);
+        }
+      } catch (error) {
+        console.error("[Extension] Error in generateEdgeCases command:", error);
+        vscode.window.showErrorMessage(`Edge case generation failed: ${error.message}`);
+      }
+    }
+  );
+  context.subscriptions.push(generateEdgeCasesDisposable);
+  console.log("[OK] Generate Edge Cases command registered.");
+
+  // Execute Tests Command
+  const executeTestsDisposable = vscode.commands.registerCommand(
+    "codeJanitor.executeTests",
+    async () => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        if (!workspaceRoot) {
+          vscode.window.showErrorMessage("No workspace folder open!");
+          return;
+        }
+
+        vscode.window.showInformationMessage("Executing tests...");
+
+        const { executeTests } = require("./ai-agent/tools/execute-tests");
+        const result = await executeTests({
+          generateReport: true,
+          includeEdgeCases: true
+        }, workspaceRoot);
+
+        if (result.success) {
+          const { summary, report } = result;
+          const successRate = summary.total > 0 
+            ? ((summary.passed / summary.total) * 100).toFixed(2) 
+            : 0;
+
+          const message = `Tests: ${summary.passed}/${summary.total} passed (${successRate}%)`;
+          const action = await vscode.window.showInformationMessage(
+            message,
+            "View Report",
+            "View Details"
+          );
+
+          if (action === "View Report" && report?.markdown) {
+            const doc = await vscode.workspace.openTextDocument({
+              content: report.markdown,
+              language: "markdown"
+            });
+            await vscode.window.showTextDocument(doc);
+          } else if (action === "View Details") {
+            const details = `Test Execution Results\n\n` +
+              `Framework: ${result.framework}\n` +
+              `Total Tests: ${summary.total}\n` +
+              `Passed: ${summary.passed}\n` +
+              `Failed: ${summary.failed}\n` +
+              `Skipped: ${summary.skipped}\n` +
+              `Duration: ${(summary.duration / 1000).toFixed(2)}s\n` +
+              `Success Rate: ${successRate}%`;
+            
+            const doc = await vscode.workspace.openTextDocument({
+              content: details,
+              language: "plaintext"
+            });
+            await vscode.window.showTextDocument(doc);
+          }
+        } else {
+          vscode.window.showErrorMessage(`Test execution failed: ${result.error}`);
+        }
+      } catch (error) {
+        console.error("[Extension] Error in executeTests command:", error);
+        vscode.window.showErrorMessage(`Test execution failed: ${error.message}`);
+      }
+    }
+  );
+  context.subscriptions.push(executeTestsDisposable);
+  console.log("[OK] Execute Tests command registered.");
+
+  // Generate Documentation Command
+  const generateDocumentationDisposable = vscode.commands.registerCommand(
+    "codeJanitor.generateDocumentation",
+    async () => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        if (!workspaceRoot) {
+          vscode.window.showErrorMessage("No workspace folder open!");
+          return;
+        }
+
+        const docType = await vscode.window.showQuickPick(
+          [
+            { label: "README", value: "readme", description: "Generate README.md" },
+            { label: "API Documentation", value: "api", description: "Generate API.md" },
+            { label: "Contributing Guide", value: "contributing", description: "Generate CONTRIBUTING.md" },
+            { label: "Full Documentation", value: "full", description: "Generate complete documentation suite" }
+          ],
+          { placeHolder: "Select documentation type" }
+        );
+
+        if (!docType) return;
+
+        vscode.window.showInformationMessage(`Generating ${docType.label}...`);
+
+        const { generateDocumentation } = require("./ai-agent/tools/generate-documentation");
+        const result = await generateDocumentation({
+          type: docType.value,
+          includeApi: true,
+          includeExamples: true
+        }, workspaceRoot);
+
+        if (result.success) {
+          const message = `Documentation generated: ${result.outputPath}`;
+          const action = await vscode.window.showInformationMessage(
+            message,
+            "Open File",
+            "View Summary"
+          );
+
+          if (action === "Open File") {
+            const docUri = vscode.Uri.file(
+              require("path").join(workspaceRoot, result.outputPath)
+            );
+            const doc = await vscode.workspace.openTextDocument(docUri);
+            await vscode.window.showTextDocument(doc);
+          } else if (action === "View Summary") {
+            const summary = `Documentation Generation Summary\n\n` +
+              `Type: ${result.type}\n` +
+              `Output: ${result.outputPath}\n` +
+              `Files Analyzed: ${result.analysis.files}\n` +
+              `Functions Documented: ${result.analysis.functions}\n` +
+              `Classes Documented: ${result.analysis.classes}\n` +
+              `Languages: ${result.analysis.languages.join(", ")}`;
+            
+            const doc = await vscode.workspace.openTextDocument({
+              content: summary,
+              language: "plaintext"
+            });
+            await vscode.window.showTextDocument(doc);
+          }
+        } else {
+          vscode.window.showErrorMessage(`Documentation generation failed: ${result.error}`);
+        }
+      } catch (error) {
+        console.error("[Extension] Error in generateDocumentation command:", error);
+        vscode.window.showErrorMessage(`Documentation generation failed: ${error.message}`);
+      }
+    }
+  );
+  context.subscriptions.push(generateDocumentationDisposable);
+  console.log("[OK] Generate Documentation command registered.");
+
 
   const githubContextDisposable = vscode.commands.registerCommand(
     "codeJanitor.showGitHubContext",
