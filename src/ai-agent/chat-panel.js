@@ -3378,7 +3378,7 @@ ${document.getText()}
     }
 
     const candidates = actions.filter((action) => {
-      if (!action || (action.type !== "patch" && action.type !== "file")) {
+      if (!action || (action.type !== "patch" && action.type !== "file" && action.type !== "apply_diff" && action.type !== "insert_content")) {
         return false;
       }
       return type ? action.type === type : true;
@@ -3609,6 +3609,178 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
         currentContent,
         retryResponse.text
       ),
+      workspaceFolder,
+      "File fallback",
+      runtimeConfig
+    );
+
+    if (fileFallbackResponse.error) {
+      return {
+        success: false,
+        error: `FILE fallback failed for ${action.path}: ${fileFallbackResponse.error}`
+      };
+    }
+
+    const fileAction = this._findEditActionForPath(
+      fileFallbackResponse.actions,
+      action.path,
+      "file"
+    );
+
+    if (!fileAction) {
+      return {
+        success: false,
+        error: `Automatic recovery for ${action.path} did not produce a valid FILE action.`
+      };
+    }
+
+    this._postMessage({
+      type: "status",
+      text: `Applying full-file fallback to: ${fileAction.path}`
+    });
+
+    return this.agent.applyChanges(
+      fileAction.path,
+      fileAction.content,
+      outside,
+      effectiveWriteOptions
+    );
+  }
+
+  /**
+   * Recover from failed apply_diff action
+   * Similar to _recoverFailedPatch but handles apply_diff format
+   */
+  async _recoverFailedApplyDiff(
+    originalRequest,
+    workspaceFolder,
+    action,
+    currentContent,
+    outside,
+    writeOptions,
+    runtimeConfig = null
+  ) {
+    const effectiveWriteOptions = this._withWorkspaceRoot(
+      writeOptions,
+      workspaceFolder
+    );
+    
+    this._postMessage({
+      type: "status",
+      text: `Diff did not match ${action.path}. Retrying with broader file context...`
+    });
+
+    // Build recovery prompt for apply_diff
+    const recoveryPrompt = `The previous APPLY_DIFF for ${action.path} did not match the current file.
+Return executable structured edits only.
+
+Rules:
+- Edit ONLY ${action.path}.
+- Prefer exactly one APPLY_DIFF action for ${action.path} with proper SEARCH/REPLACE blocks.
+- Use the <<<<<<< SEARCH / ======= / >>>>>>> REPLACE format with :start_line: markers.
+- Copy SEARCH text exactly from the current file content below.
+- Use a larger unique SEARCH anchor, usually 3-12 surrounding lines.
+- If an exact match would still be brittle, return exactly one FILE action for ${action.path} with the complete updated file content.
+- Do not output explanations, CMD, or MKDIR.
+
+Original user request:
+${originalRequest}
+
+${this._buildRecoveryFileContext(action.path, currentContent)}`;
+
+    const retryResponse = await this._requestEditRecovery(
+      recoveryPrompt,
+      workspaceFolder,
+      "Diff retry",
+      runtimeConfig
+    );
+
+    if (retryResponse.error) {
+      return {
+        success: false,
+        error: `Diff retry failed for ${action.path}: ${retryResponse.error}`
+      };
+    }
+
+    // Look for apply_diff or file action in retry response
+    const retryApplyDiff = this._findEditActionForPath(
+      retryResponse.actions,
+      action.path,
+      "apply_diff"
+    );
+    const retryFile = this._findEditActionForPath(
+      retryResponse.actions,
+      action.path,
+      "file"
+    );
+
+    // Try apply_diff first
+    if (retryApplyDiff) {
+      this._postMessage({
+        type: "status",
+        text: `Applying repaired diff to: ${retryApplyDiff.path}`
+      });
+      
+      try {
+        const toolRegistry = require("./tools/tool-registry").registry;
+        const result = await toolRegistry.executeTool("apply_diff", {
+          path: retryApplyDiff.path,
+          diff: retryApplyDiff.diff
+        }, workspaceFolder);
+        
+        if (result.success) {
+          return {
+            success: true,
+            path: result.absolutePath || path.join(workspaceFolder, retryApplyDiff.path),
+            previousContent: result.previousContent,
+            newContent: result.newContent
+          };
+        }
+      } catch (err) {
+        // If retry also fails, fall through to file fallback
+        this._postMessage({
+          type: "status",
+          text: `Repaired diff also failed. Trying file fallback...`
+        });
+      }
+    }
+
+    // Try file action if apply_diff failed or wasn't provided
+    if (retryFile) {
+      this._postMessage({
+        type: "status",
+        text: `Falling back to full-file rewrite for: ${retryFile.path}`
+      });
+      return this.agent.applyChanges(
+        retryFile.path,
+        retryFile.content,
+        outside,
+        effectiveWriteOptions
+      );
+    }
+
+    // Final fallback: request complete file rewrite
+    this._postMessage({
+      type: "status",
+      text: `Diff retry was still not reliable for ${action.path}. Requesting a complete file rewrite...`
+    });
+
+    const fileFallbackPrompt = `The APPLY_DIFF retries for ${action.path} were not reliable.
+Return exactly one FILE action for ${action.path} with the COMPLETE updated file content.
+
+Rules:
+- Edit ONLY ${action.path}.
+- Preserve unrelated code, formatting, and behavior.
+- Do not output APPLY_DIFF, PATCH, CMD, MKDIR, or explanations.
+- The FILE block must contain the full file from start to finish.
+
+Original user request:
+${originalRequest}
+
+${this._buildRecoveryFileContext(action.path, currentContent)}`;
+
+    const fileFallbackResponse = await this._requestEditRecovery(
+      fileFallbackPrompt,
       workspaceFolder,
       "File fallback",
       runtimeConfig
@@ -6810,10 +6982,69 @@ ${trimmedText}`;
                   });
                 }
               } catch (error) {
-                this._postMessage({
-                  type: "error",
-                  text: `Error applying diff to ${action.path}: ${error.message}`
-                });
+                // Attempt recovery for apply_diff failures
+                const isMatchError = error.message && (
+                  error.message.includes("Search block not found") ||
+                  error.message.includes("not found at line") ||
+                  error.message.includes("matched") && error.message.includes("locations")
+                );
+                
+                if (isMatchError && isEditLikeIntent) {
+                  this._postMessage({
+                    type: "status",
+                    text: `Diff did not match ${action.path}. Attempting recovery...`
+                  });
+                  
+                  // Read current file content for recovery
+                  const fullPath = this._resolveActionFilePath(workspaceFolder, action.path);
+                  let currentContent = "";
+                  try {
+                    currentContent = await fs.readFile(fullPath, "utf8");
+                  } catch (readErr) {
+                    this._postMessage({
+                      type: "error",
+                      text: `Cannot recover ${action.path}: ${readErr.message}`
+                    });
+                    continue;
+                  }
+                  
+                  const recoveryResult = await this._recoverFailedApplyDiff(
+                    requestText,
+                    workspaceFolder,
+                    action,
+                    currentContent,
+                    outside,
+                    writeOptions,
+                    activeRuntimeConfig
+                  );
+                  
+                  if (recoveryResult && recoveryResult.success) {
+                    const recoveryUndoId = this._registerEditForUndo({
+                      filePath: recoveryResult.path || action.path,
+                      before: recoveryResult.previousContent,
+                      after: recoveryResult.newContent,
+                      label: "apply_diff_recovery"
+                    });
+                    this._postMessage({
+                      type: "applied",
+                      filePath: recoveryResult.path,
+                      undoId: recoveryUndoId,
+                      text: `\u2705 Applied recovered changes to ${action.path}`
+                    });
+                    changedFiles.push(action.path);
+                    await this._revealWorkspaceFile(recoveryResult.path);
+                  } else {
+                    this._postMessage({
+                      type: "error",
+                      text: recoveryResult?.error || `Recovery failed for ${action.path}: ${error.message}`
+                    });
+                  }
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: `Error applying diff to ${action.path}: ${error.message}`
+                  });
+                }
               }
             } else if (action.type === "insert_content") {
               // Bob-style INSERT_CONTENT action for line insertion
