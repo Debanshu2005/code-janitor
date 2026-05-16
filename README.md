@@ -58,6 +58,9 @@ Supported targets: one file or one directory. Supported extensions currently inc
 8. **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
 9. **Workspace Scanning**: Scan your workspace and integrate with knowledge graph for better code suggestions
 10. **Graphify**: Visualize your codebase as a graph to understand component relationships
+11. **Edge Case Testing**: Automatically generate comprehensive edge cases for testing functions and classes
+12. **Test Execution & Reporting**: Execute tests with detailed reports and coverage analysis
+13. **Documentation Generation**: Automatically generate README, API docs, and contributing guides
 
 ### Installation
 
@@ -129,6 +132,23 @@ Supported targets: one file or one directory. Supported extensions currently inc
    - Monitor model performance
    - View auto-heal history
    - Get optimization recommendations
+- **Edge Case Testing**: Generate comprehensive edge cases for functions and classes
+  - Automatic boundary value analysis
+  - Security test cases (XSS, SQL injection)
+  - Multiple language support (JavaScript, Python, Java)
+  - Test code generation in Jest, pytest, JUnit formats
+- **Test Execution & Reporting**: Execute tests with detailed analysis
+  - Framework auto-detection (Jest, Mocha, pytest, JUnit)
+  - Comprehensive test reports with success rates
+  - Edge case coverage tracking
+  - Markdown and JSON report formats
+- **Documentation Generation**: Automatically generate project documentation
+  - README with features, installation, usage
+  - API documentation for classes and functions
+  - Contributing guides with best practices
+  - Full documentation suite generation
+
+For detailed information about testing and documentation features, see [TESTING_AND_DOCUMENTATION.md](TESTING_AND_DOCUMENTATION.md).
 
 ---
 

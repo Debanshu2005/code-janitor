@@ -47,6 +47,29 @@ const {
   parseGitHubRemoteUrl,
   VALID_MODES: VALID_GITHUB_CONTEXT_MODES
 } = require("./fetch-github-context");
+const {
+  generateEdgeCases,
+  validateEdgeCaseRequest,
+  generateFunctionEdgeCases,
+  generateClassEdgeCases,
+  EDGE_CASE_CATEGORIES
+} = require("./generate-edge-cases");
+const {
+  executeTests,
+  validateTestRequest,
+  detectTestFramework,
+  findTestFiles,
+  parseTestResults,
+  generateTestReport
+} = require("./execute-tests");
+const {
+  generateDocumentation,
+  validateDocumentationRequest,
+  analyzeRepository,
+  generateReadme,
+  generateApiDocs,
+  generateContributingGuide
+} = require("./generate-documentation");
 
 module.exports = {
   // Apply Diff
@@ -104,6 +127,29 @@ module.exports = {
   validateGitHubContextRequest,
   parseGitHubRemoteUrl,
   VALID_GITHUB_CONTEXT_MODES,
+  
+  // Edge Case Generation
+  generateEdgeCases,
+  validateEdgeCaseRequest,
+  generateFunctionEdgeCases,
+  generateClassEdgeCases,
+  EDGE_CASE_CATEGORIES,
+  
+  // Test Execution
+  executeTests,
+  validateTestRequest,
+  detectTestFramework,
+  findTestFiles,
+  parseTestResults,
+  generateTestReport,
+  
+  // Documentation Generation
+  generateDocumentation,
+  validateDocumentationRequest,
+  analyzeRepository,
+  generateReadme,
+  generateApiDocs,
+  generateContributingGuide,
   
   // Tool Registry
   registry,

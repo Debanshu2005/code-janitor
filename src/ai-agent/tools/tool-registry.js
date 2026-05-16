@@ -14,6 +14,9 @@ const { askFollowupQuestion, MAX_SUGGESTIONS } = require("./ask-followup-questio
 const { attemptCompletion, validateAttemptCompletion } = require("./attempt-completion");
 const { submitReviewFindings, validateIssues, MAX_ISSUES_PER_SUBMISSION } = require("./submit-review-findings");
 const { fetchGitHubContext } = require("./fetch-github-context");
+const { generateEdgeCases, validateEdgeCaseRequest } = require("./generate-edge-cases");
+const { executeTests, validateTestRequest } = require("./execute-tests");
+const { generateDocumentation, validateDocumentationRequest } = require("./generate-documentation");
 
 /**
  * Tool definitions with metadata
@@ -361,6 +364,138 @@ const y = 4;
 })`
       }
     ]
+  },
+
+  generate_edge_cases: {
+    name: "generate_edge_cases",
+    description: "Generate comprehensive edge cases for testing code functions and classes",
+    handler: generateEdgeCases,
+    validator: validateEdgeCaseRequest,
+    params: {
+      filePath: {
+        type: "string",
+        required: true,
+        description: "Path to the source file to generate edge cases for"
+      }
+    },
+    examples: [
+      {
+        description: "Generate edge cases for a JavaScript file",
+        usage: `generate_edge_cases({
+  filePath: 'src/utils/calculator.js'
+})`
+      },
+      {
+        description: "Generate edge cases for a Python file",
+        usage: `generate_edge_cases({
+  filePath: 'app/models/user.py'
+})`
+      }
+    ]
+  },
+
+  execute_tests: {
+    name: "execute_tests",
+    description: "Execute tests and generate comprehensive test reports with edge case coverage",
+    handler: executeTests,
+    validator: validateTestRequest,
+    params: {
+      testPath: {
+        type: "string",
+        required: false,
+        description: "Path to specific test file or directory. If not provided, runs all tests."
+      },
+      framework: {
+        type: "string",
+        required: false,
+        description: "Test framework to use (jest, mocha, pytest, junit). Auto-detected if not specified."
+      },
+      generateReport: {
+        type: "boolean",
+        required: false,
+        description: "Whether to generate a detailed test report (default: true)"
+      },
+      includeEdgeCases: {
+        type: "boolean",
+        required: false,
+        description: "Whether to include edge case tests in execution (default: true)"
+      }
+    },
+    examples: [
+      {
+        description: "Run all tests with report generation",
+        usage: `execute_tests({
+  generateReport: true,
+  includeEdgeCases: true
+})`
+      },
+      {
+        description: "Run specific test file",
+        usage: `execute_tests({
+  testPath: 'src/__tests__/calculator.test.js',
+  framework: 'jest'
+})`
+      }
+    ]
+  },
+
+  generate_documentation: {
+    name: "generate_documentation",
+    description: "Generate comprehensive documentation for a repository including README, API docs, and contributing guides",
+    handler: generateDocumentation,
+    validator: validateDocumentationRequest,
+    params: {
+      type: {
+        type: "string",
+        required: false,
+        description: "Documentation type: 'readme', 'api', 'contributing', or 'full' (default: 'readme')"
+      },
+      outputPath: {
+        type: "string",
+        required: false,
+        description: "Custom output path for the documentation. Auto-generated if not specified."
+      },
+      includeApi: {
+        type: "boolean",
+        required: false,
+        description: "Include API documentation (default: true)"
+      },
+      includeExamples: {
+        type: "boolean",
+        required: false,
+        description: "Include code examples in documentation (default: true)"
+      },
+      scanDirectory: {
+        type: "string",
+        required: false,
+        description: "Directory to scan for code analysis (default: 'src')"
+      }
+    },
+    examples: [
+      {
+        description: "Generate README documentation",
+        usage: `generate_documentation({
+  type: 'readme',
+  includeApi: true,
+  includeExamples: true
+})`
+      },
+      {
+        description: "Generate full documentation suite",
+        usage: `generate_documentation({
+  type: 'full',
+  scanDirectory: 'src'
+})`
+      },
+      {
+        description: "Generate API documentation only",
+        usage: `generate_documentation({
+  type: 'api',
+  outputPath: 'docs/API.md',
+  includeExamples: true
+})`
+      }
+    ]
   }
 };
 
@@ -554,6 +689,12 @@ class ToolRegistry {
         result = await tool.handler(params, workspaceRoot, executionContext);
       } else if (toolName === "submit_review_findings") {
         result = await tool.handler(params.issues, workspaceRoot, executionContext);
+      } else if (toolName === "generate_edge_cases") {
+        result = await tool.handler(params.filePath, workspaceRoot, executionContext);
+      } else if (toolName === "execute_tests") {
+        result = await tool.handler(params, workspaceRoot, executionContext);
+      } else if (toolName === "generate_documentation") {
+        result = await tool.handler(params, workspaceRoot, executionContext);
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);
       }
