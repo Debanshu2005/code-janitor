@@ -20,6 +20,10 @@ const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const { createOptimizedChatPanel } = require("./optimizer-integration");
 const { applyDiffToContent } = require("./tools/apply-diff");
 const { insertContentIntoText } = require("./tools/insert-content");
+const {
+  sanitizeOutputRelativePath,
+  DEFAULT_OUTPUT_RELATIVE_PATH
+} = require("./workspace-memory");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
@@ -1431,6 +1435,53 @@ class ChatPanel {
     this._postMessage({ type: "done" });
   }
 
+  async _handleWorkspaceSettingsAction(action) {
+    if (action === "reloadWorkspaceSettings") {
+      await this._postWorkspaceMemorySettings();
+      this._postMessage({
+        type: "status",
+        text: "Workspace tracking settings reloaded."
+      });
+      return;
+    }
+
+    if (action === "openGraphify") {
+      await vscode.commands.executeCommand("codeJanitor.openGraphify");
+      this._postMessage({
+        type: "status",
+        text: "Graphify command sent."
+      });
+      return;
+    }
+
+    if (action === "refreshWorkspaceMemory") {
+      await vscode.commands.executeCommand("codeJanitor.refreshWorkspaceMemory");
+      await this._postWorkspaceMemorySettings();
+      this._postMessage({
+        type: "status",
+        text: "Workspace memory refresh requested."
+      });
+      return;
+    }
+
+    if (action === "openWorkspaceMemory") {
+      await vscode.commands.executeCommand("codeJanitor.openWorkspaceMemory");
+      await this._postWorkspaceMemorySettings();
+      this._postMessage({
+        type: "status",
+        text: "Workspace memory open requested."
+      });
+      return;
+    }
+
+    if (action === "showGitHubContext") {
+      await this.runGitHubRepositoryContext();
+      return;
+    }
+
+    throw new Error(`Unknown workspace settings action: ${action}`);
+  }
+
   async _findGitRoot(startPath) {
     if (!startPath) return null;
 
@@ -2394,6 +2445,10 @@ ${fileContent}
     return `codeJanitor.ai.${provider}.apiKey`;
   }
 
+  _getGitHubSecretKey() {
+    return "codeJanitor.github.apiToken";
+  }
+
   _getCustomProvidersStateKey() {
     return "codeJanitor.ai.customProviders";
   }
@@ -2788,6 +2843,148 @@ ${fileContent}
     }
 
     return presence;
+  }
+
+  async _getStoredGitHubToken() {
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.github");
+    const configValue = this._sanitizeApiKey(cfg.get("apiToken", ""));
+    const secretValue = this._sanitizeApiKey(
+      await this.context?.secrets?.get?.(this._getGitHubSecretKey())
+    );
+    return secretValue || configValue;
+  }
+
+  async _persistGitHubToken(apiToken) {
+    const sanitized = this._sanitizeApiKey(apiToken);
+    if (!sanitized) {
+      return;
+    }
+
+    await this.context?.secrets?.store?.(this._getGitHubSecretKey(), sanitized);
+
+    try {
+      const cfg = vscode.workspace.getConfiguration("codeJanitor.github");
+      const currentValue = this._sanitizeApiKey(cfg.get("apiToken", ""));
+      if (currentValue) {
+        const target = this._getConfigTarget("codeJanitor.github", "apiToken");
+        await cfg.update("apiToken", "", target);
+      }
+    } catch (error) {
+      console.warn("[ChatPanel] Failed to scrub plaintext GitHub token from settings:", error);
+    }
+  }
+
+  async _getWorkspaceMemorySettings() {
+    const workspaceMemoryCfg = vscode.workspace.getConfiguration(
+      "codeJanitor.assistant.workspaceMemory"
+    );
+    const githubCfg = vscode.workspace.getConfiguration("codeJanitor.github");
+    const workspaceRoot = this._getEffectiveWorkspaceFolder() || "";
+    const outputPath = sanitizeOutputRelativePath(
+      workspaceMemoryCfg.get("outputPath", DEFAULT_OUTPUT_RELATIVE_PATH)
+    );
+
+    return {
+      enabled: workspaceMemoryCfg.get("enabled", true),
+      autoRefreshDelay: Number(
+        workspaceMemoryCfg.get("autoRefreshDelay", 1500)
+      ),
+      maxRecentChanges: Number(
+        workspaceMemoryCfg.get("maxRecentChanges", 40)
+      ),
+      includeGitHub: workspaceMemoryCfg.get("includeGitHub", true),
+      outputPath,
+      githubApiBaseUrl: String(
+        githubCfg.get("apiBaseUrl", "https://api.github.com") || ""
+      ).trim() || "https://api.github.com",
+      hasGitHubToken: !!(await this._getStoredGitHubToken()),
+      workspaceRoot,
+      outputAbsolutePath: workspaceRoot
+        ? path.join(workspaceRoot, outputPath)
+        : ""
+    };
+  }
+
+  async _postWorkspaceMemorySettings() {
+    const settings = await this._getWorkspaceMemorySettings();
+    this._postMessage({
+      type: "workspaceMemorySettings",
+      settings
+    });
+  }
+
+  async _saveWorkspaceMemorySettings(input = {}) {
+    const workspaceMemoryCfg = vscode.workspace.getConfiguration(
+      "codeJanitor.assistant.workspaceMemory"
+    );
+    const githubCfg = vscode.workspace.getConfiguration("codeJanitor.github");
+    const enabled = input.enabled !== false;
+    const includeGitHub = input.includeGitHub !== false;
+    const autoRefreshDelay = Math.max(
+      250,
+      Math.floor(Number(input.autoRefreshDelay) || 1500)
+    );
+    const maxRecentChanges = Math.min(
+      200,
+      Math.max(5, Math.floor(Number(input.maxRecentChanges) || 40))
+    );
+    const outputPath = sanitizeOutputRelativePath(input.outputPath);
+    const githubApiBaseUrl =
+      this._sanitizeExternalUrl(String(input.githubApiBaseUrl || "").trim(), {
+        allowHttp: true,
+        allowHttps: true
+      }) || "https://api.github.com";
+
+    await Promise.all([
+      workspaceMemoryCfg.update(
+        "enabled",
+        enabled,
+        this._getConfigTarget("codeJanitor.assistant.workspaceMemory", "enabled")
+      ),
+      workspaceMemoryCfg.update(
+        "autoRefreshDelay",
+        autoRefreshDelay,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "autoRefreshDelay"
+        )
+      ),
+      workspaceMemoryCfg.update(
+        "maxRecentChanges",
+        maxRecentChanges,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "maxRecentChanges"
+        )
+      ),
+      workspaceMemoryCfg.update(
+        "includeGitHub",
+        includeGitHub,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "includeGitHub"
+        )
+      ),
+      workspaceMemoryCfg.update(
+        "outputPath",
+        outputPath,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "outputPath"
+        )
+      ),
+      githubCfg.update(
+        "apiBaseUrl",
+        githubApiBaseUrl,
+        this._getConfigTarget("codeJanitor.github", "apiBaseUrl")
+      )
+    ]);
+
+    if (input.githubApiToken) {
+      await this._persistGitHubToken(input.githubApiToken);
+    }
+
+    await this._postWorkspaceMemorySettings();
   }
 
   async _addCustomProvider(definition, apiKey) {
@@ -5098,8 +5295,8 @@ ${trimmedText}`;
     return this.context.globalState.get(this._getProviderModelStateKey(provider), "");
   }
 
-  _getConfigTargetForKey(key) {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+  _getConfigTarget(section, key) {
+    const cfg = vscode.workspace.getConfiguration(section);
     const inspected = cfg.inspect(key);
     const hasWorkspaceOverride =
       inspected &&
@@ -5113,11 +5310,19 @@ ${trimmedText}`;
     return vscode.ConfigurationTarget.Global;
   }
 
-  async _updateAiConfig(key, value) {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const target = this._getConfigTargetForKey(key);
+  _getConfigTargetForKey(key) {
+    return this._getConfigTarget("codeJanitor.ai", key);
+  }
+
+  async _updateConfigSection(section, key, value) {
+    const cfg = vscode.workspace.getConfiguration(section);
+    const target = this._getConfigTarget(section, key);
     await cfg.update(key, value, target);
     return cfg;
+  }
+
+  async _updateAiConfig(key, value) {
+    return this._updateConfigSection("codeJanitor.ai", key, value);
   }
 
   _getModelConfigKey(provider) {
@@ -7346,6 +7551,9 @@ ${trimmedText}`;
           this._postGStackGateModeState();
           this._postAutoHealState();
           this._postSessionState();
+          this._postWorkspaceMemorySettings().catch((error) => {
+            console.warn("[ChatPanel] Failed to post workspace settings:", error);
+          });
           
           // Fetch real key presence in background
           this._getProviderPresence().then(keyPresence => {
@@ -7367,6 +7575,23 @@ ${trimmedText}`;
         
         // Fetch models in background (non-blocking)
         this._fetchAndSendModels(selectedProvider);
+      } else if (message.type === "reloadWorkspaceSettings") {
+        await this._postWorkspaceMemorySettings();
+      } else if (message.type === "saveWorkspaceMemorySettings") {
+        await this._saveWorkspaceMemorySettings(message.settings || {});
+        this._postMessage({
+          type: "status",
+          text: "Workspace tracking settings saved."
+        });
+      } else if (message.type === "workspaceSettingsAction") {
+        try {
+          await this._handleWorkspaceSettingsAction(message.action);
+        } catch (error) {
+          this._postMessage({
+            type: "error",
+            text: `Workspace action failed: ${error.message}`
+          });
+        }
       } else if (message.type === "createSession") {
         this.agent.createSession();
         this._outsideWorkspaceAllowed = false;

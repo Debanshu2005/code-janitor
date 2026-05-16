@@ -335,8 +335,31 @@
       #custom-provider-overlay.visible {
         display: flex;
       }
+      #workspace-settings-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(4, 8, 14, 0.72);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 2500;
+        padding: 18px;
+      }
+      #workspace-settings-overlay.visible {
+        display: flex;
+      }
       #custom-provider-dialog {
         width: min(560px, 100%);
+        background: linear-gradient(180deg, rgba(18, 26, 35, 0.98), rgba(11, 15, 20, 0.98));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        padding: 18px;
+      }
+      #workspace-settings-dialog {
+        width: min(760px, 100%);
+        max-height: min(88vh, 900px);
+        overflow-y: auto;
         background: linear-gradient(180deg, rgba(18, 26, 35, 0.98), rgba(11, 15, 20, 0.98));
         border: 1px solid var(--border);
         border-radius: 18px;
@@ -427,6 +450,134 @@
         color: var(--muted);
       }
       #custom-provider-save {
+        background: var(--accent);
+        border: 1px solid rgba(88, 166, 255, 0.45);
+        color: #fff;
+      }
+      .workspace-settings-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .workspace-settings-section {
+        padding: 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(48, 54, 61, 0.6);
+        background: linear-gradient(180deg, rgba(15, 20, 27, 0.86), rgba(11, 15, 20, 0.92));
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .workspace-settings-section.full {
+        grid-column: 1 / -1;
+      }
+      .workspace-settings-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .workspace-settings-copy {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .workspace-settings-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .workspace-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .workspace-field label {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .workspace-field input[type="text"],
+      .workspace-field input[type="password"],
+      .workspace-field input[type="number"] {
+        width: 100%;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 12px;
+      }
+      .workspace-field input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .workspace-field-help {
+        font-size: 10px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .workspace-toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .workspace-toggle-copy {
+        min-width: 0;
+      }
+      .workspace-toggle-copy strong {
+        display: block;
+        font-size: 12px;
+        color: var(--text);
+      }
+      .workspace-toggle-copy span {
+        display: block;
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .workspace-readonly {
+        padding: 9px 10px;
+        border-radius: 10px;
+        border: 1px dashed rgba(88, 166, 255, 0.2);
+        background: rgba(88, 166, 255, 0.06);
+        font-size: 11px;
+        color: var(--text);
+        word-break: break-word;
+      }
+      .workspace-secret-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: #7ee787;
+      }
+      .workspace-secret-status.off {
+        color: var(--muted);
+      }
+      .workspace-action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .workspace-settings-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .workspace-settings-actions button {
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #workspace-settings-close-secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      #workspace-settings-save {
         background: var(--accent);
         border: 1px solid rgba(88, 166, 255, 0.45);
         color: #fff;
@@ -2393,6 +2544,9 @@
           grid-template-columns: 1fr;
           min-width: 100%;
         }
+        .workspace-settings-grid {
+          grid-template-columns: 1fr;
+        }
         #feature-ribbon-header {
           align-items: flex-start;
           flex-direction: column;
@@ -2692,6 +2846,7 @@
             </select>
             <button class="pill-btn" id="btn-think" title="Show reasoning summary">Think</button>
             <button class="icon-btn" id="btn-tts" title="Toggle text-to-speech">TTS</button>
+            <button class="pill-btn" id="btn-workspace-settings" title="Workspace tracking and GitHub settings">Workspace</button>
             <button class="pill-btn" id="btn-tutorial" title="Show Tutorial">Guide</button>
             <button class="pill-btn" id="btn-clear" title="Clear">Clear</button>
           </div>
@@ -2779,6 +2934,110 @@
         <div class="provider-dialog-actions">
           <button id="custom-provider-cancel">Cancel</button>
           <button id="custom-provider-save">Save Provider</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="workspace-settings-overlay">
+      <div id="workspace-settings-dialog">
+        <div class="provider-dialog-head">
+          <div>
+            <h3>Workspace Tracking</h3>
+            <p>Manage the shared repo ledger used by Claude, Codex, Bob, and other AI agents. These controls cover Graphify-aware workspace memory and GitHub enrichment.</p>
+          </div>
+          <button class="provider-dialog-close" id="workspace-settings-close" title="Close">x</button>
+        </div>
+
+        <div class="workspace-settings-grid">
+          <div class="workspace-settings-section">
+            <div class="workspace-settings-title">Workspace Memory</div>
+            <div class="workspace-settings-copy">Control how the Markdown handoff ledger is generated and refreshed as files change.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-toggle-row">
+                <div class="workspace-toggle-copy">
+                  <strong>Enable repo ledger tracking</strong>
+                  <span>Continuously maintain `WORKSPACE_MEMORY.md` as the current repo blueprint and change log.</span>
+                </div>
+                <button class="toggle-switch" id="workspace-memory-enabled-toggle" title="Toggle workspace memory" aria-pressed="true">
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </button>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-memory-delay">Auto refresh delay (ms)</label>
+                <input id="workspace-memory-delay" type="number" min="250" step="250" />
+                <div class="workspace-field-help">Debounce delay before the ledger refreshes after tracked changes.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-memory-max-changes">Max recent changes</label>
+                <input id="workspace-memory-max-changes" type="number" min="5" max="200" step="1" />
+                <div class="workspace-field-help">How many recent before/after change entries to keep in the log.</div>
+              </div>
+              <div class="workspace-toggle-row">
+                <div class="workspace-toggle-copy">
+                  <strong>Include GitHub context</strong>
+                  <span>Enrich the repo ledger with repository, issue, and PR context when available.</span>
+                </div>
+                <button class="toggle-switch" id="workspace-memory-github-toggle" title="Toggle GitHub enrichment" aria-pressed="true">
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </button>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-memory-output-path">Ledger output path</label>
+                <input id="workspace-memory-output-path" type="text" placeholder="graphify-out/WORKSPACE_MEMORY.md" />
+                <div class="workspace-field-help">Workspace-relative Markdown file that all AI agents can read for current repo state.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section">
+            <div class="workspace-settings-title">GitHub Integration</div>
+            <div class="workspace-settings-copy">Configure the repository context used inside the ledger and the dedicated GitHub chat actions.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-field">
+                <label for="workspace-github-api-base-url">GitHub API base URL</label>
+                <input id="workspace-github-api-base-url" type="text" placeholder="https://api.github.com" />
+                <div class="workspace-field-help">Use this for GitHub Enterprise Server if your API base URL differs from the public GitHub API.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-github-token-input">GitHub token</label>
+                <input id="workspace-github-token-input" type="password" placeholder="Leave blank to keep the current saved token" />
+                <div id="workspace-github-token-status" class="workspace-secret-status off">No GitHub token saved yet.</div>
+                <div class="workspace-field-help">Stored securely in VS Code SecretStorage. Add one for private repos or richer GitHub context.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section full">
+            <div class="workspace-settings-title">Current Paths</div>
+            <div class="workspace-settings-copy">Use these read-only paths to verify where the ledger will be created in the active workspace.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-field">
+                <label>Workspace root</label>
+                <div id="workspace-root-display" class="workspace-readonly">No workspace folder detected.</div>
+              </div>
+              <div class="workspace-field">
+                <label>Resolved ledger file</label>
+                <div id="workspace-ledger-display" class="workspace-readonly">Open a workspace to see the generated file path.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section full">
+            <div class="workspace-settings-title">Quick Actions</div>
+            <div class="workspace-settings-copy">Run the main Graphify and handoff-ledger actions without leaving the chat panel.</div>
+            <div class="workspace-action-row">
+              <button class="pill-btn workspace-action-btn" data-workspace-action="openGraphify" type="button">Open Graphify</button>
+              <button class="pill-btn workspace-action-btn" data-workspace-action="refreshWorkspaceMemory" type="button">Refresh Ledger</button>
+              <button class="pill-btn workspace-action-btn" data-workspace-action="openWorkspaceMemory" type="button">Open Ledger</button>
+              <button class="pill-btn workspace-action-btn" data-workspace-action="showGitHubContext" type="button">GitHub Context</button>
+              <button class="pill-btn workspace-action-btn" data-workspace-action="reloadWorkspaceSettings" type="button">Reload Settings</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="workspace-settings-actions">
+          <button id="workspace-settings-close-secondary" type="button">Close</button>
+          <button id="workspace-settings-save" type="button">Save Settings</button>
         </div>
       </div>
     </div>
@@ -2919,6 +3178,24 @@
       var customProviderSave = document.getElementById("custom-provider-save");
       var customProviderCancel = document.getElementById("custom-provider-cancel");
       var customProviderClose = document.getElementById("custom-provider-close");
+      var btnWorkspaceSettings = document.getElementById("btn-workspace-settings");
+      var workspaceSettingsOverlay = document.getElementById("workspace-settings-overlay");
+      var workspaceSettingsClose = document.getElementById("workspace-settings-close");
+      var workspaceSettingsCloseSecondary = document.getElementById("workspace-settings-close-secondary");
+      var workspaceSettingsSave = document.getElementById("workspace-settings-save");
+      var workspaceMemoryEnabledToggle = document.getElementById("workspace-memory-enabled-toggle");
+      var workspaceMemoryDelay = document.getElementById("workspace-memory-delay");
+      var workspaceMemoryMaxChanges = document.getElementById("workspace-memory-max-changes");
+      var workspaceMemoryGitHubToggle = document.getElementById("workspace-memory-github-toggle");
+      var workspaceMemoryOutputPath = document.getElementById("workspace-memory-output-path");
+      var workspaceGitHubApiBaseUrl = document.getElementById("workspace-github-api-base-url");
+      var workspaceGitHubTokenInput = document.getElementById("workspace-github-token-input");
+      var workspaceGitHubTokenStatus = document.getElementById("workspace-github-token-status");
+      var workspaceRootDisplay = document.getElementById("workspace-root-display");
+      var workspaceLedgerDisplay = document.getElementById("workspace-ledger-display");
+      var workspaceActionButtons = Array.prototype.slice.call(
+        document.querySelectorAll(".workspace-action-btn")
+      );
 
       // Tracks the most recent edit's undoId so Ctrl+Z (or text "undo") in
       // the chat panel can target it. Reset to null after each undo so
@@ -3259,6 +3536,100 @@
         vscode.postMessage({ type: "addCustomProvider", provider: provider, apiKey: apiKey });
         closeCustomProviderDialog();
       };
+
+      function setToggleButtonState(button, enabled, labels) {
+        if (!button) return;
+        button.classList.toggle("off", !enabled);
+        button.setAttribute("aria-pressed", enabled ? "true" : "false");
+        if (labels) {
+          button.title = enabled ? labels.on : labels.off;
+        }
+      }
+
+      function openWorkspaceSettingsDialog() {
+        workspaceSettingsOverlay.classList.add("visible");
+      }
+
+      function closeWorkspaceSettingsDialog() {
+        workspaceSettingsOverlay.classList.remove("visible");
+      }
+
+      function applyWorkspaceSettings(settings) {
+        var resolved = settings || {};
+        setToggleButtonState(workspaceMemoryEnabledToggle, resolved.enabled !== false, {
+          on: "Disable workspace memory",
+          off: "Enable workspace memory"
+        });
+        setToggleButtonState(workspaceMemoryGitHubToggle, resolved.includeGitHub !== false, {
+          on: "Disable GitHub enrichment",
+          off: "Enable GitHub enrichment"
+        });
+
+        workspaceMemoryDelay.value =
+          typeof resolved.autoRefreshDelay === "number" ? resolved.autoRefreshDelay : 1500;
+        workspaceMemoryMaxChanges.value =
+          typeof resolved.maxRecentChanges === "number" ? resolved.maxRecentChanges : 40;
+        workspaceMemoryOutputPath.value = resolved.outputPath || "graphify-out/WORKSPACE_MEMORY.md";
+        workspaceGitHubApiBaseUrl.value = resolved.githubApiBaseUrl || "https://api.github.com";
+        workspaceRootDisplay.textContent = resolved.workspaceRoot || "No workspace folder detected.";
+        workspaceLedgerDisplay.textContent =
+          resolved.outputAbsolutePath || "Open a workspace to see the generated file path.";
+        workspaceGitHubTokenInput.value = "";
+        workspaceGitHubTokenStatus.textContent = resolved.hasGitHubToken
+          ? "GitHub token saved in SecretStorage."
+          : "No GitHub token saved yet.";
+        workspaceGitHubTokenStatus.classList.toggle("off", !resolved.hasGitHubToken);
+      }
+
+      function collectWorkspaceSettingsPayload() {
+        return {
+          enabled: workspaceMemoryEnabledToggle.getAttribute("aria-pressed") === "true",
+          autoRefreshDelay: Number(workspaceMemoryDelay.value) || 1500,
+          maxRecentChanges: Number(workspaceMemoryMaxChanges.value) || 40,
+          includeGitHub: workspaceMemoryGitHubToggle.getAttribute("aria-pressed") === "true",
+          outputPath: workspaceMemoryOutputPath.value.trim(),
+          githubApiBaseUrl: workspaceGitHubApiBaseUrl.value.trim(),
+          githubApiToken: workspaceGitHubTokenInput.value.trim()
+        };
+      }
+
+      btnWorkspaceSettings.onclick = function() {
+        openWorkspaceSettingsDialog();
+        vscode.postMessage({ type: "reloadWorkspaceSettings" });
+      };
+      workspaceSettingsClose.onclick = closeWorkspaceSettingsDialog;
+      workspaceSettingsCloseSecondary.onclick = closeWorkspaceSettingsDialog;
+      workspaceSettingsOverlay.onclick = function(event) {
+        if (event.target === workspaceSettingsOverlay) closeWorkspaceSettingsDialog();
+      };
+      workspaceMemoryEnabledToggle.onclick = function() {
+        var enabled = workspaceMemoryEnabledToggle.getAttribute("aria-pressed") !== "true";
+        setToggleButtonState(workspaceMemoryEnabledToggle, enabled, {
+          on: "Disable workspace memory",
+          off: "Enable workspace memory"
+        });
+      };
+      workspaceMemoryGitHubToggle.onclick = function() {
+        var enabled = workspaceMemoryGitHubToggle.getAttribute("aria-pressed") !== "true";
+        setToggleButtonState(workspaceMemoryGitHubToggle, enabled, {
+          on: "Disable GitHub enrichment",
+          off: "Enable GitHub enrichment"
+        });
+      };
+      workspaceSettingsSave.onclick = function() {
+        vscode.postMessage({
+          type: "saveWorkspaceMemorySettings",
+          settings: collectWorkspaceSettingsPayload()
+        });
+      };
+      workspaceActionButtons.forEach(function(button) {
+        button.onclick = function() {
+          var action = button.getAttribute("data-workspace-action");
+          if (!action) return;
+          vscode.postMessage({ type: "workspaceSettingsAction", action: action });
+        };
+      });
+
       var currentMessage = null;
       var chatMode = "fast";
       var activityEmptyMessage = "No activity yet. Start a task to see the agent workflow.";
@@ -5287,6 +5658,8 @@
           setAutoHealState(msg);
         } else if (msg.type === "gstackGateModeState") {
           setGateModeState(msg.value);
+        } else if (msg.type === "workspaceMemorySettings") {
+          applyWorkspaceSettings(msg.settings || {});
         } else if (msg.type === "triggerFix") {
           // Triggered by Alt+D - simulate clicking the Fix issues button
           var fixButton = document.querySelector('.action-chip[data-action="fix"]');
