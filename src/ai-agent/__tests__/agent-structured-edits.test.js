@@ -116,6 +116,42 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("loads workspace memory context when a handoff file is present", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-")
+    );
+    fs.mkdirSync(path.join(workspaceRoot, "graphify-out"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(workspaceRoot, "graphify-out", "WORKSPACE_MEMORY.md"),
+      [
+        "# Workspace Memory",
+        "",
+        "## Current Workspace",
+        "- Active file: src/extension.js",
+        "",
+        "## Recent Changes",
+        "- 2026-05-16T10:00:00.000Z | saved | src/ai-agent/agent.js",
+        "",
+        "## Git Snapshot",
+        "- Branch: main"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "what changed in the workspace recently?",
+      "scan"
+    );
+
+    expect(result).toContain("Workspace Memory Context");
+    expect(result).toContain("Recent Changes");
+    expect(result).toContain("Git Snapshot");
+  });
+
   test("normalizes leading dot segments in structured edit paths", () => {
     const agent = new AIAgent();
     agent.currentEditableTargets = new Set(["src/example.js"]);

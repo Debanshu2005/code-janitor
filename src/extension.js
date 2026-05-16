@@ -8,6 +8,9 @@ const {
 const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
+const {
+  WorkspaceMemoryService
+} = require("./ai-agent/workspace-memory");
 const GraphifyPanel = require("./graphify/graphify-panel");
 const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const { computeMinimalReplacement } = require("./utils/minimal-diff");
@@ -548,6 +551,7 @@ async function activate(context) {
   let isAutoFixing = false;
   let autoFixTimeout = null;
   chatPanelInstance = new ChatPanel(context);
+  const workspaceMemoryService = new WorkspaceMemoryService(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       "codeJanitor.chatSidebar",
@@ -555,6 +559,8 @@ async function activate(context) {
       { webviewOptions: { retainContextWhenHidden: true } }
     )
   );
+  context.subscriptions.push(workspaceMemoryService);
+  await workspaceMemoryService.initialize();
 
   // 1. Manual Fix Command - Open AI chat and trigger Fix issues
   const fixDisposable = vscode.commands.registerCommand(
@@ -966,6 +972,58 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   );
   context.subscriptions.push(githubContextDisposable);
   console.log("[OK] GitHub context command registered.");
+
+  const refreshWorkspaceMemoryDisposable = vscode.commands.registerCommand(
+    "codeJanitor.refreshWorkspaceMemory",
+    async () => {
+      try {
+        const refreshed = await workspaceMemoryService.refreshAllNow("manual", {
+          force: true
+        });
+        if (refreshed.length === 0) {
+          vscode.window.showInformationMessage(
+            "Code Janitor: Open a workspace folder to build workspace memory."
+          );
+          return;
+        }
+
+        vscode.window.showInformationMessage(
+          `Code Janitor: Workspace memory refreshed (${refreshed
+            .map((entry) => entry.relativePath)
+            .join(", ")}).`
+        );
+      } catch (error) {
+        console.error("[Extension] Error refreshing workspace memory:", error);
+        vscode.window.showErrorMessage(
+          `Workspace memory refresh failed: ${error.message}`
+        );
+      }
+    }
+  );
+  context.subscriptions.push(refreshWorkspaceMemoryDisposable);
+  console.log("[OK] Workspace memory refresh command registered.");
+
+  const openWorkspaceMemoryDisposable = vscode.commands.registerCommand(
+    "codeJanitor.openWorkspaceMemory",
+    async () => {
+      try {
+        await workspaceMemoryService.refreshAllNow("open", { force: true });
+        const openedPath = await workspaceMemoryService.openWorkspaceMemory();
+        if (!openedPath) {
+          vscode.window.showInformationMessage(
+            "Code Janitor: Open a workspace folder to use workspace memory."
+          );
+        }
+      } catch (error) {
+        console.error("[Extension] Error opening workspace memory:", error);
+        vscode.window.showErrorMessage(
+          `Open workspace memory failed: ${error.message}`
+        );
+      }
+    }
+  );
+  context.subscriptions.push(openWorkspaceMemoryDisposable);
+  console.log("[OK] Workspace memory open command registered.");
 
   // 6. Graphify Command
   const graphifyPanel = new GraphifyPanel(context);

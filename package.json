@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.22.1",
+  "version": "1.22.2",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -54,6 +54,8 @@
     "onCommand:codeJanitor.validateFrontend",
     "onCommand:codeJanitor.openChat",
     "onCommand:codeJanitor.showGitHubContext",
+    "onCommand:codeJanitor.refreshWorkspaceMemory",
+    "onCommand:codeJanitor.openWorkspaceMemory",
     "onCommand:codeJanitor.openGraphify",
     "onCommand:codeJanitor.showPerformance",
     "onCommand:codeJanitor.quickFixWithAI",
@@ -230,6 +232,33 @@
           "type": "string",
           "default": "https://api.github.com",
           "description": "GitHub API base URL. Change this for GitHub Enterprise Server instances."
+        },
+        "codeJanitor.assistant.workspaceMemory.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Continuously track workspace file activity and maintain a reusable Markdown memory file for AI handoff."
+        },
+        "codeJanitor.assistant.workspaceMemory.autoRefreshDelay": {
+          "type": "number",
+          "default": 1500,
+          "description": "Debounce delay in milliseconds before Code Janitor refreshes workspace memory after tracked file changes."
+        },
+        "codeJanitor.assistant.workspaceMemory.maxRecentChanges": {
+          "type": "number",
+          "default": 40,
+          "minimum": 5,
+          "maximum": 200,
+          "description": "Maximum number of recent tracked workspace changes kept in the assistant memory log."
+        },
+        "codeJanitor.assistant.workspaceMemory.includeGitHub": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include GitHub repository context in the generated workspace memory file when available."
+        },
+        "codeJanitor.assistant.workspaceMemory.outputPath": {
+          "type": "string",
+          "default": "graphify-out/WORKSPACE_MEMORY.md",
+          "description": "Workspace-relative path for the generated assistant memory Markdown file."
         }
 
       }
@@ -263,6 +292,16 @@
       {
         "command": "codeJanitor.showGitHubContext",
         "title": "Show GitHub Repository Context",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.refreshWorkspaceMemory",
+        "title": "Refresh Workspace Memory",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.openWorkspaceMemory",
+        "title": "Open Workspace Memory",
         "category": "Code Janitor"
       },
       {
@@ -310,6 +349,12 @@
         },
         {
           "command": "codeJanitor.showGitHubContext"
+        },
+        {
+          "command": "codeJanitor.refreshWorkspaceMemory"
+        },
+        {
+          "command": "codeJanitor.openWorkspaceMemory"
         },
         {
           "command": "codeJanitor.openGraphify"
