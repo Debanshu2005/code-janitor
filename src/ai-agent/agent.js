@@ -5048,6 +5048,7 @@ Rules:
 - Allowed statuses: \`pending\`, \`in_progress\`, \`completed\`
 - Keep at most one item \`in_progress\`
 - Use this for substantial multi-step tasks when keeping visible progress helps
+- For multi-step edit, debug, refactor, or bug-fix work, emit an initial todo list early and update it as progress changes
 
 **SUBMIT_REVIEW_FINDINGS** - Create formal review diagnostics in the Problems panel:
 Format:
@@ -5205,7 +5206,7 @@ Rules:
 - Do not continue, quote, or paraphrase the previous reply.
 - If the user asked you to change code/files, include at least one PATCH: or FILE: action.
 - If you genuinely need more ground truth before editing, you may instead return READ:, GREP:, or focused inspection CMD: actions only.
-- You may include UPDATE_TODO_LIST: when a multi-step edit/debug task benefits from tracked progress.
+- For multi-step edit/debug/refactor/bug-fix tasks, include UPDATE_TODO_LIST: early and keep it updated as progress changes.
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.

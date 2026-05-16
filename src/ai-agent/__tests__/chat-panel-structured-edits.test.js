@@ -485,6 +485,32 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("posted todo state includes session metadata without restoring chat history", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._postMessage = jest.fn();
+    panel.agent = {
+      getSessionState: jest.fn(() => ({
+        currentSessionId: "session-a",
+        sessions: [{ id: "session-a", title: "Chat A", updatedAt: 1 }],
+        todoList: [{ text: "Run tests", status: "in_progress" }]
+      }))
+    };
+
+    panel._postTodoState();
+
+    expect(panel._postMessage).toHaveBeenCalledWith({
+      type: "todoState",
+      sessions: [{ id: "session-a", title: "Chat A", updatedAt: 1 }],
+      currentSessionId: "session-a",
+      todoList: [{ text: "Run tests", status: "in_progress" }],
+      todoCounts: {
+        pending: 0,
+        in_progress: 1,
+        completed: 0
+      }
+    });
+  });
+
   test("undo state is scoped to the active chat session when entries are session-bound", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._undoStack = [
@@ -761,7 +787,7 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
-  test("keeps the partial streamed answer when the AI stream fails", () => {
+  test("discards the partial streamed answer when the AI stream fails", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._postMessage = jest.fn();
     panel._userStoppedGeneration = false;
@@ -778,7 +804,8 @@ describe("ChatPanel structured edit helpers", () => {
       text: "AI error: socket closed"
     });
     expect(panel._postMessage).toHaveBeenNthCalledWith(2, {
-      type: "done"
+      type: "done",
+      discardCurrentMessage: true
     });
   });
 

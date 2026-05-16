@@ -467,7 +467,7 @@ class ChatPanel {
         : `AI error: ${error.message}`;
 
     this._postMessage({ type: "error", text: errorMsg });
-    this._postMessage({ type: "done" });
+    this._postMessage({ type: "done", discardCurrentMessage: true });
     return { suppressed: false, errorMsg };
   }
 
@@ -2521,10 +2521,10 @@ ${fileContent}
     });
   }
 
-  _getTodoState() {
-    const sessionState = this.agent.getSessionState();
-    const todoList = Array.isArray(sessionState.todoList)
-      ? sessionState.todoList
+  _getTodoState(sessionState = null) {
+    const resolvedSessionState = sessionState || this.agent.getSessionState();
+    const todoList = Array.isArray(resolvedSessionState.todoList)
+      ? resolvedSessionState.todoList
       : [];
     const counts = todoList.reduce(
       (summary, item) => {
@@ -2541,16 +2541,18 @@ ${fileContent}
     );
 
     return {
-      currentSessionId: sessionState.currentSessionId,
+      currentSessionId: resolvedSessionState.currentSessionId,
       todoList,
       todoCounts: counts
     };
   }
 
   _postTodoState(extra = {}) {
+    const sessionState = this.agent.getSessionState();
     this._postMessage({
       type: "todoState",
-      ...this._getTodoState(),
+      sessions: Array.isArray(sessionState.sessions) ? sessionState.sessions : [],
+      ...this._getTodoState(sessionState),
       ...extra
     });
   }
@@ -6676,7 +6678,7 @@ ${trimmedText}`;
                   { agent: this.agent }
                 );
 
-                this._postSessionState();
+                this._postTodoState();
                 this._postMessage({
                   type: "applied",
                   text: `\u2705 ${result.summary}`

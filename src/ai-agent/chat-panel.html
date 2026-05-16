@@ -3457,6 +3457,7 @@
       function setActivityCollapsed(collapsed) {
         activityPanel.classList.toggle("collapsed", collapsed);
         activityToggle.textContent = collapsed ? "Show" : "Hide";
+        updateWebviewState({ activityCollapsed: collapsed });
       }
 
       function setFeatureRibbonCollapsed(collapsed) {
@@ -3524,9 +3525,14 @@
       }
 
       resetActivity();
-      setActivityCollapsed(true);
-      setTopStackCollapsed((vscode.getState() || {}).topStackCollapsed !== false);
-      setFeatureRibbonCollapsed((vscode.getState() || {}).featureRibbonCollapsed !== false);
+      var initialUiState = vscode.getState() || {};
+      setActivityCollapsed(
+        typeof initialUiState.activityCollapsed === "boolean"
+          ? initialUiState.activityCollapsed
+          : false
+      );
+      setTopStackCollapsed(initialUiState.topStackCollapsed !== false);
+      setFeatureRibbonCollapsed(initialUiState.featureRibbonCollapsed !== false);
       headerToolsToggle.onclick = function () {
         setTopStackCollapsed(!document.body.classList.contains("top-stack-collapsed"));
       };
@@ -5125,19 +5131,23 @@
           addActivity("Run finished.", "success");
           hideProgress();
           if (currentMessage) {
-            flushStreamMessage(currentMessage, true);
-            var bubble = currentMessage.querySelector(".bubble");
-            var finalRenderText = bubble
-              ? (bubble._rawSource || bubble._rawText || "")
-              : "";
-            if (bubble && finalRenderText) {
-              bubble._rawSource = finalRenderText;
-              bubble.innerHTML = "";
-              bubble.appendChild(renderContent(finalRenderText));
-              
-              // Speak the response if TTS is enabled
-              if (ttsEnabled) {
-                speakText(bubble._rawText || finalRenderText);
+            if (msg.discardCurrentMessage) {
+              currentMessage.remove();
+            } else {
+              flushStreamMessage(currentMessage, true);
+              var bubble = currentMessage.querySelector(".bubble");
+              var finalRenderText = bubble
+                ? (bubble._rawSource || bubble._rawText || "")
+                : "";
+              if (bubble && finalRenderText) {
+                bubble._rawSource = finalRenderText;
+                bubble.innerHTML = "";
+                bubble.appendChild(renderContent(finalRenderText));
+                
+                // Speak the response if TTS is enabled
+                if (ttsEnabled) {
+                  speakText(bubble._rawText || finalRenderText);
+                }
               }
             }
           }
@@ -5214,6 +5224,9 @@
         } else if (msg.type === "undoState") {
           setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);
         } else if (msg.type === "todoState") {
+          if (Array.isArray(msg.sessions) && msg.sessions.length > 0) {
+            populateSessions(msg.sessions, msg.currentSessionId);
+          }
           setTodoState(msg.todoList || [], msg.todoCounts || null);
         } else if (msg.type === "sessionState") {
           populateSessions(msg.sessions, msg.currentSessionId);
