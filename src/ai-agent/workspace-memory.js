@@ -6,11 +6,21 @@ const { execFile } = require("child_process");
 const vscode = require("../utils/vscode-shim");
 const { fetchGitHubContext } = require("./tools/fetch-github-context");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
+const {
+  DEFAULT_OUTPUT_RELATIVE_PATH,
+  SHARED_WORKSPACE_MEMORY_FILENAME,
+  sanitizeOutputRelativePath,
+  resolveWorkspaceMemoryPaths
+} = require("./workspace-memory-config");
+const { runProviderPrompt } = require("./provider-utils");
 
 const WORKSPACE_MEMORY_STATE_KEY = "codeJanitor.workspaceMemory.state";
-const DEFAULT_OUTPUT_RELATIVE_PATH = "graphify-out/WORKSPACE_MEMORY.md";
 const DEFAULT_REFRESH_DELAY_MS = 1500;
 const DEFAULT_MAX_RECENT_CHANGES = 40;
+const DEFAULT_GENERATION_MODE = "template";
+const DEFAULT_PROJECT_STAGNATION_MINUTES = 45;
+const PROJECT_PLANNER_PULSE_MS = 60 * 1000;
+const PROJECT_PROGRESS_CHANGES_PER_TASK = 4;
 const MAX_RENDERED_CHANGES = 15;
 const MAX_RENDERED_HOT_FILES = 8;
 const MAX_RENDERED_TOP_LEVEL = 8;
@@ -72,6 +82,121 @@ const BINARY_EXTENSIONS = new Set([
   ".mp3",
   ".wav"
 ]);
+
+function createDefaultProjectPlannerState() {
+  return {
+    outcome: "",
+    deadlineText: "",
+    preferredProvider: "",
+    todoList: [],
+    summary: "",
+    rescueSummary: "",
+    progressPercent: 0,
+    lastActivityAt: 0,
+    lastProgressAt: 0,
+    lastPlanGeneratedAt: 0,
+    lastEvaluationAt: 0,
+    lastRescueAt: 0
+  };
+}
+
+function normalizeTodoStatus(status, fallback = "pending") {
+  const value = String(status || "").trim().toLowerCase();
+  return value === "completed" || value === "in_progress" || value === "pending"
+    ? value
+    : fallback;
+}
+
+function sanitizePlannerTodoList(todoList = []) {
+  if (!Array.isArray(todoList)) return [];
+
+  const sanitized = [];
+  let hasInProgress = false;
+
+  for (const item of todoList) {
+    const text = String(item?.text || item?.title || item?.task || "").trim();
+    if (!text) continue;
+
+    let status = normalizeTodoStatus(item?.status);
+    if (status === "in_progress") {
+      if (hasInProgress) {
+        status = "pending";
+      } else {
+        hasInProgress = true;
+      }
+    }
+
+    sanitized.push({
+      text,
+      status,
+      targetWindow: String(item?.targetWindow || item?.timebox || "").trim()
+    });
+
+    if (sanitized.length >= 12) {
+      break;
+    }
+  }
+
+  if (!sanitized.some((item) => item.status === "in_progress")) {
+    const nextPending = sanitized.find((item) => item.status === "pending");
+    if (nextPending) {
+      nextPending.status = "in_progress";
+    }
+  }
+
+  return sanitized;
+}
+
+function buildTodoCounts(todoList = []) {
+  return todoList.reduce(
+    (summary, item) => {
+      if (summary[item.status] !== undefined) {
+        summary[item.status] += 1;
+      }
+      return summary;
+    },
+    {
+      pending: 0,
+      in_progress: 0,
+      completed: 0
+    }
+  );
+}
+
+function computePlannerProgressPercent(todoList = []) {
+  if (!Array.isArray(todoList) || todoList.length === 0) {
+    return 0;
+  }
+
+  let progressUnits = 0;
+  for (const item of todoList) {
+    if (item.status === "completed") {
+      progressUnits += 1;
+    } else if (item.status === "in_progress") {
+      progressUnits += 0.5;
+    }
+  }
+
+  return Math.max(0, Math.min(100, Math.round((progressUnits / todoList.length) * 100)));
+}
+
+function extractJsonPayload(text) {
+  const source = String(text || "").trim();
+  if (!source) return null;
+
+  const fencedMatch = source.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch ? fencedMatch[1].trim() : source;
+
+  const objectMatch = candidate.match(/\{[\s\S]*\}/);
+  const arrayMatch = candidate.match(/\[[\s\S]*\]/);
+  const payload = objectMatch?.[0] || arrayMatch?.[0] || candidate;
+
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
 
 function truncateText(value, maxLength) {
   const text = String(value || "").trim();
@@ -321,30 +446,16 @@ function summarizeGitStatusLines(statusLines = []) {
     .join(", ");
 }
 
-function sanitizeOutputRelativePath(inputPath) {
-  const raw = String(inputPath || "").trim().replace(/\\/g, "/");
-  if (!raw) {
-    return DEFAULT_OUTPUT_RELATIVE_PATH;
-  }
-
-  const normalized = raw.replace(/^\.\/+/, "");
-  if (
-    path.isAbsolute(normalized) ||
-    normalized.split("/").some((segment) => segment === "..")
-  ) {
-    return DEFAULT_OUTPUT_RELATIVE_PATH;
-  }
-
-  return normalized;
-}
-
 class WorkspaceMemoryService {
-  constructor(context) {
+  constructor(context, options = {}) {
     this.context = context || null;
+    this.options = options || {};
     this.state = this._loadState();
     this._pendingWorkspaceRefresh = new Set();
     this._refreshTimer = null;
     this._pendingSaves = new Map();
+    this._plannerListeners = new Set();
+    this._plannerPulseTimer = null;
   }
 
   async initialize() {
@@ -391,12 +502,25 @@ class WorkspaceMemoryService {
     if (this.isEnabled()) {
       await this.refreshAllNow("startup");
     }
+
+    this._plannerPulseTimer = setInterval(() => {
+      this._handlePlannerPulse().catch((error) => {
+        console.warn("[WorkspaceMemory] Project planner pulse failed:", error);
+      });
+    }, PROJECT_PLANNER_PULSE_MS);
+    if (typeof this._plannerPulseTimer?.unref === "function") {
+      this._plannerPulseTimer.unref();
+    }
   }
 
   dispose() {
     if (this._refreshTimer) {
       clearTimeout(this._refreshTimer);
       this._refreshTimer = null;
+    }
+    if (this._plannerPulseTimer) {
+      clearInterval(this._plannerPulseTimer);
+      this._plannerPulseTimer = null;
     }
   }
 
@@ -441,6 +565,175 @@ class WorkspaceMemoryService {
     return sanitizeOutputRelativePath(configured);
   }
 
+  getGenerationMode() {
+    const configured = String(
+      vscode.workspace
+        .getConfiguration("codeJanitor.assistant.workspaceMemory")
+        .get("generationMode", DEFAULT_GENERATION_MODE) || ""
+    )
+      .trim()
+      .toLowerCase();
+    return configured === "ai" ? "ai" : DEFAULT_GENERATION_MODE;
+  }
+
+  getPreferredAiProvider() {
+    return String(
+      vscode.workspace
+        .getConfiguration("codeJanitor.assistant.workspaceMemory")
+        .get("aiProvider", "") || ""
+    ).trim();
+  }
+
+  shouldMirrorToRoot() {
+    return vscode.workspace
+      .getConfiguration("codeJanitor.assistant.workspaceMemory")
+      .get("mirrorToRoot", true);
+  }
+
+  isProjectPlannerEnabled() {
+    return vscode.workspace
+      .getConfiguration("codeJanitor.assistant.projectPlanner")
+      .get("enabled", false);
+  }
+
+  getProjectPlannerPreferredProvider() {
+    return String(
+      vscode.workspace
+        .getConfiguration("codeJanitor.assistant.projectPlanner")
+        .get("preferredProvider", "") || ""
+    ).trim();
+  }
+
+  getProjectPlannerStagnationMinutes() {
+    const value = Number(
+      vscode.workspace
+        .getConfiguration("codeJanitor.assistant.projectPlanner")
+        .get("stagnationMinutes", DEFAULT_PROJECT_STAGNATION_MINUTES)
+    );
+    return Number.isFinite(value) && value >= 5
+      ? Math.floor(value)
+      : DEFAULT_PROJECT_STAGNATION_MINUTES;
+  }
+
+  onProjectPlannerStateChange(listener) {
+    if (typeof listener !== "function") {
+      return { dispose() {} };
+    }
+
+    this._plannerListeners.add(listener);
+    return {
+      dispose: () => {
+        this._plannerListeners.delete(listener);
+      }
+    };
+  }
+
+  async getProjectPlannerState(workspaceRoot = null) {
+    const targetWorkspace = workspaceRoot || this._getPreferredWorkspaceRoot();
+    const planner = targetWorkspace
+      ? this._getProjectPlannerStateForWorkspace(targetWorkspace)
+      : createDefaultProjectPlannerState();
+    const todoList = sanitizePlannerTodoList(planner.todoList || []);
+    const todoCounts = buildTodoCounts(todoList);
+
+    return {
+      enabled: this.isProjectPlannerEnabled(),
+      workspaceRoot: targetWorkspace || "",
+      preferredProvider:
+        planner.preferredProvider || this.getProjectPlannerPreferredProvider(),
+      stagnationMinutes: this.getProjectPlannerStagnationMinutes(),
+      outcome: planner.outcome || "",
+      deadlineText: planner.deadlineText || "",
+      todoList,
+      todoCounts,
+      progressPercent:
+        typeof planner.progressPercent === "number"
+          ? planner.progressPercent
+          : computePlannerProgressPercent(todoList),
+      summary: planner.summary || "",
+      rescueSummary: planner.rescueSummary || "",
+      lastActivityAt: planner.lastActivityAt || 0,
+      lastProgressAt: planner.lastProgressAt || 0,
+      lastPlanGeneratedAt: planner.lastPlanGeneratedAt || 0,
+      isStale: this._isPlannerStale(planner)
+    };
+  }
+
+  async saveProjectPlannerSettings(workspaceRoot = null, input = {}) {
+    const targetWorkspace = workspaceRoot || this._getPreferredWorkspaceRoot();
+    const plannerCfg = vscode.workspace.getConfiguration(
+      "codeJanitor.assistant.projectPlanner"
+    );
+    const plannerTarget = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    const enabled = input.enabled === true;
+    const preferredProvider = String(input.preferredProvider || "").trim();
+    const stagnationMinutes = Math.max(
+      5,
+      Math.floor(Number(input.stagnationMinutes) || DEFAULT_PROJECT_STAGNATION_MINUTES)
+    );
+
+    await Promise.all([
+      plannerCfg.update(
+        "enabled",
+        enabled,
+        plannerTarget
+      ),
+      plannerCfg.update(
+        "preferredProvider",
+        preferredProvider,
+        plannerTarget
+      ),
+      plannerCfg.update(
+        "stagnationMinutes",
+        stagnationMinutes,
+        plannerTarget
+      )
+    ]);
+
+    if (targetWorkspace) {
+      const workspaceState = this._getWorkspaceState(targetWorkspace);
+      const planner = this._ensureProjectPlannerState(workspaceState);
+      const previousFingerprint = JSON.stringify({
+        outcome: planner.outcome,
+        deadlineText: planner.deadlineText,
+        preferredProvider: planner.preferredProvider
+      });
+
+      planner.outcome = String(input.outcome || planner.outcome || "").trim();
+      planner.deadlineText = String(
+        input.deadlineText || planner.deadlineText || ""
+      ).trim();
+      planner.preferredProvider =
+        preferredProvider || planner.preferredProvider || "";
+
+      const nextFingerprint = JSON.stringify({
+        outcome: planner.outcome,
+        deadlineText: planner.deadlineText,
+        preferredProvider: planner.preferredProvider
+      });
+
+      const shouldRegenerate =
+        enabled &&
+        planner.outcome &&
+        (nextFingerprint !== previousFingerprint || input.forceRegenerate === true);
+
+      if (!enabled) {
+        planner.rescueSummary = "";
+      } else if (shouldRegenerate) {
+        planner.todoList = [];
+        planner.summary = "";
+        planner.progressPercent = 0;
+        await this._refreshProjectPlanner(targetWorkspace, null, "settings-save");
+      }
+    }
+
+    this._persistState();
+    await this._emitProjectPlannerState(targetWorkspace);
+    return this.getProjectPlannerState(targetWorkspace);
+  }
+
   async refreshAllNow(reason = "manual", options = {}) {
     const force = options.force === true;
     if (!force && !this.isEnabled()) {
@@ -469,22 +762,38 @@ class WorkspaceMemoryService {
       workspaceState,
       reason
     );
-    const markdown = this._renderWorkspaceMemory(snapshot);
-    const relativePath = this.getOutputRelativePath();
-    const outputPath = path.join(workspaceRoot, relativePath);
+    const plannerState = await this._refreshProjectPlanner(
+      workspaceRoot,
+      snapshot,
+      reason
+    );
+    snapshot.projectPlanner = plannerState;
+    const defaultMarkdown = this._renderWorkspaceMemory(snapshot);
+    const markdown = await this._renderWorkspaceMemoryWithPreferredMode(
+      workspaceRoot,
+      snapshot,
+      defaultMarkdown
+    );
+    const resolvedPaths = resolveWorkspaceMemoryPaths(
+      workspaceRoot,
+      this.getOutputRelativePath()
+    );
 
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.writeFile(outputPath, markdown, "utf8");
+    await fs.mkdir(path.dirname(resolvedPaths.outputAbsolutePath), { recursive: true });
+    await fs.writeFile(resolvedPaths.outputAbsolutePath, markdown, "utf8");
+    await this._writeWorkspaceMemoryMirror(workspaceRoot, markdown);
 
     workspaceState.lastGeneratedAt = Date.now();
     workspaceState.lastGenerationReason = reason;
-    workspaceState.lastOutputPath = relativePath;
+    workspaceState.lastOutputPath = resolvedPaths.outputRelativePath;
     this._persistState();
+    await this._emitProjectPlannerState(workspaceRoot);
 
     return {
       workspaceRoot,
-      outputPath,
-      relativePath
+      outputPath: resolvedPaths.outputAbsolutePath,
+      relativePath: resolvedPaths.outputRelativePath,
+      sharedMirrorPath: resolvedPaths.sharedMirrorAbsolutePath
     };
   }
 
@@ -494,7 +803,10 @@ class WorkspaceMemoryService {
       return null;
     }
 
-    const outputPath = path.join(targetWorkspace, this.getOutputRelativePath());
+    const outputPath = resolveWorkspaceMemoryPaths(
+      targetWorkspace,
+      this.getOutputRelativePath()
+    ).outputAbsolutePath;
     if (!fsSync.existsSync(outputPath)) {
       await this.refreshWorkspaceMemory(targetWorkspace, "open");
     }
@@ -536,10 +848,18 @@ class WorkspaceMemoryService {
       this.state.workspaces[workspaceRoot] = {
         recentChanges: [],
         trackedFiles: {},
+        projectPlanner: createDefaultProjectPlannerState(),
         lastGeneratedAt: 0,
         lastGenerationReason: "",
         lastOutputPath: this.getOutputRelativePath()
       };
+    }
+    if (
+      !this.state.workspaces[workspaceRoot].projectPlanner ||
+      typeof this.state.workspaces[workspaceRoot].projectPlanner !== "object"
+    ) {
+      this.state.workspaces[workspaceRoot].projectPlanner =
+        createDefaultProjectPlannerState();
     }
     if (
       !this.state.workspaces[workspaceRoot].trackedFiles ||
@@ -548,6 +868,378 @@ class WorkspaceMemoryService {
       this.state.workspaces[workspaceRoot].trackedFiles = {};
     }
     return this.state.workspaces[workspaceRoot];
+  }
+
+  _ensureProjectPlannerState(workspaceState) {
+    if (!workspaceState.projectPlanner || typeof workspaceState.projectPlanner !== "object") {
+      workspaceState.projectPlanner = createDefaultProjectPlannerState();
+    }
+
+    return workspaceState.projectPlanner;
+  }
+
+  _getProjectPlannerStateForWorkspace(workspaceRoot) {
+    return this._ensureProjectPlannerState(this._getWorkspaceState(workspaceRoot));
+  }
+
+  async _emitProjectPlannerState(workspaceRoot = null) {
+    const state = await this.getProjectPlannerState(workspaceRoot);
+    for (const listener of this._plannerListeners) {
+      try {
+        listener(state);
+      } catch (error) {
+        console.warn("[WorkspaceMemory] Project planner listener failed:", error);
+      }
+    }
+  }
+
+  _isPlannerStale(plannerState) {
+    if (!this.isProjectPlannerEnabled()) return false;
+    if (!plannerState?.outcome) return false;
+
+    const lastSignal = Math.max(
+      Number(plannerState.lastProgressAt || 0),
+      Number(plannerState.lastActivityAt || 0),
+      Number(plannerState.lastPlanGeneratedAt || 0)
+    );
+    if (!lastSignal) return false;
+
+    return Date.now() - lastSignal >= this.getProjectPlannerStagnationMinutes() * 60 * 1000;
+  }
+
+  async _resolveAiAgent() {
+    const resolver =
+      typeof this.options.resolveAgent === "function"
+        ? this.options.resolveAgent
+        : null;
+    if (!resolver) return null;
+    return resolver() || null;
+  }
+
+  _buildHeuristicProjectPlan(snapshot, planner) {
+    const deadlineText = planner.deadlineText || "the next focused session";
+    const focusFile = snapshot?.activeFile || snapshot?.workspaceStats?.keyFiles?.[0] || "the active code path";
+
+    return sanitizePlannerTodoList([
+      {
+        text: `Confirm scope and constraints for "${planner.outcome}"`,
+        status: "in_progress",
+        targetWindow: "Now"
+      },
+      {
+        text: `Map the implementation plan around ${focusFile}`,
+        status: "pending",
+        targetWindow: "Next 30 minutes"
+      },
+      {
+        text: "Implement the highest-impact code changes",
+        status: "pending",
+        targetWindow: "Next 1-2 hours"
+      },
+      {
+        text: "Generate or review edge cases and test coverage",
+        status: "pending",
+        targetWindow: "After implementation"
+      },
+      {
+        text: `Refresh shared handoff memory and verify delivery before ${deadlineText}`,
+        status: "pending",
+        targetWindow: deadlineText
+      }
+    ]);
+  }
+
+  _summarizeProjectPlan(todoList = []) {
+    if (!Array.isArray(todoList) || todoList.length === 0) {
+      return "";
+    }
+
+    const counts = buildTodoCounts(todoList);
+    return `${counts.completed}/${todoList.length} tasks completed, ${counts.in_progress} in progress, ${counts.pending} pending.`;
+  }
+
+  _applyActivityProgressToPlanner(planner, snapshot) {
+    const todoList = sanitizePlannerTodoList(planner.todoList || []);
+    if (todoList.length === 0) {
+      planner.todoList = todoList;
+      planner.progressPercent = 0;
+      return planner;
+    }
+
+    const totalChanges = Number(snapshot?.currentStack?.trackedChangeCount || 0);
+    const completedTarget = Math.min(
+      todoList.length,
+      Math.floor(totalChanges / PROJECT_PROGRESS_CHANGES_PER_TASK)
+    );
+
+    let changed = false;
+    let completedCount = 0;
+    for (const item of todoList) {
+      if (completedCount < completedTarget) {
+        if (item.status !== "completed") {
+          item.status = "completed";
+          changed = true;
+        }
+        completedCount += 1;
+      } else {
+        break;
+      }
+    }
+
+    let hasInProgress = false;
+    for (const item of todoList) {
+      if (item.status === "completed") {
+        continue;
+      }
+      if (!hasInProgress) {
+        if (item.status !== "in_progress") {
+          item.status = "in_progress";
+          changed = true;
+        }
+        hasInProgress = true;
+      } else if (item.status !== "pending") {
+        item.status = "pending";
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      planner.lastProgressAt = Date.now();
+    }
+
+    planner.todoList = todoList;
+    planner.progressPercent = computePlannerProgressPercent(todoList);
+    planner.summary = planner.summary || this._summarizeProjectPlan(todoList);
+    return planner;
+  }
+
+  _buildWorkspaceSummaryForAi(snapshot, plannerState = null) {
+    return {
+      workspace: {
+        name: snapshot.workspaceName,
+        root: snapshot.workspaceRoot,
+        activeFile: snapshot.activeFile,
+        totalFiles: snapshot.workspaceStats?.totalFiles || 0,
+        keyFiles: snapshot.workspaceStats?.keyFiles || [],
+        topLevelAreas: snapshot.workspaceStats?.topLevel || [],
+        primaryFileTypes: snapshot.workspaceStats?.fileTypes || []
+      },
+      git: {
+        branch: snapshot.gitSnapshot?.branch || "",
+        summary: snapshot.gitSnapshot?.statusSummary || "",
+        changedFileCount: snapshot.gitSnapshot?.changedFileCount || 0,
+        headSummary: snapshot.gitSnapshot?.headSummary || ""
+      },
+      github: {
+        available: !!snapshot.githubSnapshot?.available,
+        summary: snapshot.githubSnapshot?.summary || snapshot.githubSnapshot?.error || ""
+      },
+      graphify: {
+        reportAvailable: !!snapshot.graphifySnapshot?.reportAvailable,
+        highlights: snapshot.graphifySnapshot?.highlights || ""
+      },
+      recentChanges: (snapshot.recentChanges || []).slice(0, 8).map((change) => ({
+        type: change.type,
+        path: change.path,
+        toPath: change.toPath || "",
+        summary: change.summary || "",
+        recordedAt: change.recordedAt
+      })),
+      hotFiles: snapshot.hotFiles || [],
+      projectPlanner: plannerState
+        ? {
+            outcome: plannerState.outcome,
+            deadlineText: plannerState.deadlineText,
+            summary: plannerState.summary,
+            todoList: plannerState.todoList || []
+          }
+        : null
+    };
+  }
+
+  async _generateProjectPlanWithAi(workspaceRoot, snapshot, planner) {
+    const agent = await this._resolveAiAgent();
+    if (!agent) {
+      return null;
+    }
+
+    const aiResult = await runProviderPrompt({
+      context: this.context,
+      agent,
+      workspaceRoot,
+      preferredProvider:
+        planner.preferredProvider ||
+        this.getProjectPlannerPreferredProvider() ||
+        this.getPreferredAiProvider(),
+      mode: "fast",
+      intent: "plan",
+      systemOverlay:
+        "Return only compact JSON. Do not include prose outside the JSON payload.",
+      prompt:
+        "Create a compact, time-based project todo list for the current repository.\n" +
+        "Return JSON with this shape only:\n" +
+        "{\n" +
+        '  "summary": "short status summary",\n' +
+        '  "todoList": [\n' +
+        '    { "text": "task", "status": "pending|in_progress|completed", "targetWindow": "Now / next 30 minutes / by Friday" }\n' +
+        "  ]\n" +
+        "}\n\n" +
+        `Project outcome: ${planner.outcome}\n` +
+        `Deadline or target window: ${planner.deadlineText || "Not provided"}\n` +
+        `Workspace snapshot:\n${JSON.stringify(this._buildWorkspaceSummaryForAi(snapshot), null, 2)}`
+    });
+
+    const payload = extractJsonPayload(aiResult.text);
+    const todoList = sanitizePlannerTodoList(payload?.todoList || []);
+    if (todoList.length === 0) {
+      return null;
+    }
+
+    return {
+      todoList,
+      summary: truncateText(
+        String(payload?.summary || this._summarizeProjectPlan(todoList) || "").trim(),
+        280
+      )
+    };
+  }
+
+  async _runPlannerRescue(workspaceRoot, snapshot, planner) {
+    const fallbackSummary =
+      "Progress appears stalled. Re-focus on the current in-progress task, refresh the shared workspace memory, and validate the highest-risk path next.";
+
+    try {
+      const agent = await this._resolveAiAgent();
+      if (!agent) {
+        planner.rescueSummary = fallbackSummary;
+        planner.lastRescueAt = Date.now();
+        return planner;
+      }
+
+      const result = await runProviderPrompt({
+        context: this.context,
+        agent,
+        workspaceRoot,
+        preferredProvider:
+          planner.preferredProvider ||
+          this.getProjectPlannerPreferredProvider() ||
+          this.getPreferredAiProvider(),
+        mode: "fast",
+        intent: "general",
+        systemOverlay:
+          "Return only a concise paragraph with concrete next actions. No markdown headings.",
+        prompt:
+          "Progress on this project looks stale. Produce a short rescue brief that helps the next AI agent make meaningful progress without rescanning the full repo.\n\n" +
+          `Project outcome: ${planner.outcome}\n` +
+          `Deadline: ${planner.deadlineText || "Not provided"}\n` +
+          `Current todo list: ${JSON.stringify(planner.todoList || [], null, 2)}\n` +
+          `Workspace snapshot: ${JSON.stringify(this._buildWorkspaceSummaryForAi(snapshot, planner), null, 2)}`
+      });
+
+      planner.rescueSummary = truncateText(result.text || fallbackSummary, 360);
+      planner.lastRescueAt = Date.now();
+      return planner;
+    } catch (error) {
+      planner.rescueSummary = truncateText(
+        `${fallbackSummary} (${error.message})`,
+        360
+      );
+      planner.lastRescueAt = Date.now();
+      return planner;
+    }
+  }
+
+  async _refreshProjectPlanner(workspaceRoot, snapshot = null, reason = "manual") {
+    const workspaceState = this._getWorkspaceState(workspaceRoot);
+    const planner = this._ensureProjectPlannerState(workspaceState);
+    planner.preferredProvider =
+      planner.preferredProvider || this.getProjectPlannerPreferredProvider();
+
+    if (!this.isProjectPlannerEnabled() || !planner.outcome) {
+      planner.progressPercent = computePlannerProgressPercent(planner.todoList || []);
+      return planner;
+    }
+
+    const resolvedSnapshot =
+      snapshot ||
+      (await this._buildWorkspaceSnapshot(workspaceRoot, workspaceState, reason));
+    planner.lastActivityAt = Math.max(
+      Number(planner.lastActivityAt || 0),
+      Number(resolvedSnapshot.currentStack?.lastActivityAt || 0)
+    );
+
+    if (!Array.isArray(planner.todoList) || planner.todoList.length === 0) {
+      const aiPlan = await this._generateProjectPlanWithAi(
+        workspaceRoot,
+        resolvedSnapshot,
+        planner
+      ).catch(() => null);
+      planner.todoList = aiPlan?.todoList || this._buildHeuristicProjectPlan(resolvedSnapshot, planner);
+      planner.summary =
+        aiPlan?.summary || this._summarizeProjectPlan(planner.todoList);
+      planner.lastPlanGeneratedAt = Date.now();
+      planner.lastProgressAt = planner.lastPlanGeneratedAt;
+    }
+
+    this._applyActivityProgressToPlanner(planner, resolvedSnapshot);
+    planner.lastEvaluationAt = Date.now();
+
+    if (
+      this._isPlannerStale(planner) &&
+      Date.now() - Number(planner.lastRescueAt || 0) >=
+        this.getProjectPlannerStagnationMinutes() * 60 * 1000
+    ) {
+      await this._runPlannerRescue(workspaceRoot, resolvedSnapshot, planner);
+    }
+
+    planner.summary = planner.summary || this._summarizeProjectPlan(planner.todoList);
+    planner.progressPercent = computePlannerProgressPercent(planner.todoList);
+    return planner;
+  }
+
+  async _handlePlannerPulse() {
+    if (!this.isEnabled()) {
+      return;
+    }
+
+    for (const workspaceRoot of this._getWorkspaceRoots()) {
+      const planner = this._getProjectPlannerStateForWorkspace(workspaceRoot);
+      if (!this.isProjectPlannerEnabled() || !planner.outcome) {
+        continue;
+      }
+
+      if (!this._isPlannerStale(planner)) {
+        continue;
+      }
+
+      const workspaceState = this._getWorkspaceState(workspaceRoot);
+      const snapshot = await this._buildWorkspaceSnapshot(
+        workspaceRoot,
+        workspaceState,
+        "planner-pulse"
+      );
+      snapshot.projectPlanner = await this._refreshProjectPlanner(
+        workspaceRoot,
+        snapshot,
+        "planner-pulse"
+      );
+      const markdown = await this._renderWorkspaceMemoryWithPreferredMode(
+        workspaceRoot,
+        snapshot,
+        this._renderWorkspaceMemory(snapshot)
+      );
+      const resolvedPaths = resolveWorkspaceMemoryPaths(
+        workspaceRoot,
+        this.getOutputRelativePath()
+      );
+      await fs.mkdir(path.dirname(resolvedPaths.outputAbsolutePath), {
+        recursive: true
+      });
+      await fs.writeFile(resolvedPaths.outputAbsolutePath, markdown, "utf8");
+      await this._writeWorkspaceMemoryMirror(workspaceRoot, markdown);
+      this._persistState();
+      await this._emitProjectPlannerState(workspaceRoot);
+    }
   }
 
   _getWorkspaceRoots() {
@@ -987,6 +1679,10 @@ class WorkspaceMemoryService {
   }
 
   async _buildWorkspaceSnapshot(workspaceRoot, workspaceState, reason) {
+    const resolvedPaths = resolveWorkspaceMemoryPaths(
+      workspaceRoot,
+      this.getOutputRelativePath()
+    );
     const workspaceStats = await this._scanWorkspace(workspaceRoot);
     const graphifySnapshot = await this._getGraphifySnapshot(workspaceRoot);
     const gitSnapshot = await this._getGitStatusSnapshot(workspaceRoot);
@@ -1020,7 +1716,8 @@ class WorkspaceMemoryService {
       reason,
       workspaceRoot,
       workspaceName: path.basename(workspaceRoot),
-      outputRelativePath: this.getOutputRelativePath(),
+      outputRelativePath: resolvedPaths.outputRelativePath,
+      sharedMirrorRelativePath: resolvedPaths.sharedMirrorRelativePath,
       activeFile,
       recentChanges,
       hotFiles,
@@ -1234,6 +1931,58 @@ class WorkspaceMemoryService {
     }
   }
 
+  async _renderWorkspaceMemoryWithPreferredMode(
+    workspaceRoot,
+    snapshot,
+    fallbackMarkdown
+  ) {
+    if (this.getGenerationMode() !== "ai") {
+      return fallbackMarkdown;
+    }
+
+    try {
+      const agent = await this._resolveAiAgent();
+      if (!agent) {
+        return fallbackMarkdown;
+      }
+
+      const result = await runProviderPrompt({
+        context: this.context,
+        agent,
+        workspaceRoot,
+        preferredProvider: this.getPreferredAiProvider(),
+        mode: "fast",
+        intent: "general",
+        systemOverlay:
+          "Return markdown only. Preserve the exact top-level heading '# Workspace Memory' and keep the named sections from the prompt.",
+        prompt:
+          "Rewrite the following workspace memory draft into a compact, high-signal markdown handoff file for any AI agent. " +
+          "Keep the same core facts, avoid inventing new repo details, and preserve these sections when data exists: " +
+          "Handoff Guidance, Repository Blueprint, Current Workspace, Current Stack, Recent Changes, Hot Files, Git Snapshot, GitHub Snapshot, Graphify Snapshot, Project Planner.\n\n" +
+          `Structured snapshot:\n${JSON.stringify(this._buildWorkspaceSummaryForAi(snapshot, snapshot.projectPlanner), null, 2)}\n\n` +
+          `Draft markdown:\n${fallbackMarkdown}`
+      });
+
+      return result.text.startsWith("# Workspace Memory")
+        ? `${result.text.trim()}\n`
+        : fallbackMarkdown;
+    } catch {
+      return fallbackMarkdown;
+    }
+  }
+
+  async _writeWorkspaceMemoryMirror(workspaceRoot, markdown) {
+    if (!workspaceRoot || !this.shouldMirrorToRoot()) {
+      return;
+    }
+
+    const mirrorPath = resolveWorkspaceMemoryPaths(
+      workspaceRoot,
+      this.getOutputRelativePath()
+    ).sharedMirrorAbsolutePath;
+    await fs.writeFile(mirrorPath, markdown, "utf8");
+  }
+
   _renderWorkspaceMemory(snapshot) {
     const lines = [
       "# Workspace Memory",
@@ -1245,10 +1994,11 @@ class WorkspaceMemoryService {
       `Workspace root: ${snapshot.workspaceRoot}`,
       `Refresh reason: ${snapshot.reason}`,
       `Output path: ${snapshot.outputRelativePath}`,
+      `Shared mirror: ${snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME}`,
       "",
       "## Handoff Guidance",
       "- Read `graphify-out/GRAPH_REPORT.md` first when the request is about architecture, dependencies, file ownership, or codebase navigation.",
-      "- Use this memory file for recent activity, hot files, Git-aware status, and GitHub-enriched project context.",
+      `- Use this memory file and the workspace-root \`${snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME}\` mirror for recent activity, hot files, Git-aware status, and GitHub-enriched project context.`,
       "- Refresh this file with the `Code Janitor: Refresh Workspace Memory` command after significant edits or branch changes.",
       "",
       "## Repository Blueprint",
@@ -1403,6 +2153,39 @@ class WorkspaceMemoryService {
     } else {
       lines.push(
         "Graphify report not found. Generate Graphify output if you want architecture-aware memory excerpts here."
+      );
+    }
+
+    lines.push("");
+    lines.push("## Project Planner");
+    if (snapshot.projectPlanner?.outcome) {
+      lines.push(`- Outcome: ${snapshot.projectPlanner.outcome}`);
+      lines.push(
+        `- Deadline: ${snapshot.projectPlanner.deadlineText || "not set"}`
+      );
+      lines.push(
+        `- Progress: ${snapshot.projectPlanner.progressPercent || 0}%`
+      );
+      if (snapshot.projectPlanner.summary) {
+        lines.push(`- Summary: ${snapshot.projectPlanner.summary}`);
+      }
+      if (snapshot.projectPlanner.rescueSummary) {
+        lines.push(`- Rescue brief: ${snapshot.projectPlanner.rescueSummary}`);
+      }
+      const plannerTodoList = sanitizePlannerTodoList(
+        snapshot.projectPlanner.todoList || []
+      );
+      if (plannerTodoList.length === 0) {
+        lines.push("- Todo list: no tasks generated yet.");
+      } else {
+        for (const item of plannerTodoList) {
+          const timebox = item.targetWindow ? ` | ${item.targetWindow}` : "";
+          lines.push(`- [${item.status}] ${item.text}${timebox}`);
+        }
+      }
+    } else {
+      lines.push(
+        "- Project planner is not configured yet. Enable it in the chat panel to generate a time-based todo list and progress rescue briefs."
       );
     }
 

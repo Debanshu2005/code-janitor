@@ -255,10 +255,55 @@
           "default": true,
           "description": "Include GitHub repository context in the generated workspace memory file when available."
         },
+        "codeJanitor.assistant.workspaceMemory.generationMode": {
+          "type": "string",
+          "default": "template",
+          "enum": [
+            "template",
+            "ai"
+          ],
+          "description": "Choose whether workspace memory is rendered from the built-in template or rewritten by a preferred AI provider such as IBM BOB."
+        },
+        "codeJanitor.assistant.workspaceMemory.aiProvider": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred provider id for AI-generated workspace memory. Leave empty to use the current chat provider."
+        },
+        "codeJanitor.assistant.workspaceMemory.mirrorToRoot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mirror the generated workspace memory to a shared lowercase workspacememory.md file at the workspace root."
+        },
         "codeJanitor.assistant.workspaceMemory.outputPath": {
           "type": "string",
           "default": "graphify-out/WORKSPACE_MEMORY.md",
           "description": "Workspace-relative path for the generated assistant memory Markdown repo ledger."
+        },
+        "codeJanitor.assistant.projectPlanner.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the outcome-based project planner, pinned progress bar, and stale-progress rescue briefs."
+        },
+        "codeJanitor.assistant.projectPlanner.preferredProvider": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred provider id for project planner generation and rescue briefs. Leave empty to use the current chat provider."
+        },
+        "codeJanitor.assistant.projectPlanner.stagnationMinutes": {
+          "type": "number",
+          "default": 45,
+          "minimum": 5,
+          "description": "Minutes of low or no progress before Code Janitor asks the preferred provider to generate a rescue brief."
+        },
+        "codeJanitor.testing.aiAssist.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow a preferred AI provider such as IBM BOB to augment edge-case generation and test-report review."
+        },
+        "codeJanitor.testing.aiAssist.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred provider id for AI-assisted edge-case generation and test review. Leave empty to use the current chat provider."
         }
 
       }

@@ -14,6 +14,11 @@ const {
   matchGraphPathsFromHints
 } = require("./graph-context");
 const { createOptimizedAgent } = require("./optimizer-integration");
+const {
+  DEFAULT_OUTPUT_RELATIVE_PATH,
+  resolveWorkspaceMemoryPaths,
+  sanitizeOutputRelativePath
+} = require("./workspace-memory-config");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -3412,12 +3417,21 @@ ${resolvedMessage}`;
     }
 
     try {
-      const workspaceMemoryPath = path.join(
-        workspaceFolder,
-        "graphify-out",
-        "WORKSPACE_MEMORY.md"
+      const configuredOutputPath = sanitizeOutputRelativePath(
+        vscode.workspace
+          .getConfiguration("codeJanitor.assistant.workspaceMemory")
+          .get("outputPath", DEFAULT_OUTPUT_RELATIVE_PATH)
       );
-      if (!fsSync.existsSync(workspaceMemoryPath)) {
+      const candidates = [
+        resolveWorkspaceMemoryPaths(workspaceFolder, configuredOutputPath)
+          .outputAbsolutePath,
+        resolveWorkspaceMemoryPaths(workspaceFolder, configuredOutputPath)
+          .sharedMirrorAbsolutePath
+      ];
+      const workspaceMemoryPath = candidates.find((candidate) =>
+        fsSync.existsSync(candidate)
+      );
+      if (!workspaceMemoryPath) {
         return "";
       }
 
@@ -3440,7 +3454,7 @@ ${resolvedMessage}`;
         return "";
       }
 
-      return `\n**Workspace Memory Context**\nA tracked assistant memory file is available in \`graphify-out/WORKSPACE_MEMORY.md\`. Use it for the repo blueprint, change ledger, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, MAX_WORKSPACE_MEMORY_CONTEXT_CHARS)}\n`;
+      return `\n**Workspace Memory Context**\nA tracked assistant memory file is available in the configured ledger path plus the shared workspace-root \`workspacememory.md\` mirror. Use it for the repo blueprint, change ledger, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, MAX_WORKSPACE_MEMORY_CONTEXT_CHARS)}\n`;
     } catch {
       return "";
     }

@@ -147,10 +147,15 @@ describe("WorkspaceMemoryService", () => {
 
     const result = await service.refreshWorkspaceMemory(workspaceRoot, "manual");
     const markdown = fs.readFileSync(result.outputPath, "utf8");
+    const mirroredMarkdown = fs.readFileSync(
+      path.join(workspaceRoot, "workspacememory.md"),
+      "utf8"
+    );
 
     expect(markdown).toContain("# Workspace Memory");
     expect(markdown).toContain("## Repository Blueprint");
     expect(markdown).toContain("## Current Stack");
+    expect(markdown).toContain("## Project Planner");
     expect(markdown).toContain("src/ai-agent/agent.js");
     expect(markdown).toContain("Before:");
     expect(markdown).toContain("After:");
@@ -160,6 +165,7 @@ describe("WorkspaceMemoryService", () => {
     expect(markdown).toContain("Branch: main");
     expect(markdown).toContain("src/extension.js");
     expect(markdown).toContain("Tracked files in snapshot");
+    expect(mirroredMarkdown).toContain("# Workspace Memory");
   });
 
   test("exports stable helpers for graph and path hygiene", () => {

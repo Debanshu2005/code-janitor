@@ -3190,9 +3190,52 @@
                 </button>
               </div>
               <div class="workspace-field">
+                <label for="workspace-memory-generation-mode">Ledger generation mode</label>
+                <select id="workspace-memory-generation-mode">
+                  <option value="template">Template only</option>
+                  <option value="ai">Preferred AI provider</option>
+                </select>
+                <div class="workspace-field-help">Use the current structured template or let a preferred AI provider such as IBM BOB rewrite the final ledger markdown.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-memory-ai-provider">Ledger AI provider</label>
+                <select id="workspace-memory-ai-provider"></select>
+                <div class="workspace-field-help">Select a built-in or custom provider. IBM BOB can be selected here once added as a provider.</div>
+              </div>
+              <div class="workspace-toggle-row">
+                <div class="workspace-toggle-copy">
+                  <strong>Mirror shared handoff at workspace root</strong>
+                  <span>Create a lowercase `workspacememory.md` file at the repo root so Claude, Codex, Bob, and other agents can open it directly.</span>
+                </div>
+                <button class="toggle-switch" id="workspace-memory-mirror-toggle" title="Toggle root mirror" aria-pressed="true">
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </button>
+              </div>
+              <div class="workspace-field">
                 <label for="workspace-memory-output-path">Ledger output path</label>
                 <input id="workspace-memory-output-path" type="text" placeholder="graphify-out/WORKSPACE_MEMORY.md" />
                 <div class="workspace-field-help">Workspace-relative Markdown file that all AI agents can read for current repo state.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section">
+            <div class="workspace-settings-title">AI Testing</div>
+            <div class="workspace-settings-copy">Let a preferred provider extend deterministic edge-case generation and add testing coverage reviews.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-toggle-row">
+                <div class="workspace-toggle-copy">
+                  <strong>Enable AI edge-case assist</strong>
+                  <span>Augment generated edge cases and test reports with a provider such as IBM BOB.</span>
+                </div>
+                <button class="toggle-switch" id="workspace-testing-ai-toggle" title="Toggle AI testing assist" aria-pressed="false">
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </button>
+              </div>
+              <div class="workspace-field">
+                <label for="workspace-testing-ai-provider">Testing AI provider</label>
+                <select id="workspace-testing-ai-provider"></select>
+                <div class="workspace-field-help">Choose the provider used for extra edge cases and test-report review notes.</div>
               </div>
             </div>
           </div>
@@ -3216,6 +3259,41 @@
           </div>
 
           <div class="workspace-settings-section full">
+            <div class="workspace-settings-title">Project Planner</div>
+            <div class="workspace-settings-copy">Generate a time-based outcome plan, keep a progress bar pinned at the top, and trigger a preferred AI rescue brief when work goes stale.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-toggle-row">
+                <div class="workspace-toggle-copy">
+                  <strong>Enable project planner</strong>
+                  <span>Track outcome progress, show the planner bar, and let the preferred provider intervene with a rescue brief when progress slows down.</span>
+                </div>
+                <button class="toggle-switch" id="project-planner-enabled-toggle" title="Toggle project planner" aria-pressed="false">
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </button>
+              </div>
+              <div class="workspace-field">
+                <label for="project-planner-provider">Planner AI provider</label>
+                <select id="project-planner-provider"></select>
+                <div class="workspace-field-help">Use the current chat provider or pin a specific provider such as IBM BOB.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="project-planner-stagnation-minutes">Stagnation threshold (minutes)</label>
+                <input id="project-planner-stagnation-minutes" type="number" min="5" step="5" />
+                <div class="workspace-field-help">If no meaningful progress is detected for this long, Code Janitor generates a rescue brief with the preferred provider.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="project-planner-outcome">Project outcome</label>
+                <input id="project-planner-outcome" type="text" placeholder="Describe the outcome you want to ship" />
+                <div class="workspace-field-help">If left blank while enabling the planner, Code Janitor will ask you for the outcome before saving.</div>
+              </div>
+              <div class="workspace-field">
+                <label for="project-planner-deadline-text">Deadline or time window</label>
+                <input id="project-planner-deadline-text" type="text" placeholder="Tonight, this week, next 2 hours" />
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section full">
             <div class="workspace-settings-title">Current Paths</div>
             <div class="workspace-settings-copy">Use these read-only paths to verify where the ledger will be created in the active workspace.</div>
             <div class="workspace-settings-form">
@@ -3226,6 +3304,10 @@
               <div class="workspace-field">
                 <label>Resolved ledger file</label>
                 <div id="workspace-ledger-display" class="workspace-readonly">Open a workspace to see the generated file path.</div>
+              </div>
+              <div class="workspace-field">
+                <label>Shared root mirror</label>
+                <div id="workspace-ledger-mirror-display" class="workspace-readonly">Open a workspace to see the shared `workspacememory.md` path.</div>
               </div>
             </div>
           </div>
@@ -3399,12 +3481,23 @@
       var workspaceMemoryDelay = document.getElementById("workspace-memory-delay");
       var workspaceMemoryMaxChanges = document.getElementById("workspace-memory-max-changes");
       var workspaceMemoryGitHubToggle = document.getElementById("workspace-memory-github-toggle");
+      var workspaceMemoryGenerationMode = document.getElementById("workspace-memory-generation-mode");
+      var workspaceMemoryAiProvider = document.getElementById("workspace-memory-ai-provider");
+      var workspaceMemoryMirrorToggle = document.getElementById("workspace-memory-mirror-toggle");
       var workspaceMemoryOutputPath = document.getElementById("workspace-memory-output-path");
+      var workspaceTestingAiToggle = document.getElementById("workspace-testing-ai-toggle");
+      var workspaceTestingAiProvider = document.getElementById("workspace-testing-ai-provider");
       var workspaceGitHubApiBaseUrl = document.getElementById("workspace-github-api-base-url");
       var workspaceGitHubTokenInput = document.getElementById("workspace-github-token-input");
       var workspaceGitHubTokenStatus = document.getElementById("workspace-github-token-status");
+      var projectPlannerEnabledToggle = document.getElementById("project-planner-enabled-toggle");
+      var projectPlannerProvider = document.getElementById("project-planner-provider");
+      var projectPlannerStagnationMinutes = document.getElementById("project-planner-stagnation-minutes");
+      var projectPlannerOutcome = document.getElementById("project-planner-outcome");
+      var projectPlannerDeadlineText = document.getElementById("project-planner-deadline-text");
       var workspaceRootDisplay = document.getElementById("workspace-root-display");
       var workspaceLedgerDisplay = document.getElementById("workspace-ledger-display");
+      var workspaceLedgerMirrorDisplay = document.getElementById("workspace-ledger-mirror-display");
       var workspaceActionButtons = Array.prototype.slice.call(
         document.querySelectorAll(".workspace-action-btn")
       );
@@ -3574,15 +3667,43 @@
       var activityList = document.getElementById("activity-list");
       var activityClear = document.getElementById("activity-clear");
       var activityToggle = document.getElementById("activity-toggle");
+      var plannerProgressState = null;
+      var sessionTodoState = { items: [], counts: null };
+      var transientProgressPinned = false;
+      var lastPlannerRescueSummary = "";
+
+      function applyProjectPlannerProgress() {
+        if (!plannerProgressState || plannerProgressState.enabled !== true) {
+          return false;
+        }
+
+        var percent = Math.min(100, Math.max(0, Number(plannerProgressState.progressPercent || 0)));
+        var label = plannerProgressState.outcome
+          ? "Project plan: " + percent + "% - " + plannerProgressState.outcome
+          : "Project plan: " + percent + "%";
+
+        progressWrap.classList.add("visible");
+        progressLabel.textContent = label;
+        progressFill.style.width = percent + "%";
+        return true;
+      }
 
       function showProgress(label, pct) {
+        transientProgressPinned = true;
         progressWrap.classList.add("visible");
         progressLabel.textContent = label;
         progressFill.style.width = Math.min(100, Math.max(0, pct)) + "%";
       }
       function hideProgress() {
+        transientProgressPinned = false;
+        if (applyProjectPlannerProgress()) {
+          return;
+        }
         progressFill.style.width = "100%";
         setTimeout(function() {
+          if (transientProgressPinned || applyProjectPlannerProgress()) {
+            return;
+          }
           progressWrap.classList.remove("visible");
           progressFill.style.width = "0%";
         }, 600);
@@ -3775,6 +3896,20 @@
         workspaceSettingsOverlay.classList.remove("visible");
       }
 
+      function populateWorkspaceProviderSelect(selectEl, options, selectedValue) {
+        if (!selectEl) return;
+        var safeOptions = Array.isArray(options) ? options : [];
+        selectEl.innerHTML = "";
+        safeOptions.forEach(function(option) {
+          if (!option) return;
+          var opt = document.createElement("option");
+          opt.value = option.id || "";
+          opt.textContent = option.name || option.id || "Current chat provider";
+          selectEl.appendChild(opt);
+        });
+        selectEl.value = selectedValue || "";
+      }
+
       function applyWorkspaceSettings(settings) {
         var resolved = settings || {};
         setToggleButtonState(workspaceMemoryEnabledToggle, resolved.enabled !== false, {
@@ -3785,21 +3920,58 @@
           on: "Disable GitHub enrichment",
           off: "Enable GitHub enrichment"
         });
+        setToggleButtonState(workspaceMemoryMirrorToggle, resolved.mirrorToRoot !== false, {
+          on: "Disable root mirror",
+          off: "Enable root mirror"
+        });
+        setToggleButtonState(workspaceTestingAiToggle, resolved.testingAiEnabled === true, {
+          on: "Disable AI testing assist",
+          off: "Enable AI testing assist"
+        });
 
         workspaceMemoryDelay.value =
           typeof resolved.autoRefreshDelay === "number" ? resolved.autoRefreshDelay : 1500;
         workspaceMemoryMaxChanges.value =
           typeof resolved.maxRecentChanges === "number" ? resolved.maxRecentChanges : 40;
+        workspaceMemoryGenerationMode.value =
+          resolved.generationMode === "ai" ? "ai" : "template";
         workspaceMemoryOutputPath.value = resolved.outputPath || "graphify-out/WORKSPACE_MEMORY.md";
+        populateWorkspaceProviderSelect(
+          workspaceMemoryAiProvider,
+          resolved.providerOptions || [],
+          resolved.aiProvider || ""
+        );
+        populateWorkspaceProviderSelect(
+          workspaceTestingAiProvider,
+          resolved.providerOptions || [],
+          resolved.testingAiProvider || ""
+        );
         workspaceGitHubApiBaseUrl.value = resolved.githubApiBaseUrl || "https://api.github.com";
         workspaceRootDisplay.textContent = resolved.workspaceRoot || "No workspace folder detected.";
         workspaceLedgerDisplay.textContent =
           resolved.outputAbsolutePath || "Open a workspace to see the generated file path.";
+        workspaceLedgerMirrorDisplay.textContent =
+          resolved.sharedMirrorPath || "Open a workspace to see the shared workspacememory.md path.";
         workspaceGitHubTokenInput.value = "";
         workspaceGitHubTokenStatus.textContent = resolved.hasGitHubToken
           ? "GitHub token saved in SecretStorage."
           : "No GitHub token saved yet.";
         workspaceGitHubTokenStatus.classList.toggle("off", !resolved.hasGitHubToken);
+
+        var planner = resolved.projectPlanner || {};
+        setToggleButtonState(projectPlannerEnabledToggle, planner.enabled === true, {
+          on: "Disable project planner",
+          off: "Enable project planner"
+        });
+        populateWorkspaceProviderSelect(
+          projectPlannerProvider,
+          resolved.providerOptions || [],
+          planner.preferredProvider || ""
+        );
+        projectPlannerStagnationMinutes.value =
+          typeof planner.stagnationMinutes === "number" ? planner.stagnationMinutes : 45;
+        projectPlannerOutcome.value = planner.outcome || "";
+        projectPlannerDeadlineText.value = planner.deadlineText || "";
       }
 
       function collectWorkspaceSettingsPayload() {
@@ -3808,9 +3980,19 @@
           autoRefreshDelay: Number(workspaceMemoryDelay.value) || 1500,
           maxRecentChanges: Number(workspaceMemoryMaxChanges.value) || 40,
           includeGitHub: workspaceMemoryGitHubToggle.getAttribute("aria-pressed") === "true",
+          generationMode: workspaceMemoryGenerationMode.value === "ai" ? "ai" : "template",
+          aiProvider: workspaceMemoryAiProvider.value || "",
+          mirrorToRoot: workspaceMemoryMirrorToggle.getAttribute("aria-pressed") === "true",
+          testingAiEnabled: workspaceTestingAiToggle.getAttribute("aria-pressed") === "true",
+          testingAiProvider: workspaceTestingAiProvider.value || "",
           outputPath: workspaceMemoryOutputPath.value.trim(),
           githubApiBaseUrl: workspaceGitHubApiBaseUrl.value.trim(),
-          githubApiToken: workspaceGitHubTokenInput.value.trim()
+          githubApiToken: workspaceGitHubTokenInput.value.trim(),
+          projectPlannerEnabled: projectPlannerEnabledToggle.getAttribute("aria-pressed") === "true",
+          projectPlannerProvider: projectPlannerProvider.value || "",
+          projectPlannerStagnationMinutes: Number(projectPlannerStagnationMinutes.value) || 45,
+          projectPlannerOutcome: projectPlannerOutcome.value.trim(),
+          projectPlannerDeadlineText: projectPlannerDeadlineText.value.trim()
         };
       }
 
@@ -3835,6 +4017,27 @@
         setToggleButtonState(workspaceMemoryGitHubToggle, enabled, {
           on: "Disable GitHub enrichment",
           off: "Enable GitHub enrichment"
+        });
+      };
+      workspaceMemoryMirrorToggle.onclick = function() {
+        var enabled = workspaceMemoryMirrorToggle.getAttribute("aria-pressed") !== "true";
+        setToggleButtonState(workspaceMemoryMirrorToggle, enabled, {
+          on: "Disable root mirror",
+          off: "Enable root mirror"
+        });
+      };
+      workspaceTestingAiToggle.onclick = function() {
+        var enabled = workspaceTestingAiToggle.getAttribute("aria-pressed") !== "true";
+        setToggleButtonState(workspaceTestingAiToggle, enabled, {
+          on: "Disable AI testing assist",
+          off: "Enable AI testing assist"
+        });
+      };
+      projectPlannerEnabledToggle.onclick = function() {
+        var enabled = projectPlannerEnabledToggle.getAttribute("aria-pressed") !== "true";
+        setToggleButtonState(projectPlannerEnabledToggle, enabled, {
+          on: "Disable project planner",
+          off: "Enable project planner"
         });
       };
       workspaceSettingsSave.onclick = function() {
@@ -4005,7 +4208,7 @@
         return "Pending";
       }
 
-      function setTodoState(items, counts) {
+      function renderTodoBoard(items, counts, titleText, extraSummary) {
         var safeItems = Array.isArray(items) ? items : [];
         if (!todoBoard || !todoList || !todoSummary) return;
 
@@ -4019,7 +4222,11 @@
 
         todoBoard.classList.add("visible");
         var summaryCounts = counts || buildTodoCounts(safeItems);
-        todoSummary.textContent = formatTodoSummary(summaryCounts);
+        todoSummary.textContent = extraSummary || formatTodoSummary(summaryCounts);
+        var todoTitle = document.getElementById("todo-title");
+        if (todoTitle && titleText) {
+          todoTitle.textContent = titleText;
+        }
 
         safeItems.forEach(function(item) {
           if (!item || !item.text) return;
@@ -4044,6 +4251,49 @@
           row.appendChild(pill);
           todoList.appendChild(row);
         });
+      }
+
+      function setTodoState(items, counts) {
+        sessionTodoState = {
+          items: Array.isArray(items) ? items : [],
+          counts: counts || null
+        };
+
+        if (plannerProgressState && plannerProgressState.enabled === true) {
+          return;
+        }
+
+        renderTodoBoard(sessionTodoState.items, sessionTodoState.counts, "Task Board");
+      }
+
+      function setProjectPlannerState(state) {
+        plannerProgressState = state || null;
+
+        if (plannerProgressState && plannerProgressState.enabled === true) {
+          renderTodoBoard(
+            plannerProgressState.todoList || [],
+            plannerProgressState.todoCounts || null,
+            "Project Plan",
+            plannerProgressState.summary || formatTodoSummary(plannerProgressState.todoCounts || {})
+          );
+          if (!transientProgressPinned) {
+            applyProjectPlannerProgress();
+          }
+          if (
+            plannerProgressState.rescueSummary &&
+            plannerProgressState.rescueSummary !== lastPlannerRescueSummary
+          ) {
+            addActivity(plannerProgressState.rescueSummary, "info");
+            lastPlannerRescueSummary = plannerProgressState.rescueSummary;
+          }
+          return;
+        }
+
+        renderTodoBoard(sessionTodoState.items, sessionTodoState.counts, "Task Board");
+        if (!transientProgressPinned) {
+          progressWrap.classList.remove("visible");
+          progressFill.style.width = "0%";
+        }
       }
 
       function setActivityCollapsed(collapsed) {
@@ -5869,6 +6119,8 @@
             populateSessions(msg.sessions, msg.currentSessionId);
           }
           setTodoState(msg.todoList || [], msg.todoCounts || null);
+        } else if (msg.type === "projectPlannerState") {
+          setProjectPlannerState(msg.state || null);
         } else if (msg.type === "sessionState") {
           populateSessions(msg.sessions, msg.currentSessionId);
           setUndoButtonState(!!msg.canUndo, msg.latestUndoId || null);

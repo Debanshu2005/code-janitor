@@ -8,6 +8,7 @@ const {
 const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
+const AIAgent = require("./ai-agent/agent");
 const {
   WorkspaceMemoryService
 } = require("./ai-agent/workspace-memory");
@@ -550,8 +551,11 @@ async function activate(context) {
   // Auto-correction state
   let isAutoFixing = false;
   let autoFixTimeout = null;
-  chatPanelInstance = new ChatPanel(context);
-  const workspaceMemoryService = new WorkspaceMemoryService(context);
+  const backgroundAiAgent = new AIAgent(context);
+  const workspaceMemoryService = new WorkspaceMemoryService(context, {
+    resolveAgent: () => chatPanelInstance?.agent || backgroundAiAgent
+  });
+  chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       "codeJanitor.chatSidebar",
@@ -573,7 +577,7 @@ async function activate(context) {
       }
       // Always create fresh instance or reuse if panel is still open
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context);
+        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
       }
       // Show panel and trigger fix
       await chatPanelInstance.show();
@@ -735,7 +739,7 @@ async function activate(context) {
     "codeJanitor.quickFixWithAI",
     async (document, diagnostic) => {
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context);
+        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
       }
       await chatPanelInstance.show();
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -759,7 +763,7 @@ async function activate(context) {
     "codeJanitor.quickFixAllWithAI",
     async (document, diagnostics) => {
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context);
+        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
       }
       await chatPanelInstance.show();
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -911,7 +915,7 @@ async function activate(context) {
           console.log("[Extension] codeJanitor.openChat command triggered");
           if (!chatPanelInstance) {
             console.log("[Extension] Creating new ChatPanel instance");
-            chatPanelInstance = new ChatPanel(context);
+            chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
           }
           console.log("[Extension] Opening full-size chat panel");
           await chatPanelInstance.show();
@@ -938,7 +942,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
         try {
           const editor = vscode.window.activeTextEditor;
           if (!chatPanelInstance) {
-            chatPanelInstance = new ChatPanel(context);
+            chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
           }
           await chatPanelInstance.show();
           await chatPanelInstance.runBugScan(editor);
@@ -977,7 +981,10 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
 
         const { generateEdgeCases } = require("./ai-agent/tools/generate-edge-cases");
         const relativePath = vscode.workspace.asRelativePath(filePath);
-        const result = await generateEdgeCases(relativePath, workspaceRoot);
+        const result = await generateEdgeCases(relativePath, workspaceRoot, {
+          context,
+          agent: chatPanelInstance?.agent || backgroundAiAgent
+        });
 
         if (result.success) {
           const message = `Generated ${result.edgeCaseCount} edge cases for ${relativePath}`;
@@ -1032,7 +1039,10 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
         const result = await executeTests({
           generateReport: true,
           includeEdgeCases: true
-        }, workspaceRoot);
+        }, workspaceRoot, {
+          context,
+          agent: chatPanelInstance?.agent || backgroundAiAgent
+        });
 
         if (result.success) {
           const { summary, report } = result;
@@ -1161,7 +1171,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     async () => {
       try {
         if (!chatPanelInstance) {
-          chatPanelInstance = new ChatPanel(context);
+          chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
         }
         await chatPanelInstance.runGitHubRepositoryContext();
       } catch (error) {
@@ -1259,7 +1269,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     handleUri(uri) {
       if (uri.path === "/check-models") {
         if (!chatPanelInstance) {
-          chatPanelInstance = new ChatPanel(context);
+          chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
         }
         chatPanelInstance.show();
       }

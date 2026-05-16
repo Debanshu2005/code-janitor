@@ -22,8 +22,9 @@ const { applyDiffToContent } = require("./tools/apply-diff");
 const { insertContentIntoText } = require("./tools/insert-content");
 const {
   sanitizeOutputRelativePath,
-  DEFAULT_OUTPUT_RELATIVE_PATH
-} = require("./workspace-memory");
+  DEFAULT_OUTPUT_RELATIVE_PATH,
+  SHARED_WORKSPACE_MEMORY_FILENAME
+} = require("./workspace-memory-config");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
@@ -48,8 +49,9 @@ const OLLAMA_FALLBACK_MODELS = [
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
-  constructor(context) {
+  constructor(context, workspaceMemoryService = null) {
     this.context = context;
+    this.workspaceMemoryService = workspaceMemoryService || null;
     this.panel = null;
     this.sidebarView = null;
     this.agent = new AIAgent(context);
@@ -88,6 +90,17 @@ class ChatPanel {
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;
     }, null, context.subscriptions);
+
+    if (this.workspaceMemoryService?.onProjectPlannerStateChange) {
+      const subscription = this.workspaceMemoryService.onProjectPlannerStateChange(
+        () => {
+          this._postProjectPlannerState().catch((error) => {
+            console.warn("[ChatPanel] Failed to post project planner state:", error);
+          });
+        }
+      );
+      context.subscriptions.push(subscription);
+    }
   }
 
   async _setThinkingMode(enabled) {
@@ -2878,11 +2891,33 @@ ${fileContent}
     const workspaceMemoryCfg = vscode.workspace.getConfiguration(
       "codeJanitor.assistant.workspaceMemory"
     );
+    const testingCfg = vscode.workspace.getConfiguration(
+      "codeJanitor.testing.aiAssist"
+    );
     const githubCfg = vscode.workspace.getConfiguration("codeJanitor.github");
     const workspaceRoot = this._getEffectiveWorkspaceFolder() || "";
     const outputPath = sanitizeOutputRelativePath(
       workspaceMemoryCfg.get("outputPath", DEFAULT_OUTPUT_RELATIVE_PATH)
     );
+    const projectPlannerState =
+      (await this.workspaceMemoryService?.getProjectPlannerState?.(workspaceRoot)) || {
+        enabled: false,
+        preferredProvider: "",
+        stagnationMinutes: 45,
+        outcome: "",
+        deadlineText: "",
+        todoList: [],
+        progressPercent: 0,
+        summary: "",
+        rescueSummary: ""
+      };
+    const providerOptions = [
+      { id: "", name: "Current chat provider" },
+      ...this._buildProviderCatalog().map((provider) => ({
+        id: provider.id,
+        name: provider.name || provider.id
+      }))
+    ];
 
     return {
       enabled: workspaceMemoryCfg.get("enabled", true),
@@ -2893,6 +2928,16 @@ ${fileContent}
         workspaceMemoryCfg.get("maxRecentChanges", 40)
       ),
       includeGitHub: workspaceMemoryCfg.get("includeGitHub", true),
+      generationMode:
+        String(workspaceMemoryCfg.get("generationMode", "template") || "")
+          .trim()
+          .toLowerCase() === "ai"
+          ? "ai"
+          : "template",
+      aiProvider: String(workspaceMemoryCfg.get("aiProvider", "") || "").trim(),
+      mirrorToRoot: workspaceMemoryCfg.get("mirrorToRoot", true),
+      testingAiEnabled: testingCfg.get("enabled", false),
+      testingAiProvider: String(testingCfg.get("provider", "") || "").trim(),
       outputPath,
       githubApiBaseUrl: String(
         githubCfg.get("apiBaseUrl", "https://api.github.com") || ""
@@ -2901,7 +2946,12 @@ ${fileContent}
       workspaceRoot,
       outputAbsolutePath: workspaceRoot
         ? path.join(workspaceRoot, outputPath)
-        : ""
+        : "",
+      sharedMirrorPath: workspaceRoot
+        ? path.join(workspaceRoot, SHARED_WORKSPACE_MEMORY_FILENAME)
+        : "",
+      providerOptions,
+      projectPlanner: projectPlannerState
     };
   }
 
@@ -2911,15 +2961,65 @@ ${fileContent}
       type: "workspaceMemorySettings",
       settings
     });
+    await this._postProjectPlannerState();
+  }
+
+  async _postProjectPlannerState() {
+    if (!this.workspaceMemoryService?.getProjectPlannerState) {
+      return;
+    }
+
+    const workspaceRoot = this._getEffectiveWorkspaceFolder() || "";
+    const state = await this.workspaceMemoryService.getProjectPlannerState(
+      workspaceRoot
+    );
+    this._postMessage({
+      type: "projectPlannerState",
+      state
+    });
+  }
+
+  async _promptForProjectPlannerFields(existing = {}) {
+    const outcome = await vscode.window.showInputBox({
+      prompt: "What project outcome should the planner optimize for?",
+      placeHolder: "Example: ship the workspace memory + IBM BOB wiring cleanly",
+      value: String(existing.outcome || "").trim()
+    });
+
+    if (typeof outcome !== "string" || !outcome.trim()) {
+      return null;
+    }
+
+    const deadlineText = await vscode.window.showInputBox({
+      prompt: "Optional deadline or time window for the planner",
+      placeHolder: "Example: by tonight, this week, next 2 hours",
+      value: String(existing.deadlineText || "").trim()
+    });
+
+    return {
+      outcome: outcome.trim(),
+      deadlineText: String(deadlineText || "").trim()
+    };
   }
 
   async _saveWorkspaceMemorySettings(input = {}) {
     const workspaceMemoryCfg = vscode.workspace.getConfiguration(
       "codeJanitor.assistant.workspaceMemory"
     );
+    const testingCfg = vscode.workspace.getConfiguration(
+      "codeJanitor.testing.aiAssist"
+    );
     const githubCfg = vscode.workspace.getConfiguration("codeJanitor.github");
     const enabled = input.enabled !== false;
     const includeGitHub = input.includeGitHub !== false;
+    const generationMode =
+      String(input.generationMode || "").trim().toLowerCase() === "ai"
+        ? "ai"
+        : "template";
+    const aiProvider = String(input.aiProvider || "").trim();
+    const mirrorToRoot = input.mirrorToRoot !== false;
+    const testingAiEnabled = input.testingAiEnabled === true;
+    const testingAiProvider = String(input.testingAiProvider || "").trim();
     const autoRefreshDelay = Math.max(
       250,
       Math.floor(Number(input.autoRefreshDelay) || 1500)
@@ -2934,6 +3034,39 @@ ${fileContent}
         allowHttp: true,
         allowHttps: true
       }) || "https://api.github.com";
+    const workspaceRoot = this._getEffectiveWorkspaceFolder() || "";
+
+    let plannerInput = {
+      enabled: input.projectPlannerEnabled === true,
+      preferredProvider: String(input.projectPlannerProvider || "").trim(),
+      stagnationMinutes: Math.max(
+        5,
+        Math.floor(Number(input.projectPlannerStagnationMinutes) || 45)
+      ),
+      outcome: String(input.projectPlannerOutcome || "").trim(),
+      deadlineText: String(input.projectPlannerDeadlineText || "").trim()
+    };
+
+    if (
+      plannerInput.enabled &&
+      !plannerInput.outcome &&
+      this.workspaceMemoryService?.getProjectPlannerState
+    ) {
+      const existingPlannerState = await this.workspaceMemoryService.getProjectPlannerState(
+        workspaceRoot
+      );
+      const promptedFields = await this._promptForProjectPlannerFields(
+        existingPlannerState || {}
+      );
+      if (!promptedFields) {
+        plannerInput.enabled = false;
+      } else {
+        plannerInput = {
+          ...plannerInput,
+          ...promptedFields
+        };
+      }
+    }
 
     await Promise.all([
       workspaceMemoryCfg.update(
@@ -2966,12 +3099,46 @@ ${fileContent}
         )
       ),
       workspaceMemoryCfg.update(
+        "generationMode",
+        generationMode,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "generationMode"
+        )
+      ),
+      workspaceMemoryCfg.update(
+        "aiProvider",
+        aiProvider,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "aiProvider"
+        )
+      ),
+      workspaceMemoryCfg.update(
+        "mirrorToRoot",
+        mirrorToRoot,
+        this._getConfigTarget(
+          "codeJanitor.assistant.workspaceMemory",
+          "mirrorToRoot"
+        )
+      ),
+      workspaceMemoryCfg.update(
         "outputPath",
         outputPath,
         this._getConfigTarget(
           "codeJanitor.assistant.workspaceMemory",
           "outputPath"
         )
+      ),
+      testingCfg.update(
+        "enabled",
+        testingAiEnabled,
+        this._getConfigTarget("codeJanitor.testing.aiAssist", "enabled")
+      ),
+      testingCfg.update(
+        "provider",
+        testingAiProvider,
+        this._getConfigTarget("codeJanitor.testing.aiAssist", "provider")
       ),
       githubCfg.update(
         "apiBaseUrl",
@@ -2982,6 +3149,13 @@ ${fileContent}
 
     if (input.githubApiToken) {
       await this._persistGitHubToken(input.githubApiToken);
+    }
+
+    if (this.workspaceMemoryService?.saveProjectPlannerSettings) {
+      await this.workspaceMemoryService.saveProjectPlannerSettings(
+        workspaceRoot,
+        plannerInput
+      );
     }
 
     await this._postWorkspaceMemorySettings();

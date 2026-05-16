@@ -112,13 +112,17 @@ describe("execute-tests", () => {
         { name: "src", isFile: () => false, isDirectory: () => true }
       ];
       
-      fs.readdir.mockResolvedValue(mockEntries);
+      fs.readdir.mockImplementation(async (dirPath) => {
+        if (dirPath === mockWorkspaceRoot) {
+          return mockEntries;
+        }
+        return [];
+      });
       
       const testPattern = /\.test\.js$/;
       await findTestFiles(mockWorkspaceRoot, testPattern);
       
-      // Should not try to read node_modules
-      expect(fs.readdir).toHaveBeenCalledTimes(1);
+      expect(fs.readdir).toHaveBeenCalledTimes(2);
     });
   });
   
@@ -251,13 +255,14 @@ describe("execute-tests", () => {
       fs.mkdir.mockResolvedValue(undefined);
       fs.writeFile.mockResolvedValue(undefined);
       
-      const mockExec = require("util").promisify(exec);
-      mockExec.mockResolvedValue({
-        stdout: "Tests: 0 failed, 5 passed, 5 total",
-        stderr: ""
+      exec.mockImplementation((_command, _options, callback) => {
+        callback(null, "Tests: 0 failed, 5 passed, 5 total", "");
       });
       
-      const result = await executeTests({}, mockWorkspaceRoot);
+      const result = await executeTests({
+        framework: "jest",
+        testPath: "app.test.js"
+      }, mockWorkspaceRoot);
       
       expect(result.success).toBe(true);
       expect(result.framework).toBe("jest");
@@ -274,10 +279,17 @@ describe("execute-tests", () => {
         { name: "app.test.js", isFile: () => true, isDirectory: () => false }
       ]);
       
-      const mockExec = require("util").promisify(exec);
-      mockExec.mockRejectedValue(new Error("Test execution failed"));
+      exec.mockImplementation((_command, _options, callback) => {
+        const error = new Error("Test execution failed");
+        error.stdout = "";
+        error.stderr = "";
+        callback(error, "", "");
+      });
       
-      const result = await executeTests({}, mockWorkspaceRoot);
+      const result = await executeTests({
+        framework: "jest",
+        testPath: "app.test.js"
+      }, mockWorkspaceRoot);
       
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();

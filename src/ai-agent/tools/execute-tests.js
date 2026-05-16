@@ -7,9 +7,23 @@
 const fs = require("fs").promises;
 const path = require("path");
 const { exec } = require("child_process");
-const { promisify } = require("util");
+const vscode = require("../../utils/vscode-shim");
+const { runProviderPrompt } = require("../provider-utils");
 
-const execAsync = promisify(exec);
+function execAsync(command, options) {
+  return new Promise((resolve, reject) => {
+    exec(command, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+
+      resolve({ stdout, stderr });
+    });
+  });
+}
 
 /**
  * Test framework detection patterns
@@ -64,6 +78,53 @@ const TEST_FRAMEWORKS = {
     }
   }
 };
+
+function isAiTestingEnabled() {
+  return vscode.workspace
+    .getConfiguration("codeJanitor.testing.aiAssist")
+    .get("enabled", false);
+}
+
+function getAiTestingProvider() {
+  return String(
+    vscode.workspace
+      .getConfiguration("codeJanitor.testing.aiAssist")
+      .get("provider", "") || ""
+  ).trim();
+}
+
+async function generateAiTestingReview(
+  options,
+  workspaceRoot,
+  frameworkName,
+  testFiles,
+  results,
+  executionContext = {}
+) {
+  if (!isAiTestingEnabled() || !executionContext?.agent || !executionContext?.context) {
+    return null;
+  }
+
+  const review = await runProviderPrompt({
+    context: executionContext.context,
+    agent: executionContext.agent,
+    workspaceRoot,
+    preferredProvider: getAiTestingProvider(),
+    mode: "fast",
+    intent: "review",
+    systemOverlay:
+      "Return markdown only. Keep it short and practical.",
+    prompt:
+      "Review these test results and point out likely edge-case coverage gaps. " +
+      "Focus on missing scenarios, risky failure patterns, and the next test improvements to make.\n\n" +
+      `Framework: ${frameworkName}\n` +
+      `Options: ${JSON.stringify(options, null, 2)}\n` +
+      `Test files: ${JSON.stringify(testFiles.slice(0, 20), null, 2)}\n` +
+      `Results: ${JSON.stringify(results, null, 2)}`
+  });
+
+  return review.text || null;
+}
 
 /**
  * Detect test framework from package.json or project files
@@ -159,6 +220,8 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
     // Detect test framework
     const detectedFramework = framework 
       ? TEST_FRAMEWORKS[language]?.[framework]
+        ? { name: framework, ...TEST_FRAMEWORKS[language][framework] }
+        : null
       : await detectTestFramework(workspaceRoot, language);
     
     if (!detectedFramework) {
@@ -188,6 +251,7 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
     const startTime = Date.now();
     let testOutput;
     let testError;
+    let commandFailed = false;
     
     try {
       const { stdout, stderr } = await execAsync(testCommand, {
@@ -197,6 +261,7 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
       testOutput = stdout;
       testError = stderr;
     } catch (error) {
+      commandFailed = true;
       testOutput = error.stdout || "";
       testError = error.stderr || error.message;
     }
@@ -205,15 +270,31 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
     
     // Parse test results
     const results = parseTestResults(testOutput, testError, detectedFramework.name);
+    if (commandFailed && !String(testOutput || "").trim() && results.total === 0) {
+      return {
+        success: false,
+        error: testError || "Test execution failed"
+      };
+    }
     
     // Generate report if requested
+    const aiReview = await generateAiTestingReview(
+      options,
+      workspaceRoot,
+      detectedFramework.name,
+      testFiles,
+      results,
+      executionContext
+    ).catch(() => null);
+
     let report = null;
     if (generateReport) {
       report = await generateTestReport(results, {
         framework: detectedFramework.name,
         duration,
         testFiles,
-        workspaceRoot
+        workspaceRoot,
+        aiReview
       });
     }
     
@@ -223,6 +304,7 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
       testFiles,
       results,
       report,
+      aiReview,
       duration,
       summary: {
         total: results.total,
@@ -387,7 +469,7 @@ function parseJUnitResults(stdout, stderr) {
  * Generate test report
  */
 async function generateTestReport(results, options) {
-  const { framework, duration, testFiles, workspaceRoot } = options;
+  const { framework, duration, testFiles, workspaceRoot, aiReview = "" } = options;
   
   const report = {
     timestamp: new Date().toISOString(),
@@ -402,6 +484,7 @@ async function generateTestReport(results, options) {
       successRate: results.total > 0 ? ((results.passed / results.total) * 100).toFixed(2) : 0
     },
     details: results,
+    aiReview,
     markdown: generateMarkdownReport(results, options)
   };
   
@@ -422,7 +505,7 @@ async function generateTestReport(results, options) {
  * Generate markdown test report
  */
 function generateMarkdownReport(results, options) {
-  const { framework, duration, testFiles } = options;
+  const { framework, duration, testFiles, aiReview = "" } = options;
   const successRate = results.total > 0 ? ((results.passed / results.total) * 100).toFixed(2) : 0;
   
   let markdown = `# Test Report\n\n`;
@@ -451,6 +534,10 @@ function generateMarkdownReport(results, options) {
   testFiles.forEach(file => {
     markdown += `- ${file}\n`;
   });
+
+  if (aiReview) {
+    markdown += `\n## AI Testing Review\n\n${aiReview}\n`;
+  }
   
   return markdown;
 }

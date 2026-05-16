@@ -6,7 +6,9 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const vscode = require("../../utils/vscode-shim");
 const { parseFile, getLanguage } = require("./list-code-definition-names");
+const { runProviderPrompt } = require("../provider-utils");
 
 /**
  * Edge case categories for different code constructs
@@ -110,6 +112,223 @@ const EDGE_CASE_CATEGORIES = {
     ]
   }
 };
+
+function isAiTestingEnabled() {
+  return vscode.workspace
+    .getConfiguration("codeJanitor.testing.aiAssist")
+    .get("enabled", false);
+}
+
+function getAiTestingProvider() {
+  return String(
+    vscode.workspace
+      .getConfiguration("codeJanitor.testing.aiAssist")
+      .get("provider", "") || ""
+  ).trim();
+}
+
+function extractJsonPayload(text) {
+  const source = String(text || "").trim();
+  if (!source) return null;
+
+  const fencedMatch = source.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch ? fencedMatch[1].trim() : source;
+  const objectMatch = candidate.match(/\{[\s\S]*\}/);
+  const arrayMatch = candidate.match(/\[[\s\S]*\]/);
+  const payload = objectMatch?.[0] || arrayMatch?.[0] || candidate;
+
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function dedupeEdgeCases(edgeCases = []) {
+  const seen = new Set();
+  return edgeCases.filter((edgeCase) => {
+    const key = JSON.stringify({
+      functionName: edgeCase.functionName || "",
+      className: edgeCase.className || "",
+      methodName: edgeCase.methodName || "",
+      parameterName: edgeCase.parameterName || "",
+      category: edgeCase.category || "",
+      description: edgeCase.testCase?.description || "",
+      value: edgeCase.testCase?.value,
+      values: edgeCase.testCase?.values
+    });
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function serializeJavaScriptValue(value) {
+  if (value === undefined) return "undefined";
+  if (typeof value === "number" && Number.isNaN(value)) return "NaN";
+  if (value === Infinity) return "Infinity";
+  if (value === -Infinity) return "-Infinity";
+  if (value instanceof Date) return `new Date(${JSON.stringify(value.toISOString())})`;
+  return JSON.stringify(value);
+}
+
+function serializePythonValue(value) {
+  if (value === undefined) return "None";
+  if (value === null) return "None";
+  if (typeof value === "number" && Number.isNaN(value)) return "float('nan')";
+  if (value === Infinity) return "float('inf')";
+  if (value === -Infinity) return "float('-inf')";
+  return JSON.stringify(value);
+}
+
+function serializeJavaValue(value) {
+  if (value === undefined || value === null) return "null";
+  if (typeof value === "number" && Number.isNaN(value)) return "Double.NaN";
+  if (value === Infinity) return "Double.POSITIVE_INFINITY";
+  if (value === -Infinity) return "Double.NEGATIVE_INFINITY";
+  if (typeof value === "string") return JSON.stringify(value);
+  return JSON.stringify(value);
+}
+
+function buildInvocationValues(testCase, serializer) {
+  if (Array.isArray(testCase?.values)) {
+    return testCase.values.map((value) => serializer(value));
+  }
+  if (Object.prototype.hasOwnProperty.call(testCase || {}, "value")) {
+    return [serializer(testCase.value)];
+  }
+  return [];
+}
+
+async function generateAiEdgeCases(
+  filePath,
+  workspaceRoot,
+  language,
+  content,
+  definitions,
+  heuristicEdgeCases,
+  executionContext = {}
+) {
+  if (!isAiTestingEnabled() || !executionContext?.agent || !executionContext?.context) {
+    return { edgeCases: [], notes: [] };
+  }
+
+  const result = await runProviderPrompt({
+    context: executionContext.context,
+    agent: executionContext.agent,
+    workspaceRoot,
+    preferredProvider: getAiTestingProvider(),
+    mode: "fast",
+    intent: "general",
+    systemOverlay: "Return JSON only. No prose outside JSON.",
+    prompt:
+      "Suggest additional edge cases for this source file. " +
+      "Return JSON with shape {\"notes\": string[], \"edgeCases\": [{\"functionName\": string, \"className\": string, \"methodName\": string, \"parameterName\": string, \"parameterIndex\": number, \"category\": string, \"testCase\": {\"description\": string, \"value\": any, \"values\": any[]}}]}.\n\n" +
+      `Language: ${language}\n` +
+      `File path: ${filePath}\n` +
+      `Definitions: ${JSON.stringify(definitions, null, 2)}\n` +
+      `Existing heuristic edge cases summary: ${JSON.stringify(countByCategory(heuristicEdgeCases), null, 2)}\n` +
+      `Source excerpt:\n${content.slice(0, 6000)}`
+  });
+
+  const payload = extractJsonPayload(result.text);
+  const aiEdgeCases = Array.isArray(payload?.edgeCases)
+    ? payload.edgeCases
+        .filter((edgeCase) => edgeCase && edgeCase.testCase?.description)
+        .map((edgeCase) => ({
+          functionName: edgeCase.functionName || undefined,
+          className: edgeCase.className || undefined,
+          methodName: edgeCase.methodName || undefined,
+          parameterName: edgeCase.parameterName || undefined,
+          parameterIndex:
+            Number.isInteger(edgeCase.parameterIndex) ? edgeCase.parameterIndex : undefined,
+          category: String(edgeCase.category || "AI_RECOMMENDED").trim() || "AI_RECOMMENDED",
+          testCase: {
+            description: String(edgeCase.testCase.description || "").trim(),
+            ...(Object.prototype.hasOwnProperty.call(edgeCase.testCase, "value")
+              ? { value: edgeCase.testCase.value }
+              : {}),
+            ...(Array.isArray(edgeCase.testCase.values)
+              ? { values: edgeCase.testCase.values }
+              : {})
+          }
+        }))
+    : [];
+
+  return {
+    edgeCases: dedupeEdgeCases(aiEdgeCases),
+    notes: Array.isArray(payload?.notes)
+      ? payload.notes.map((note) => String(note || "").trim()).filter(Boolean)
+      : []
+  };
+}
+
+function extractDefinitionsFallback(content, language) {
+  const source = String(content || "");
+  const definitions = [];
+
+  if (language === "javascript" || language === "typescript") {
+    const functionRegex = /function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/g;
+    const classRegex = /class\s+([A-Za-z0-9_$]+)/g;
+    let match;
+
+    while ((match = functionRegex.exec(source))) {
+      definitions.push({
+        type: "function",
+        name: match[1],
+        params: String(match[2] || "")
+          .split(",")
+          .map((param) => param.trim())
+          .filter(Boolean)
+          .map((param) => ({ name: param }))
+      });
+    }
+
+    while ((match = classRegex.exec(source))) {
+      definitions.push({
+        type: "class",
+        name: match[1],
+        methods: []
+      });
+    }
+  } else if (language === "python") {
+    const functionRegex = /^\s*def\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)/gm;
+    const classRegex = /^\s*class\s+([A-Za-z0-9_]+)/gm;
+    let match;
+
+    while ((match = functionRegex.exec(source))) {
+      definitions.push({
+        type: "function",
+        name: match[1],
+        params: String(match[2] || "")
+          .split(",")
+          .map((param) => param.trim())
+          .filter(Boolean)
+          .map((param) => ({ name: param.replace(/=.*/, "").trim() }))
+      });
+    }
+
+    while ((match = classRegex.exec(source))) {
+      definitions.push({
+        type: "class",
+        name: match[1],
+        methods: []
+      });
+    }
+  } else if (language === "java") {
+    const classRegex = /class\s+([A-Za-z0-9_]+)/g;
+    let match;
+    while ((match = classRegex.exec(source))) {
+      definitions.push({
+        type: "class",
+        name: match[1],
+        methods: []
+      });
+    }
+  }
+
+  return definitions;
+}
 
 /**
  * Generate edge cases for a function based on its parameters
@@ -283,14 +502,14 @@ function generateTestCode(edgeCases, language, fileName) {
  * Generate JavaScript/TypeScript test
  */
 function generateJavaScriptTest(testName, edgeCase) {
-  const { functionName, testCase, parameterName } = edgeCase;
-  const value = JSON.stringify(testCase.value);
+  const { functionName, testCase } = edgeCase;
+  const values = buildInvocationValues(testCase, serializeJavaScriptValue);
+  const invocation = values.join(", ");
   
   return `
   test('${testName}', () => {
     // ${testCase.description}
-    const input = ${value};
-    expect(() => ${functionName}(input)).not.toThrow();
+    expect(() => ${functionName}(${invocation})).not.toThrow();
   });`;
 }
 
@@ -299,13 +518,14 @@ function generateJavaScriptTest(testName, edgeCase) {
  */
 function generatePythonTest(testName, edgeCase) {
   const { functionName, testCase } = edgeCase;
+  const invocation = buildInvocationValues(testCase, serializePythonValue).join(", ");
   
   return `
     def test_${testName}(self):
         """${testCase.description}"""
         # Test with edge case: ${testCase.description}
         try:
-            result = ${functionName}(${JSON.stringify(testCase.value)})
+            result = ${functionName}(${invocation})
             self.assertIsNotNone(result)
         except Exception as e:
             self.fail(f"Function raised {type(e).__name__}: {e}")`;
@@ -316,13 +536,14 @@ function generatePythonTest(testName, edgeCase) {
  */
 function generateJavaTest(testName, edgeCase) {
   const { functionName, testCase } = edgeCase;
+  const invocation = buildInvocationValues(testCase, serializeJavaValue).join(", ");
   
   return `
     @Test
     public void ${testName}() {
-        // ${testCase.description}
-        assertDoesNotThrow(() -> {
-            ${functionName}(${JSON.stringify(testCase.value)});
+      // ${testCase.description}
+      assertDoesNotThrow(() -> {
+            ${functionName}(${invocation});
         });
     }`;
 }
@@ -408,9 +629,15 @@ async function generateEdgeCases(filePath, workspaceRoot, executionContext = {})
     
     // Parse file to get definitions
     const content = await fs.readFile(absolutePath, "utf-8");
-    const definitions = await parseFile(content, language, filePath);
+    const parsedFile = await parseFile(filePath, workspaceRoot);
+    let definitions = Array.isArray(parsedFile?.definitions)
+      ? parsedFile.definitions
+      : [];
+    if (definitions.length === 0) {
+      definitions = extractDefinitionsFallback(content, language);
+    }
     
-    if (!definitions || definitions.length === 0) {
+    if (definitions.length === 0) {
       return {
         success: false,
         error: `No code definitions found in: ${filePath}`
@@ -430,8 +657,22 @@ async function generateEdgeCases(filePath, workspaceRoot, executionContext = {})
       }
     });
     
+    const aiResult = await generateAiEdgeCases(
+      filePath,
+      workspaceRoot,
+      language,
+      content,
+      definitions,
+      allEdgeCases,
+      executionContext
+    ).catch(() => ({ edgeCases: [], notes: [] }));
+
+    const mergedEdgeCases = dedupeEdgeCases(
+      allEdgeCases.concat(aiResult.edgeCases || [])
+    );
+
     // Generate test code
-    const testCode = generateTestCode(allEdgeCases, language, filePath);
+    const testCode = generateTestCode(mergedEdgeCases, language, filePath);
     
     // Determine test file path
     const testFileName = path.basename(filePath, path.extname(filePath)) + 
@@ -442,13 +683,20 @@ async function generateEdgeCases(filePath, workspaceRoot, executionContext = {})
       success: true,
       filePath,
       language,
-      edgeCaseCount: allEdgeCases.length,
-      edgeCases: allEdgeCases,
+      edgeCaseCount: mergedEdgeCases.length,
+      edgeCases: mergedEdgeCases,
       testCode,
       testFilePath: path.relative(workspaceRoot, testFilePath),
+      aiNotes: aiResult.notes || [],
+      aiAugmentedCount: Array.isArray(aiResult.edgeCases)
+        ? aiResult.edgeCases.length
+        : 0,
       summary: {
-        totalEdgeCases: allEdgeCases.length,
-        byCategory: countByCategory(allEdgeCases),
+        totalEdgeCases: mergedEdgeCases.length,
+        byCategory: countByCategory(mergedEdgeCases),
+        aiAugmentedCount: Array.isArray(aiResult.edgeCases)
+          ? aiResult.edgeCases.length
+          : 0,
         definitions: definitions.length
       }
     };
