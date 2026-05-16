@@ -1141,6 +1141,60 @@ describe("AIAgent structured edit parsing", () => {
     expect(context).not.toContain("[truncated");
   });
 
+  test("active file context includes the full file for large files within the line budget", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-active-file-"));
+    const filePath = path.join(workspaceRoot, "src", "big-file.js");
+    const fileContent = Array.from(
+      { length: 900 },
+      (_, index) => `const line${index + 1} = ${index + 1};`
+    ).join("\n");
+
+    vscode.window.activeTextEditor = {
+      document: {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: false,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    };
+
+    const context = agent._getActiveFileContext(workspaceRoot);
+
+    expect(context).toContain("Active file: src/big-file.js");
+    expect(context).toContain("const line1 = 1;");
+    expect(context).toContain("const line900 = 900;");
+    expect(context).not.toContain("[truncated");
+  });
+
+  test("active file context keeps the file tail when a file exceeds the full-file budget", () => {
+    const agent = new AIAgent();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-active-file-tail-"));
+    const filePath = path.join(workspaceRoot, "src", "huge-file.js");
+    const fileContent = Array.from(
+      { length: 1400 },
+      (_, index) => `const line${index + 1} = ${index + 1};`
+    ).join("\n");
+
+    vscode.window.activeTextEditor = {
+      document: {
+        fileName: filePath,
+        isUntitled: false,
+        isDirty: false,
+        uri: { scheme: "file" },
+        getText: () => fileContent
+      }
+    };
+
+    const context = agent._getActiveFileContext(workspaceRoot);
+
+    expect(context).toContain("Active file: src/huge-file.js");
+    expect(context).toContain("const line1 = 1;");
+    expect(context).toContain("const line1400 = 1400;");
+    expect(context).toContain("[truncated");
+  });
+
   test("focused HTML edit hints surface DOM-oriented patch anchors", () => {
     const agent = new AIAgent();
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-html-hint-"));

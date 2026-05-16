@@ -24,6 +24,9 @@ const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
 const MAX_INSPECTION_MATCHES = 25;
+const MAX_BUG_SCAN_CONTEXT_CHARS = 24000;
+const MAX_BUG_SCAN_FULL_FILE_CHARS = 60000;
+const MAX_BUG_SCAN_FULL_FILE_LINES = 1000;
 
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"],
@@ -507,16 +510,15 @@ class ChatPanel {
     const fileName = path.basename(filePath);
     const ext = path.extname(fileName).slice(1) || "";
     const fullText = editor.document.getText();
-    const truncated = fullText.length > 30000;
-    const bodyText = truncated ? fullText.slice(0, 30000) : fullText;
+    const bugScanExcerpt = this._buildBugScanFileExcerpt(fullText);
 
     const triggerMessage = [
       "Alt+B bug scan triggered. Run the bug fix loop on the file below (active file only).",
       `File: ${fileName}`,
-      truncated ? "(File truncated to first 30000 characters.)" : "",
+      bugScanExcerpt.note,
       "",
       "```" + ext,
-      bodyText,
+      bugScanExcerpt.text,
       "```"
     ]
       .filter(Boolean)
@@ -797,7 +799,7 @@ class ChatPanel {
     this._postMessage({ type: "thinking" });
     await this.agent.ensureCodebaseScanned(workspaceFolder);
     const files = specificFiles || Array.from(this.agent.codebaseContext.keys()).filter(f =>
-      /\.(js|jsx|ts|tsx|py|java)$/i.test(f)
+      /\.(js|jsx|ts|tsx|py|java|html|htm|json)$/i.test(f)
     );
     let reply = `Scanning ${files.length} file(s) for syntax errors...\n`;
     this._postMessage({ type: "stream", text: reply });
@@ -812,36 +814,15 @@ class ChatPanel {
     for (const f of files) {
       const normalized = f.replace(/\\/g, "/");
       let result = null;
-      let tempPath = "";
       const dirtyDoc = dirtyOpen.get(normalized);
       const shouldUseTemp = !!dirtyDoc;
 
       if (shouldUseTemp) {
-        const ext = path.extname(dirtyDoc.fileName);
-        const tmpName = `code-janitor-scan-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`;
-        tempPath = path.join(os.tmpdir(), tmpName);
-        try {
-          fsSync.writeFileSync(tempPath, dirtyDoc.getText(), "utf8");
-          const cmd = this.agent._getSyntaxCheckCommand(tempPath.replace(/\\/g, "/"));
-          result = cmd ? await this.agent.executeCommand(cmd, workspaceFolder) : null;
-          if (result && result.success) {
-            result = { success: true };
-          } else if (result) {
-            result = {
-              success: false,
-              error: result.error || result.output || "Syntax check failed",
-              output: result.output || result.error || ""
-            };
-          }
-        } finally {
-          if (tempPath) {
-            try {
-              fsSync.unlinkSync(tempPath);
-            } catch (_) {
-              // Ignore temp cleanup errors after syntax validation.
-            }
-          }
-        }
+        result = await this.agent._runSyntaxCheck(
+          dirtyDoc.fileName.replace(/\\/g, "/"),
+          workspaceFolder,
+          dirtyDoc.getText()
+        );
       } else {
         result = await this.agent._runSyntaxCheck(normalized, workspaceFolder, null);
       }
@@ -3248,6 +3229,32 @@ ${document.getText()}
     const tail = content.slice(-tailChars);
 
     return `Current file content for ${actionPath} (truncated, preserve unaffected code):\n\`\`\`\n${head}\n...\n[truncated ${content.length - head.length - tail.length} chars]\n...\n${tail}\n\`\`\``;
+  }
+
+  _buildBugScanFileExcerpt(content) {
+    const source = String(content || "");
+    if (!source) {
+      return { text: "", note: "" };
+    }
+
+    const lineCount = source.split(/\r?\n/).length;
+    if (
+      source.length <= MAX_BUG_SCAN_FULL_FILE_CHARS &&
+      lineCount <= MAX_BUG_SCAN_FULL_FILE_LINES
+    ) {
+      return { text: source, note: "" };
+    }
+
+    const headChars = Math.max(Math.floor(MAX_BUG_SCAN_CONTEXT_CHARS * 0.6), 6000);
+    const tailChars = Math.max(MAX_BUG_SCAN_CONTEXT_CHARS - headChars, 4000);
+    const head = source.slice(0, headChars);
+    const tail = source.slice(-tailChars);
+    const omittedChars = Math.max(0, source.length - head.length - tail.length);
+
+    return {
+      text: `${head}\n...\n[truncated ${omittedChars} chars]\n...\n${tail}`,
+      note: `(Large file excerpt: showing both the start and end because the file exceeds ${MAX_BUG_SCAN_FULL_FILE_LINES} lines or ${MAX_BUG_SCAN_FULL_FILE_CHARS} characters.)`
+    };
   }
 
   _buildPatchRecoveryPrompt(originalRequest, action, currentContent) {

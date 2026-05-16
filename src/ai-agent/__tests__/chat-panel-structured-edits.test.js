@@ -50,6 +50,59 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("builds a bug-scan excerpt that preserves the file tail for oversized files", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const content = Array.from(
+      { length: 1400 },
+      (_, index) => `const line${index + 1} = ${index + 1};`
+    ).join("\n");
+
+    const result = panel._buildBugScanFileExcerpt(content);
+
+    expect(result.note).toContain("showing both the start and end");
+    expect(result.text).toContain("const line1 = 1;");
+    expect(result.text).toContain("const line1400 = 1400;");
+    expect(result.text).toContain("[truncated");
+  });
+
+  test("syntax scan checks dirty HTML buffers through the shared syntax validator", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._postMessage = jest.fn();
+    panel.agent = {
+      ensureCodebaseScanned: jest.fn().mockResolvedValue(undefined),
+      codebaseContext: new Map([["index.html", { content: "<html></html>" }]]),
+      _runSyntaxCheck: jest.fn().mockResolvedValue({
+        success: false,
+        error: "HTML JavaScript syntax error"
+      })
+    };
+
+    vscode.window.visibleTextEditors = [
+      {
+        document: {
+          fileName: "C:/workspace/index.html",
+          isDirty: true,
+          uri: { scheme: "file" },
+          getText: () => "<html><script>function broken( {</script></html>"
+        }
+      }
+    ];
+
+    await panel._runSyntaxScan("C:/workspace", ["index.html"]);
+
+    expect(panel.agent._runSyntaxCheck).toHaveBeenCalledWith(
+      "C:/workspace/index.html",
+      "C:/workspace",
+      "<html><script>function broken( {</script></html>"
+    );
+    expect(panel._postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stream",
+        text: expect.stringContaining("index.html")
+      })
+    );
+  });
+
   test("builds patched content when whitespace differs", () => {
     const panel = Object.create(ChatPanel.prototype);
 
