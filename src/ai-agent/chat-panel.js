@@ -3065,7 +3065,7 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
     );
 
     if (retryPatch) {
-      const patched = this._buildPatchedContent(
+      const patched = await this._matchPatchedContent(
         currentContent,
         retryPatch.search,
         retryPatch.replace
@@ -3144,6 +3144,32 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       fileAction.content,
       outside,
       effectiveWriteOptions
+    );
+  }
+
+  async _matchPatchedContent(currentContent, searchContent, replaceContent) {
+    if (typeof this._buildPatchedContentOptimized === "function") {
+      const optimizedResult = await this._buildPatchedContentOptimized(
+        currentContent,
+        searchContent,
+        replaceContent
+      );
+
+      if (
+        optimizedResult &&
+        typeof optimizedResult === "object" &&
+        (optimizedResult.matched ||
+          optimizedResult.reason ||
+          optimizedResult.matchCount !== undefined)
+      ) {
+        return optimizedResult;
+      }
+    }
+
+    return this._buildPatchedContent(
+      currentContent,
+      searchContent,
+      replaceContent
     );
   }
 
@@ -5616,7 +5642,7 @@ ${trimmedText}`;
                   continue;
                 }
 
-                const patchResult = this._buildPatchedContent(
+                const patchResult = await this._matchPatchedContent(
                   activeEditor.document.getText(),
                   action.search,
                   action.replace
@@ -5873,7 +5899,7 @@ ${trimmedText}`;
               const searchContent = action.search || "";
               const replaceContent = action.replace || "";
 
-              const patchResult = this._buildPatchedContent(
+              const patchResult = await this._matchPatchedContent(
                 currentContent,
                 searchContent,
                 replaceContent

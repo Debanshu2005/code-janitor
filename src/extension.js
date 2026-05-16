@@ -1067,7 +1067,8 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
       if (supportsFrontendValidation(event.document)) {
         await validateFrontendFile(
           event.document,
-          frontendDiagnosticCollection
+          frontendDiagnosticCollection,
+          { useGraphContext: true }
         );
       }
 

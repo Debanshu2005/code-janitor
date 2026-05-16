@@ -79,6 +79,31 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("prefers the optimized patch matcher when it is available", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._buildPatchedContentOptimized = jest.fn(async () => ({
+      matched: true,
+      content: "optimized result"
+    }));
+    panel._buildPatchedContent = jest.fn(() => ({
+      matched: true,
+      content: "fallback result"
+    }));
+
+    const result = await panel._matchPatchedContent(
+      "const value = 1;\n",
+      "const value = 1;\n",
+      "const value = 2;\n"
+    );
+
+    expect(panel._buildPatchedContentOptimized).toHaveBeenCalled();
+    expect(panel._buildPatchedContent).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      matched: true,
+      content: "optimized result"
+    });
+  });
+
   test("planned action summary includes patch actions", () => {
     const panel = Object.create(ChatPanel.prototype);
 

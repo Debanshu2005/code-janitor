@@ -71,11 +71,19 @@ class GraphifyPanel {
     try {
       const analyzer = new GraphifyAnalyzer(rootPath);
       const result = await analyzer.generateKnowledgeGraph();
+      const graphData = await this._loadGeneratedGraphData(rootPath);
 
       this.panel.webview.postMessage({
         command: "showStatus",
         message: `Knowledge graph generated! ${result.nodeCount} files, ${result.edgeCount} dependencies. Check graphify-out/GRAPH_REPORT.md and graphify-out/graph.json`
       });
+
+      if (graphData) {
+        this.panel.webview.postMessage({
+          command: "renderGraph",
+          data: graphData
+        });
+      }
 
       vscode.window.showInformationMessage(
         `✅ Knowledge graph generated! ${result.nodeCount} files analyzed. Check graphify-out/GRAPH_REPORT.md and graphify-out/graph.json`,
@@ -105,7 +113,9 @@ class GraphifyPanel {
     }
 
     const rootPath = workspaceFolders[0].uri.fsPath;
-    const graphData = await this.buildGraphData(rootPath);
+    const graphData =
+      (await this._loadGeneratedGraphData(rootPath)) ||
+      (await this.buildGraphData(rootPath));
 
     this.panel.webview.postMessage({
       command: "renderGraph",
@@ -113,13 +123,103 @@ class GraphifyPanel {
     });
   }
 
+  async _loadGeneratedGraphData(rootPath) {
+    const graphPath = path.join(rootPath, "graphify-out", "graph.json");
+
+    try {
+      const raw = await fs.readFile(graphPath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+        return null;
+      }
+      return this._convertKnowledgeGraphToViewData(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  _convertKnowledgeGraphToViewData(graphData) {
+    const nodes = [];
+    const edges = [];
+    const nodeIdByPath = new Map();
+    const fileNodes = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+    let nextId = 0;
+
+    const registerDirectory = (dirPath) => {
+      const normalizedPath = String(dirPath || "").replace(/\\/g, "/");
+      if (!normalizedPath || normalizedPath === ".") {
+        return null;
+      }
+      if (nodeIdByPath.has(normalizedPath)) {
+        return nodeIdByPath.get(normalizedPath);
+      }
+
+      const dirId = nextId++;
+      nodeIdByPath.set(normalizedPath, dirId);
+      nodes.push({
+        id: dirId,
+        label: path.posix.basename(normalizedPath) || normalizedPath,
+        type: "directory",
+        path: normalizedPath,
+        group: normalizedPath.split("/").length - 1
+      });
+      return dirId;
+    };
+
+    for (const fileNode of fileNodes) {
+      const normalizedPath = String(fileNode?.path || "").replace(/\\/g, "/");
+      if (!normalizedPath) continue;
+
+      const parentDir = path.posix.dirname(normalizedPath);
+      if (parentDir && parentDir !== ".") {
+        const segments = parentDir.split("/");
+        let currentDir = "";
+        for (const segment of segments) {
+          currentDir = currentDir ? `${currentDir}/${segment}` : segment;
+          registerDirectory(currentDir);
+        }
+      }
+
+      const fileId = nextId++;
+      nodeIdByPath.set(normalizedPath, fileId);
+      nodes.push({
+        id: fileId,
+        label: fileNode.name || path.posix.basename(normalizedPath),
+        type: "file",
+        extension: path.extname(normalizedPath).slice(1),
+        path: normalizedPath,
+        group: normalizedPath.split("/").length - 1
+      });
+    }
+
+    for (const edge of graphData.edges || []) {
+      const fromPath = String(edge?.from || "").replace(/\\/g, "/");
+      const toPath = String(edge?.to || "").replace(/\\/g, "/");
+      const fromId = nodeIdByPath.get(fromPath);
+      const toId = nodeIdByPath.get(toPath);
+
+      if (fromId === undefined || toId === undefined) {
+        continue;
+      }
+
+      edges.push({
+        from: fromId,
+        to: toId,
+        label: edge.type || "imports"
+      });
+    }
+
+    return { nodes, edges };
+  }
+
   async buildGraphData(rootPath) {
     const nodes = [];
     const edges = [];
     const fileMap = new Map();
+    const pendingEdges = [];
     let nodeId = 0;
 
-    const codeExtensions = /\.(js|jsx|ts|tsx|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i;
+    const codeExtensions = /\.(js|jsx|ts|tsx|mjs|cjs|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i;
     const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__"]);
 
     const scanDirectory = async (dirPath, depth = 0) => {
@@ -166,14 +266,11 @@ class GraphifyPanel {
               const dependencies = this.extractDependencies(content, ext);
 
               for (const dep of dependencies) {
-                const depPath = this.resolveDependencyPath(dep, dirPath, rootPath);
-                if (depPath && fileMap.has(depPath)) {
-                  edges.push({
-                    from: fileNodeId,
-                    to: fileMap.get(depPath),
-                    label: "imports"
-                  });
-                }
+                pendingEdges.push({
+                  from: fileNodeId,
+                  dep,
+                  dirPath
+                });
               }
             } catch (err) {
               // Skip files that can't be read
@@ -186,6 +283,21 @@ class GraphifyPanel {
     };
 
     await scanDirectory(rootPath);
+
+    for (const pendingEdge of pendingEdges) {
+      const depPath = this.resolveDependencyPath(
+        pendingEdge.dep,
+        pendingEdge.dirPath,
+        rootPath
+      );
+      if (depPath && fileMap.has(depPath)) {
+        edges.push({
+          from: pendingEdge.from,
+          to: fileMap.get(depPath),
+          label: "imports"
+        });
+      }
+    }
 
     return { nodes, edges };
   }

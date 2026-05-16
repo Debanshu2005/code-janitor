@@ -156,6 +156,37 @@ function createOptimizedAgent(agent) {
     return { actions, warnings };
   };
 
+  agent._parseResponse = function(response) {
+    const parsed = original.parseResponse(response);
+    const text = String(response || "");
+    const simpleActionTypes = new Set(["patch", "file", "mkdir", "cmd"]);
+    const hasAdvancedStructuredTokens =
+      /\b(?:APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|READ|GREP|LOCATE_CODE|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH)\s*:/i.test(
+        text
+      );
+    const parsedActions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+    const parsedIsSimpleOnly =
+      parsedActions.length > 0 &&
+      parsedActions.every((action) => simpleActionTypes.has(action?.type));
+
+    if (!parsedIsSimpleOnly || hasAdvancedStructuredTokens) {
+      return parsed;
+    }
+
+    const optimized = agent._parseStructuredActionsOptimized(text);
+    if (!Array.isArray(optimized?.actions) || optimized.actions.length === 0) {
+      return parsed;
+    }
+
+    return {
+      ...parsed,
+      actions: optimized.actions,
+      warnings: Array.from(
+        new Set([...(parsed.warnings || []), ...(optimized.warnings || [])])
+      )
+    };
+  };
+
   // Add optimizer instances to agent
   agent.performanceOptimizer = optimizer;
   agent.feedbackLoopOptimizer = feedbackOptimizer;
@@ -172,6 +203,13 @@ function createOptimizedChatPanel(chatPanel) {
 
   // Optimized patch matching with smart recovery
   chatPanel._buildPatchedContentOptimized = async function(currentContent, searchContent, replaceContent) {
+    if (!String(searchContent || "").length) {
+      return {
+        matched: false,
+        reason: "empty_search"
+      };
+    }
+
     const result = await optimizer.patchMatcher.tryMatch(
       currentContent,
       searchContent,
@@ -188,7 +226,12 @@ function createOptimizedChatPanel(chatPanel) {
 
     return {
       matched: false,
-      reason: result.reason,
+      reason:
+        result.reason === "ambiguous"
+          ? "ambiguous_search"
+          : result.reason === "no_match"
+            ? "search_not_found"
+            : result.reason || "search_not_found",
       matchCount: result.matchCount
     };
   };

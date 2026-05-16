@@ -263,10 +263,42 @@ class GraphifyAnalyzer {
       }
     } else if (ext === ".py") {
       // Python
-      const importRegex = /^(?:from|import)\s+([\w.]+)/gm;
+      const fromImportRegex = /^\s*from\s+([.\w]+)\s+import\s+([^\n#]+)/gm;
+      const importRegex = /^\s*import\s+([^\n#]+)/gm;
       let match;
+      while ((match = fromImportRegex.exec(content)) !== null) {
+        const moduleName = (match[1] || "").trim();
+        if (!moduleName) continue;
+
+        node.imports.push(moduleName);
+        references.push({
+          specifier: moduleName,
+          type: "python-from",
+          kind: "python-module"
+        });
+
+        const importedNames = this._splitCommaSeparatedSpecifiers(match[2]);
+        for (const importedName of importedNames) {
+          if (!importedName || importedName === "*") continue;
+          references.push({
+            specifier: `${moduleName}.${importedName}`,
+            type: "python-from-member",
+            kind: "python-module"
+          });
+        }
+      }
+
       while ((match = importRegex.exec(content)) !== null) {
-        node.imports.push(match[1]);
+        const importedModules = this._splitCommaSeparatedSpecifiers(match[1]);
+        for (const importedModule of importedModules) {
+          if (!importedModule) continue;
+          node.imports.push(importedModule);
+          references.push({
+            specifier: importedModule,
+            type: "python-import",
+            kind: "python-module"
+          });
+        }
       }
     } else if ([".c", ".cpp", ".h", ".hpp", ".ino"].includes(ext)) {
       // C/C++/Arduino
@@ -286,6 +318,11 @@ class GraphifyAnalyzer {
       let match;
       while ((match = importRegex.exec(content)) !== null) {
         node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "java-import",
+          kind: "java-module"
+        });
       }
     } else if (ext === ".html" || ext === ".htm") {
       this._collectHtmlReferences(content, references);
@@ -294,6 +331,15 @@ class GraphifyAnalyzer {
     }
 
     return references;
+  }
+
+  _splitCommaSeparatedSpecifiers(rawValue) {
+    return String(rawValue || "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => part.replace(/\s+as\s+.+$/i, "").trim())
+      .filter(Boolean);
   }
 
   _collectHtmlReferences(content, references) {
@@ -460,6 +506,14 @@ class GraphifyAnalyzer {
       return null;
     }
 
+    if (kind === "python-module") {
+      return this._resolvePythonModulePath(normalizedSpecifier, currentFilePath);
+    }
+
+    if (kind === "java-module") {
+      return this._resolveJavaModulePath(normalizedSpecifier);
+    }
+
     const baseDir = path.dirname(currentFilePath);
     const isRootRelative =
       /^[\\/]/.test(normalizedSpecifier) &&
@@ -507,6 +561,69 @@ class GraphifyAnalyzer {
       }
     }
 
+    for (const candidate of candidates) {
+      try {
+        const stat = fsSync.statSync(candidate);
+        if (stat.isFile()) {
+          return path.relative(this.workspaceRoot, candidate).replace(/\\/g, "/");
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  _resolvePythonModulePath(specifier, currentFilePath) {
+    const candidateBases = [];
+    const normalizedSpecifier = String(specifier || "").trim();
+
+    if (!normalizedSpecifier) {
+      return null;
+    }
+
+    if (normalizedSpecifier.startsWith(".")) {
+      const leadingDotsMatch = normalizedSpecifier.match(/^(\.+)/);
+      const leadingDots = leadingDotsMatch ? leadingDotsMatch[1].length : 0;
+      const remainder = normalizedSpecifier.slice(leadingDots).replace(/\./g, "/");
+      let baseDir = path.dirname(currentFilePath);
+
+      for (let i = 1; i < leadingDots; i++) {
+        baseDir = path.dirname(baseDir);
+      }
+
+      candidateBases.push(remainder ? path.join(baseDir, remainder) : baseDir);
+    } else {
+      const dottedPath = normalizedSpecifier.replace(/\./g, "/");
+      candidateBases.push(path.join(this.workspaceRoot, dottedPath));
+      candidateBases.push(path.join(path.dirname(currentFilePath), dottedPath));
+    }
+
+    return this._resolveFirstExistingCandidate(
+      candidateBases.flatMap((candidateBase) => [
+        `${candidateBase}.py`,
+        path.join(candidateBase, "__init__.py")
+      ])
+    );
+  }
+
+  _resolveJavaModulePath(specifier) {
+    const modulePath = String(specifier || "").trim().replace(/\./g, "/");
+    if (!modulePath) {
+      return null;
+    }
+
+    return this._resolveFirstExistingCandidate([
+      path.join(this.workspaceRoot, `${modulePath}.java`),
+      path.join(this.workspaceRoot, "src", `${modulePath}.java`),
+      path.join(this.workspaceRoot, "src", "main", "java", `${modulePath}.java`),
+      path.join(this.workspaceRoot, "src", "test", "java", `${modulePath}.java`),
+      path.join(this.workspaceRoot, "app", "src", "main", "java", `${modulePath}.java`)
+    ]);
+  }
+
+  _resolveFirstExistingCandidate(candidates) {
     for (const candidate of candidates) {
       try {
         const stat = fsSync.statSync(candidate);
