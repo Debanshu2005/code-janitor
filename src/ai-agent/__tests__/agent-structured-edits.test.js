@@ -94,6 +94,54 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("keeps multi-block APPLY_DIFF actions together as one parsed edit", () => {
+    const agent = new AIAgent();
+    const response = [
+      "APPLY_DIFF: src/example.js",
+      "<<<<<<< SEARCH",
+      ":start_line: 2",
+      "-------",
+      "const answer = 41;",
+      "=======",
+      "const answer = 42;",
+      ">>>>>>> REPLACE",
+      "",
+      "<<<<<<< SEARCH",
+      ":start_line: 5",
+      "-------",
+      "const status = 'draft';",
+      "=======",
+      "const status = 'ready';",
+      ">>>>>>> REPLACE"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "apply_diff",
+        path: "src/example.js",
+        diff: [
+          "<<<<<<< SEARCH",
+          ":start_line: 2",
+          "-------",
+          "const answer = 41;",
+          "=======",
+          "const answer = 42;",
+          ">>>>>>> REPLACE",
+          "",
+          "<<<<<<< SEARCH",
+          ":start_line: 5",
+          "-------",
+          "const status = 'draft';",
+          "=======",
+          "const status = 'ready';",
+          ">>>>>>> REPLACE"
+        ].join("\n")
+      }
+    ]);
+  });
+
   test("treats INSERT_CONTENT actions as valid edit actions", () => {
     const agent = new AIAgent();
     const response = [
@@ -114,6 +162,27 @@ describe("AIAgent structured edit parsing", () => {
     expect(
       agent._hasRequiredActions("edit", "please edit src/example.js", parsed.actions)
     ).toBe(true);
+  });
+
+  test("preserves indentation in INSERT_CONTENT actions", () => {
+    const agent = new AIAgent();
+    const response =
+      [
+        "INSERT_CONTENT: src/example.py AT LINE 2",
+        "    print('hello')",
+        "    return 42"
+      ].join("\n") + "\n";
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "insert_content",
+        path: "src/example.py",
+        line: 2,
+        content: "    print('hello')\n    return 42"
+      }
+    ]);
   });
 
   test("loads workspace memory context when a handoff file is present", async () => {
@@ -1642,6 +1711,24 @@ describe("AIAgent structured edit parsing", () => {
         replace: "const status = 'ready';\n"
       }
     ]);
+  });
+
+  test("structured retry prompt advertises the full file editing toolkit", () => {
+    const agent = new AIAgent();
+    const prompt = agent._buildStructuredRetryPrompt("I'll handle it.");
+
+    expect(prompt).toContain(
+      "include at least one PATCH:, APPLY_DIFF:, INSERT_CONTENT:, or FILE: action"
+    );
+    expect(prompt).toContain(
+      "Use APPLY_DIFF: for line-anchored surgical edits"
+    );
+    expect(prompt).toContain(
+      "Use INSERT_CONTENT: for additive changes that should not rewrite existing lines."
+    );
+    expect(prompt).toContain(
+      "you may instead return READ:, READ_FILES:, GREP:, or focused inspection CMD: actions only."
+    );
   });
 
   test("incomplete structured edits are rejected instead of applying partial file content", async () => {

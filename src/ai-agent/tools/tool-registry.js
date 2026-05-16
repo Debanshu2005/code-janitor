@@ -32,28 +32,37 @@ const TOOL_DEFINITIONS = {
       {
         description: "Single diff block",
         usage: `apply_diff('src/app.js', \`
+<<<<<<< SEARCH
 :start_line: 10
 -------
 function oldName() {
   return 42;
 }
+=======
 function newName() {
   return 42;
 }
+>>>>>>> REPLACE
 \`)`
       },
       {
         description: "Multiple diff blocks",
         usage: `apply_diff('src/app.js', \`
+<<<<<<< SEARCH
 :start_line: 10
 -------
 const x = 1;
+=======
 const x = 2;
+>>>>>>> REPLACE
 
+<<<<<<< SEARCH
 :start_line: 20
 -------
 const y = 3;
+=======
 const y = 4;
+>>>>>>> REPLACE
 \`)`
       }
     ]

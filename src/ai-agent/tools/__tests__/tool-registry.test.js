@@ -35,6 +35,15 @@ describe("ToolRegistry validators", () => {
     ).rejects.toThrow(/No valid SEARCH\/REPLACE blocks/i);
   });
 
+  test("documents full SEARCH/REPLACE syntax for apply_diff", () => {
+    const registry = new ToolRegistry();
+    const help = registry.getHelp("apply_diff");
+
+    expect(help).toContain("<<<<<<< SEARCH");
+    expect(help).toContain(":start_line: 10");
+    expect(help).toContain(">>>>>>> REPLACE");
+  });
+
   test("rejects insert_content requests with out-of-range line numbers", async () => {
     const registry = new ToolRegistry();
     const filePath = path.join(tempDir, "example.js");

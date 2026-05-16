@@ -5214,8 +5214,8 @@ GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
 ${isAgentLoop
-  ? "You may narrate briefly before the executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. Keep actions exact and easy to parse."
-  : "Output ONLY executable PATCH:, FILE:, READ:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. No explanations, no markdown outside code fences."}`;
+  ? "You may narrate briefly before the executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -5270,12 +5270,14 @@ Return ONLY executable actions now.
 Rules:
 - Work like Codex: do the work directly and do not restate the plan.
 - Do not continue, quote, or paraphrase the previous reply.
-- If the user asked you to change code/files, include at least one PATCH: or FILE: action.
-- If you genuinely need more ground truth before editing, you may instead return READ:, GREP:, or focused inspection CMD: actions only.
+- If the user asked you to change code/files, include at least one PATCH:, APPLY_DIFF:, INSERT_CONTENT:, or FILE: action.
+- If you genuinely need more ground truth before editing, you may instead return READ:, READ_FILES:, GREP:, or focused inspection CMD: actions only.
 - For multi-step edit/debug/refactor/bug-fix tasks, include UPDATE_TODO_LIST: early and keep it updated as progress changes.
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
+- Use APPLY_DIFF: for line-anchored surgical edits, especially when you need multiple targeted changes in one file.
+- Use INSERT_CONTENT: for additive changes that should not rewrite existing lines.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
-- Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
+- Use READ: or READ_FILES: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
 - When debugging syntax or a large file, prefer READ_FILES with line ranges over guessing from partial snippets.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
@@ -6646,8 +6648,10 @@ ${userMessage}`;
       markConsumedRange(match.index, match[0]);
     }
 
-    // Match APPLY_DIFF: actions for Bob-style surgical edits with line anchoring
-    const applyDiffRegex = /APPLY_DIFF:\s*([^\r\n`]+)\r?\n(<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE)/g;
+    // Match APPLY_DIFF: actions for Bob-style surgical edits with line anchoring.
+    // Capture one or more contiguous SEARCH/REPLACE blocks so multi-block diffs
+    // survive parsing as a single action.
+    const applyDiffRegex = /APPLY_DIFF:\s*([^\r\n`]+)\r?\n((?:<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE(?:\r?\n\s*)*)+)/g;
     while ((match = applyDiffRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6679,7 +6683,7 @@ ${userMessage}`;
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
       const lineNumber = parseInt(match[2], 10);
-      const content = match[3] || "";
+      const content = (match[3] || "").replace(/\r?\n$/, "");
 
       if (!normalizedPath || normalizedPath.includes("\n")) continue;
       if (isNaN(lineNumber) || lineNumber < 0) continue;
@@ -6696,7 +6700,7 @@ ${userMessage}`;
         type: "insert_content",
         path: normalizedPath,
         line: lineNumber,
-        content: content.trim()
+        content
       });
       markConsumedRange(match.index, match[0]);
     }

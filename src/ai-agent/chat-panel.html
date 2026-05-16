@@ -51,6 +51,99 @@
         font-size: 13px;
         line-height: 1.5;
       }
+      body.light-theme {
+        --bg: #f6efdc;
+        --panel: #fbf6ea;
+        --panel-2: #f1e8d3;
+        --panel-3: #e8dcc0;
+        --border: #cdbf9d;
+        --text: #3f392d;
+        --muted: #7a705d;
+        --accent-soft: rgba(47, 129, 247, 0.14);
+        --teal-soft: rgba(63, 185, 80, 0.12);
+        --green-soft: rgba(63, 185, 80, 0.12);
+        --red-soft: rgba(248, 81, 73, 0.12);
+        background:
+          radial-gradient(ellipse at top, rgba(47, 129, 247, 0.08), transparent 52%),
+          radial-gradient(ellipse at bottom right, rgba(210, 179, 93, 0.12), transparent 48%),
+          linear-gradient(180deg, #f8f1de 0%, #efe4c7 100%);
+        color-scheme: light;
+      }
+      body.light-theme #header {
+        background: rgba(250, 245, 231, 0.96);
+        box-shadow: 0 1px 0 rgba(144, 125, 74, 0.08);
+      }
+      body.light-theme #header-logo {
+        border-color: rgba(141, 128, 93, 0.28);
+        background:
+          radial-gradient(circle at 30% 30%, rgba(47, 129, 247, 0.16), transparent 70%),
+          linear-gradient(135deg, rgba(253, 248, 237, 0.98), rgba(236, 226, 199, 0.98));
+        box-shadow: 0 6px 18px rgba(120, 102, 60, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+      }
+      body.light-theme .toolbar-cluster {
+        border-color: rgba(163, 149, 112, 0.32);
+        background:
+          linear-gradient(135deg, rgba(255, 250, 239, 0.94), rgba(243, 234, 211, 0.94));
+      }
+      body.light-theme #feature-ribbon-panel {
+        background:
+          linear-gradient(180deg, rgba(244, 236, 214, 0.82), rgba(244, 236, 214, 0));
+      }
+      body.light-theme .feature-card {
+        border-color: rgba(173, 159, 122, 0.34);
+        background:
+          radial-gradient(circle at top right, rgba(47, 129, 247, 0.12), transparent 50%),
+          linear-gradient(135deg, rgba(255, 251, 242, 0.98), rgba(243, 234, 211, 0.98));
+      }
+      body.light-theme #api-key-row {
+        background: rgba(243, 233, 208, 0.88);
+      }
+      body.light-theme #activity-panel {
+        background: linear-gradient(180deg, rgba(255, 251, 243, 0.98) 0%, rgba(243, 235, 214, 0.98) 100%);
+      }
+      body.light-theme #activity-header {
+        background: rgba(236, 226, 200, 0.78);
+      }
+      body.light-theme .bubble.ai {
+        background: linear-gradient(135deg, rgba(255, 252, 245, 0.97), rgba(244, 237, 218, 0.97));
+      }
+      body.light-theme .bubble.user {
+        background: linear-gradient(135deg, rgba(47, 129, 247, 0.2), rgba(47, 129, 247, 0.1));
+        border-color: rgba(47, 129, 247, 0.3);
+        color: #1f4e87;
+      }
+      body.light-theme #input-area {
+        background: rgba(250, 245, 231, 0.96);
+        box-shadow: 0 -4px 12px rgba(120, 102, 60, 0.1);
+      }
+      body.light-theme #custom-provider-overlay,
+      body.light-theme #workspace-settings-overlay,
+      body.light-theme #tutorial-overlay,
+      body.light-theme #welcome-overlay {
+        background: rgba(97, 84, 46, 0.18);
+      }
+      body.light-theme .welcome-panel {
+        background:
+          linear-gradient(180deg, rgba(255, 251, 243, 0.99) 0%, rgba(245, 237, 218, 0.98) 100%);
+        border-color: rgba(164, 145, 96, 0.3);
+        box-shadow:
+          0 24px 48px rgba(115, 98, 57, 0.18),
+          0 0 0 1px rgba(255, 255, 255, 0.52) inset,
+          0 1px 0 rgba(47, 129, 247, 0.06) inset;
+      }
+      body.light-theme .welcome-step {
+        background: rgba(235, 225, 198, 0.76);
+        color: #665b47;
+      }
+      body.light-theme .welcome-card {
+        background: rgba(255, 250, 240, 0.92);
+        border-color: rgba(173, 159, 122, 0.34);
+      }
+      body.light-theme .welcome-key kbd {
+        background: #eee4cd;
+        border-color: #cbb98e;
+        color: #554e40;
+      }
 
       /* Header */
       #header {
@@ -70,6 +163,64 @@
         justify-content: space-between;
         gap: 10px;
         flex-wrap: wrap;
+      }
+      #header-focus-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+      }
+      body.focus-mode #header-focus-actions {
+        flex-direction: column;
+        align-items: flex-end;
+      }
+      #focus-mode-exit {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 12px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      body.focus-mode #focus-mode-exit {
+        display: inline-flex;
+        width: 100%;
+      }
+      #theme-mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 3px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        box-shadow: var(--shadow-sm);
+      }
+      .theme-mode-btn {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+      }
+      .theme-mode-btn:hover {
+        color: var(--text);
+        background: var(--panel-3);
+      }
+      .theme-mode-btn.active {
+        background: var(--accent);
+        color: #fff;
+        box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.15);
       }
       #header-left {
         display: flex;
@@ -320,6 +471,30 @@
         border-radius: 6px;
         font-size: 11px;
         cursor: pointer;
+      }
+      #api-key-label {
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      #api-key-status {
+        font-size: 11px;
+        color: #22c55e;
+        display: none;
+      }
+      #api-key-change {
+        font-size: 11px;
+        color: var(--accent);
+        background: none;
+        border: none;
+        cursor: pointer;
+        text-decoration: underline;
+        display: none;
+      }
+      #api-key-link {
+        font-size: 10px;
+        color: var(--accent);
+        white-space: nowrap;
       }
 
       #custom-provider-overlay {
@@ -1018,6 +1193,17 @@
         color: var(--muted);
         cursor: not-allowed;
         opacity: 0.6;
+      }
+      body.focus-mode #api-key-row,
+      body.focus-mode #action-bar,
+      body.focus-mode #search-bar {
+        display: none;
+      }
+      body.focus-mode #activity-panel {
+        margin-top: 8px;
+      }
+      body.focus-mode #chat {
+        padding-top: 14px;
       }
 
       /* Voice input */
@@ -2190,16 +2376,29 @@
       /* Welcome overlay */
       #welcome-overlay {
         position: absolute;
-        inset: 60px 14px 84px 14px;
-        background: rgba(9, 12, 17, 0.94);
-        border: 1px solid var(--border);
+        inset: 0;
+        background: rgba(5, 8, 12, 0.58);
+        padding: 60px 14px 84px;
+        display: none;
+        box-sizing: border-box;
+        align-items: stretch;
+        z-index: 40;
+      }
+      .welcome-panel {
+        flex: 1;
+        min-height: 0;
+        background:
+          linear-gradient(180deg, rgba(18, 25, 37, 0.98) 0%, rgba(10, 15, 23, 0.97) 100%);
+        border: 1px solid rgba(88, 166, 255, 0.18);
         border-radius: 16px;
         padding: 18px 18px 16px;
-        display: none;
+        display: flex;
         flex-direction: column;
         gap: 14px;
-        z-index: 40;
-        box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+        box-shadow:
+          0 24px 48px rgba(0, 0, 0, 0.5),
+          0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+          0 1px 0 rgba(88, 166, 255, 0.08) inset;
       }
       #welcome-overlay.visible {
         display: flex;
@@ -2711,84 +2910,86 @@
     </div>
 
     <div id="welcome-overlay" class="hidden">
-      <div class="welcome-header">
-        <div>
-          <div class="welcome-title">Meet the cleaner Code Janitor</div>
-          <div class="welcome-sub">Focused controls, safer edits, and an always-on health watch.</div>
-        </div>
-        <button class="welcome-btn" id="welcome-skip">Skip</button>
-      </div>
-      
-      <!-- Slide 1: Introduction -->
-      <div class="welcome-slide active" data-slide="0">
-        <div class="welcome-steps">
-          <div class="welcome-step" data-step="0">Fix, refactor, and generate with structured edits that stay scoped to your workspace.</div>
-          <div class="welcome-step" data-step="1">Use quick actions for scans, Quick Fix, tests, Graphify, and deeper code reviews.</div>
-          <div class="welcome-step" data-step="2">Every applied change is tracked, undoable, and followed by safety checks when useful.</div>
-        </div>
-        <div class="welcome-grid">
-          <div class="welcome-card">
-            <h4>Build Lane</h4>
-            <ul>
-              <li>Quick Fix, Explain, Refactor, and Generate tests</li>
-              <li>Structured FILE and PATCH edits with undo support</li>
-              <li>Preview-aware fixes for HTML, React, Markdown, Vue, and Svelte</li>
-              <li>Frontend dependency validation when imports drift</li>
-            </ul>
+      <div class="welcome-panel">
+        <div class="welcome-header">
+          <div>
+            <div class="welcome-title">Meet the cleaner Code Janitor</div>
+            <div class="welcome-sub">Focused controls, safer edits, and an always-on health watch.</div>
           </div>
-          <div class="welcome-card">
-            <h4>Context Lane</h4>
-            <ul>
-              <li>Graphify summaries guide architecture-aware answers</li>
-              <li>Workspace scans stay focused on relevant files</li>
-              <li>GStack reviews pressure-test code before risky edits</li>
-              <li>Live activity shows what the agent is doing now</li>
-            </ul>
-          </div>
+          <button class="welcome-btn" id="welcome-skip">Skip</button>
         </div>
-      </div>
-      
-      <!-- Slide 2: Advanced Features -->
-      <div class="welcome-slide" data-slide="1">
-        <div class="welcome-steps">
-          <div class="welcome-step" data-step="0">Choose your provider and model without the header turning into a junk drawer.</div>
-          <div class="welcome-step" data-step="1">Auto-heal now watches latency, failures, and edit reliability instead of only one slow run.</div>
-          <div class="welcome-step" data-step="2">When health drops, Code Janitor can recommend or apply safer fixes like model, timeout, and gate changes.</div>
-        </div>
-        <div class="welcome-grid">
-          <div class="welcome-card">
-            <h4>Operator Stack</h4>
-            <ul>
-              <li>Fast, Heavy, and Deep modes for different workloads</li>
-              <li>Provider and model switching for Ollama, Groq, OpenRouter, Anthropic, and NVIDIA</li>
-              <li>GStack gate modes for smart or always-on preflight review</li>
-              <li>Health review with model breakdowns, trends, and issue history</li>
-            </ul>
+
+        <!-- Slide 1: Introduction -->
+        <div class="welcome-slide active" data-slide="0">
+          <div class="welcome-steps">
+            <div class="welcome-step" data-step="0">Fix, refactor, and generate with structured edits that stay scoped to your workspace.</div>
+            <div class="welcome-step" data-step="1">Use quick actions for scans, Quick Fix, tests, Graphify, and deeper code reviews.</div>
+            <div class="welcome-step" data-step="2">Every applied change is tracked, undoable, and followed by safety checks when useful.</div>
           </div>
-          <div class="welcome-card">
-            <h4>Shortcuts</h4>
-            <ul>
-              <li class="welcome-key"><span>Format Code</span><kbd>Alt + D</kbd></li>
-              <li class="welcome-key"><span>Lint Code</span><kbd>Alt + L</kbd></li>
-              <li class="welcome-key"><span>Live Preview</span><kbd>Alt + P</kbd></li>
-              <li class="welcome-key"><span>Validate Frontend</span><kbd>Alt + V</kbd></li>
-              <li class="welcome-key"><span>Open AI Chat</span><kbd>Ctrl + Alt + C</kbd></li>
-              <li class="welcome-key"><span>Graphify</span><kbd>Ctrl + Alt + G</kbd></li>
-            </ul>
+          <div class="welcome-grid">
+            <div class="welcome-card">
+              <h4>Build Lane</h4>
+              <ul>
+                <li>Quick Fix, Explain, Refactor, and Generate tests</li>
+                <li>Structured FILE and PATCH edits with undo support</li>
+                <li>Preview-aware fixes for HTML, React, Markdown, Vue, and Svelte</li>
+                <li>Frontend dependency validation when imports drift</li>
+              </ul>
+            </div>
+            <div class="welcome-card">
+              <h4>Context Lane</h4>
+              <ul>
+                <li>Graphify summaries guide architecture-aware answers</li>
+                <li>Workspace scans stay focused on relevant files</li>
+                <li>GStack reviews pressure-test code before risky edits</li>
+                <li>Live activity shows what the agent is doing now</li>
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
-      
-      <div class="welcome-dots">
-        <div class="welcome-dot active" data-dot="0"></div>
-        <div class="welcome-dot" data-dot="1"></div>
-      </div>
-      
-      <div class="welcome-actions">
-        <button class="welcome-btn" id="welcome-prev" style="display:none;">Previous</button>
-        <button class="welcome-btn" id="welcome-later">Show Later</button>
-        <button class="welcome-btn primary" id="welcome-next">Next</button>
-        <button class="welcome-btn primary" id="welcome-ok" style="display:none;">Let's go!</button>
+
+        <!-- Slide 2: Advanced Features -->
+        <div class="welcome-slide" data-slide="1">
+          <div class="welcome-steps">
+            <div class="welcome-step" data-step="0">Choose your provider and model without the header turning into a junk drawer.</div>
+            <div class="welcome-step" data-step="1">Auto-heal now watches latency, failures, and edit reliability instead of only one slow run.</div>
+            <div class="welcome-step" data-step="2">When health drops, Code Janitor can recommend or apply safer fixes like model, timeout, and gate changes.</div>
+          </div>
+          <div class="welcome-grid">
+            <div class="welcome-card">
+              <h4>Operator Stack</h4>
+              <ul>
+                <li>Fast, Heavy, and Deep modes for different workloads</li>
+                <li>Provider and model switching for Ollama, Groq, OpenRouter, Anthropic, and NVIDIA</li>
+                <li>GStack gate modes for smart or always-on preflight review</li>
+                <li>Health review with model breakdowns, trends, and issue history</li>
+              </ul>
+            </div>
+            <div class="welcome-card">
+              <h4>Shortcuts</h4>
+              <ul>
+                <li class="welcome-key"><span>Format Code</span><kbd>Alt + D</kbd></li>
+                <li class="welcome-key"><span>Lint Code</span><kbd>Alt + L</kbd></li>
+                <li class="welcome-key"><span>Live Preview</span><kbd>Alt + P</kbd></li>
+                <li class="welcome-key"><span>Validate Frontend</span><kbd>Alt + V</kbd></li>
+                <li class="welcome-key"><span>Open AI Chat</span><kbd>Ctrl + Alt + C</kbd></li>
+                <li class="welcome-key"><span>Graphify</span><kbd>Ctrl + Alt + G</kbd></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="welcome-dots">
+          <div class="welcome-dot active" data-dot="0"></div>
+          <div class="welcome-dot" data-dot="1"></div>
+        </div>
+
+        <div class="welcome-actions">
+          <button class="welcome-btn" id="welcome-prev" style="display:none;">Previous</button>
+          <button class="welcome-btn" id="welcome-later">Show Later</button>
+          <button class="welcome-btn primary" id="welcome-next">Next</button>
+          <button class="welcome-btn primary" id="welcome-ok" style="display:none;">Let's go!</button>
+        </div>
       </div>
     </div>
     <div id="header">
@@ -2814,6 +3015,13 @@
             <span>Checking...</span>
           </div>
           <button class="pill-btn" id="header-tools-toggle" type="button" aria-expanded="false">Show advanced</button>
+        </div>
+        <div id="header-focus-actions">
+          <div id="theme-mode-toggle" aria-label="Theme switch">
+            <button class="theme-mode-btn" id="theme-light-btn" type="button" title="Switch to light theme" aria-label="Switch to light theme">☼</button>
+            <button class="theme-mode-btn" id="theme-dark-btn" type="button" title="Switch to dark theme" aria-label="Switch to dark theme">☾</button>
+          </div>
+          <button class="pill-btn" id="focus-mode-exit" type="button" title="Exit focused view (Escape)">Esc</button>
         </div>
         <div id="header-controls">
           <div class="toolbar-cluster">
@@ -2887,12 +3095,12 @@
     </div>
 
     <div id="api-key-row">
-      <span style="font-size:11px;color:#64748b;white-space:nowrap;">API Key:</span>
-      <span id="api-key-status" style="font-size:11px;color:#22c55e;display:none;">&#10003; Key saved</span>
-      <input id="api-key-input" type="password" placeholder="Paste your API key here..." style="flex:1;padding:4px 8px;background:#1e2a3a;border:1px solid #2d3f55;border-radius:6px;color:#e2e8f0;font-size:11px;" />
-      <button id="api-key-save" style="padding:4px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;">Save</button>
-      <button id="api-key-change" style="font-size:11px;color:#3b82f6;background:none;border:none;cursor:pointer;text-decoration:underline;display:none;">Change</button>
-      <a id="api-key-link" href="" style="font-size:10px;color:#3b82f6;white-space:nowrap;">Get key</a>
+      <span id="api-key-label">API Key:</span>
+      <span id="api-key-status">&#10003; Key saved</span>
+      <input id="api-key-input" type="password" placeholder="Paste your API key here..." />
+      <button id="api-key-save">Save</button>
+      <button id="api-key-change">Change</button>
+      <a id="api-key-link" href="">Get key</a>
     </div>
 
     <div id="custom-provider-overlay">
@@ -3136,9 +3344,13 @@
       var imageBtn = document.getElementById("image-btn");
       var imageInput = document.getElementById("image-input");
       var imagePreviewStrip = document.getElementById("image-preview-strip");
+      var inputArea = document.getElementById("input-area");
       var headerLogo = document.getElementById("header-logo");
       var headerSub = document.getElementById("header-sub");
       var headerToolsToggle = document.getElementById("header-tools-toggle");
+      var themeLightBtn = document.getElementById("theme-light-btn");
+      var themeDarkBtn = document.getElementById("theme-dark-btn");
+      var focusModeExitBtn = document.getElementById("focus-mode-exit");
       var featureRibbonPanel = document.getElementById("feature-ribbon-panel");
       var featureRibbonToggle = document.getElementById("feature-ribbon-toggle");
       var micBtn = document.getElementById("mic-btn");
@@ -3225,6 +3437,15 @@
         e.preventDefault();
         e.stopPropagation();
         vscode.postMessage({ type: "undoEdit", id: latestUndoId || undefined });
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape" || !document.body.classList.contains("focus-mode")) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        setFocusMode(false);
       });
 
       function setUndoButtonState(canUndo, undoId) {
@@ -3848,6 +4069,34 @@
         updateWebviewState({ topStackCollapsed: collapsed });
       }
 
+      function setFocusMode(enabled) {
+        document.body.classList.toggle("focus-mode", enabled);
+        updateWebviewState({ focusMode: enabled });
+      }
+
+      function setThemeMode(theme) {
+        var nextTheme = theme === "light" ? "light" : "dark";
+        document.body.classList.toggle("light-theme", nextTheme === "light");
+        themeLightBtn.classList.toggle("active", nextTheme === "light");
+        themeDarkBtn.classList.toggle("active", nextTheme !== "light");
+        themeLightBtn.setAttribute("aria-pressed", nextTheme === "light" ? "true" : "false");
+        themeDarkBtn.setAttribute("aria-pressed", nextTheme !== "light" ? "true" : "false");
+        updateWebviewState({ themeMode: nextTheme });
+      }
+
+      function shouldEnterFocusModeFromTarget(target) {
+        if (!target || typeof target.closest !== "function") {
+          return false;
+        }
+        if (target.closest("button, a, input, textarea, select, label")) {
+          return false;
+        }
+        return chat.contains(target) ||
+          (inputArea && inputArea.contains(target)) ||
+          (activityPanel && activityPanel.contains(target)) ||
+          (todoBoard && todoBoard.contains(target));
+      }
+
       function classifyActivity(text, explicitType) {
         if (explicitType) return explicitType;
         if (/allow|denied|blocked|outside workspace/i.test(text)) return "warn";
@@ -3904,11 +4153,22 @@
       );
       setTopStackCollapsed(initialUiState.topStackCollapsed !== false);
       setFeatureRibbonCollapsed(initialUiState.featureRibbonCollapsed !== false);
+      setFocusMode(initialUiState.focusMode === true);
+      setThemeMode(initialUiState.themeMode === "light" ? "light" : "dark");
       headerToolsToggle.onclick = function () {
         setTopStackCollapsed(!document.body.classList.contains("top-stack-collapsed"));
       };
       featureRibbonToggle.onclick = function () {
         setFeatureRibbonCollapsed(!featureRibbonPanel.classList.contains("collapsed"));
+      };
+      themeLightBtn.onclick = function () {
+        setThemeMode("light");
+      };
+      themeDarkBtn.onclick = function () {
+        setThemeMode("dark");
+      };
+      focusModeExitBtn.onclick = function () {
+        setFocusMode(false);
       };
       activityToggle.onclick = function () {
         setActivityCollapsed(!activityPanel.classList.contains("collapsed"));
@@ -4415,6 +4675,16 @@
 
         event.preventDefault();
         openExternalUrl(link.getAttribute("href"));
+      });
+
+      document.addEventListener("dblclick", function (event) {
+        if (document.body.classList.contains("focus-mode")) {
+          return;
+        }
+        if (!shouldEnterFocusModeFromTarget(event.target)) {
+          return;
+        }
+        setFocusMode(true);
       });
 
       function makeYouTubeEmbed(videoId) {
@@ -6284,6 +6554,11 @@
         skipBtn.onclick = hideOverlay;
         okBtn.onclick = hideOverlay;
         laterBtn.onclick = hideOverlay;
+        overlay.onclick = function(event) {
+          if (event.target === overlay) {
+            hideOverlay();
+          }
+        };
         nextBtn.onclick = function() {
           if (currentSlide < slides.length - 1) {
             showSlide(currentSlide + 1);
