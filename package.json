@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.21.7",
+  "version": "1.21.9",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -55,6 +55,10 @@
     "onCommand:codeJanitor.openChat",
     "onCommand:codeJanitor.showGitHubContext",
     "onCommand:codeJanitor.openGraphify",
+    "onCommand:codeJanitor.showPerformance",
+    "onCommand:codeJanitor.quickFixWithAI",
+    "onCommand:codeJanitor.quickFixAllWithAI",
+    "onCommand:codeJanitor.bugFixScan",
     "onView:codeJanitor.chatSidebar"
   ],
   "contributes": {
@@ -110,7 +114,7 @@
         "codeJanitor.ai.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable AI-powered syntax fixing with Ollama (DISABLED - causes code corruption)"
+          "description": "Enable AI-powered syntax fixing and chat features"
         },
         "codeJanitor.ai.provider": {
           "type": "string",
@@ -201,6 +205,13 @@
           "default": 8192,
           "description": "Maximum tokens for heavy mode responses (default: 8192, range: 1024-16384)",
           "minimum": 1024,
+          "maximum": 16384
+        },
+        "codeJanitor.ai.maxTokens.deep": {
+          "type": "number",
+          "default": 12288,
+          "description": "Maximum tokens for deep mode responses (default: 12288, range: 2048-16384)",
+          "minimum": 2048,
           "maximum": 16384
         },
         "codeJanitor.ai.maxTokens.create": {

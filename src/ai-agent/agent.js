@@ -673,10 +673,10 @@ class AIAgent {
       nvidiaApiKey: config.get("nvidiaApiKey", ""),
       timeout: this._normalizeTimeoutMs(config.get("timeout", 0), 0),
       maxTokens: {
-        fast: Math.max(512, Math.min(4096, config.get("maxTokens.fast", 2048))),
-        heavy: Math.max(1024, Math.min(8192, config.get("maxTokens.heavy", 4096))),
-        deep: Math.max(2048, Math.min(16384, config.get("maxTokens.deep", 8192))),
-        create: Math.max(2048, Math.min(16384, config.get("maxTokens.create", 8192)))
+        fast: Math.max(512, Math.min(8192, config.get("maxTokens.fast", 4096))),
+        heavy: Math.max(1024, Math.min(16384, config.get("maxTokens.heavy", 8192))),
+        deep: Math.max(2048, Math.min(16384, config.get("maxTokens.deep", 12288))),
+        create: Math.max(2048, Math.min(32768, config.get("maxTokens.create", 16384)))
       }
     };
   }

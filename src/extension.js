@@ -1054,12 +1054,12 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
   );
   context.subscriptions.push(changeDisposable);
 
-  // 8. Auto-fix and validate before save (ENABLED BY DEFAULT)
+  // 8. Auto-fix and validate before save (DISABLED BY DEFAULT)
   const saveDisposable = vscode.workspace.onWillSaveTextDocument(
     async (event) => {
       const config = vscode.workspace.getConfiguration("codeJanitor");
-      // Auto-fix on save is now ENABLED by default
-      if (!config.get("autoFixOnSave.enabled", true)) return;
+      // Auto-fix on save is disabled by default to avoid surprising edits.
+      if (!config.get("autoFixOnSave.enabled", false)) return;
 
       console.log("[INFO] Auto-fix triggered before save...");
 

@@ -1,7 +1,7 @@
 /**
  * submit-review-findings.js
  * 
- * Tool for submitting code review findings that appear in the Bob Findings panel.
+ * Tool for submitting code review findings that appear in the Code Janitor findings flow.
  * Supports multiple issue categories, types, and severity levels.
  */
 
@@ -216,7 +216,7 @@ function createDiagnostic(issue, workspaceRoot) {
   }
   
   const diagnostic = new vscode.Diagnostic(range, issue.message, severity);
-  diagnostic.source = "Bob Review";
+  diagnostic.source = "Code Janitor Review";
   diagnostic.code = issue.type;
   
   // Add metadata
@@ -266,7 +266,7 @@ async function submitReviewFindings(issues, workspaceRoot, executionContext = {}
   // Get or create diagnostic collection
   let diagnosticCollection = executionContext.reviewDiagnosticCollection;
   if (!diagnosticCollection) {
-    diagnosticCollection = vscode.languages.createDiagnosticCollection("bobReview");
+    diagnosticCollection = vscode.languages.createDiagnosticCollection("codeJanitorReview");
     if (executionContext) {
       executionContext.reviewDiagnosticCollection = diagnosticCollection;
     }

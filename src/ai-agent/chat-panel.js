@@ -60,7 +60,7 @@ class ChatPanel {
     this._undoIdCounter = 0;
     
     // Initialize review diagnostic collection
-    this.reviewDiagnosticCollection = vscode.languages.createDiagnosticCollection("bobReview");
+    this.reviewDiagnosticCollection = vscode.languages.createDiagnosticCollection("codeJanitorReview");
     context.subscriptions.push(this.reviewDiagnosticCollection);
 
     this.agent.setActiveEditor(this.lastActiveEditor);
@@ -6383,7 +6383,7 @@ ${trimmedText}`;
                 });
               }
             } else if (action.type === "submit_review_findings") {
-              // Submit review findings to the Bob Findings panel
+              // Submit review findings to the Code Janitor Problems/Findings flow
               if (!workspaceFolder) {
                 this._postMessage({
                   type: "error",
