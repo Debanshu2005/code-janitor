@@ -116,6 +116,25 @@ describe("ChatPanel structured edit helpers", () => {
     expect(summary).toContain("patch src/app.js");
   });
 
+  test("planned action summary includes apply_diff and insert_content actions", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    const summary = panel._summarizePlannedActions(
+      [
+        { type: "apply_diff", path: "src/app.js" },
+        { type: "insert_content", path: "src/app.js" }
+      ],
+      [
+        { action: { type: "apply_diff", path: "src/app.js" }, result: null },
+        { action: { type: "insert_content", path: "src/app.js" }, result: null }
+      ],
+      []
+    );
+
+    expect(summary).toContain("diff src/app.js");
+    expect(summary).toContain("insert src/app.js");
+  });
+
   test("structured action summary includes todo list updates", () => {
     const panel = Object.create(ChatPanel.prototype);
 
@@ -128,6 +147,85 @@ describe("ChatPanel structured edit helpers", () => {
 
     expect(summary).toContain("todo update");
     expect(summary).toContain("Update the task list");
+  });
+
+  test("structured action summary includes apply_diff and insert_content previews", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    const summary = panel._buildStructuredActionDisplaySummary([
+      {
+        type: "apply_diff",
+        path: "src/app.js"
+      },
+      {
+        type: "insert_content",
+        path: "src/app.js"
+      }
+    ]);
+
+    expect(summary).toContain("diff edit");
+    expect(summary).toContain("content insertion");
+    expect(summary).toContain("Apply diff to src/app.js");
+    expect(summary).toContain("Insert content into src/app.js");
+  });
+
+  test("treats apply_diff and insert_content as executable file actions", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._hasExecutableFileAction([
+        {
+          type: "apply_diff",
+          path: "src/app.js",
+          diff: "<<<<<<< SEARCH\n:start_line: 1\n-------\nold\n=======\nnew\n>>>>>>> REPLACE"
+        }
+      ])
+    ).toBe(true);
+    expect(
+      panel._hasExecutableFileAction([
+        {
+          type: "insert_content",
+          path: "src/app.js",
+          line: 1,
+          content: "import x from 'x';"
+        }
+      ])
+    ).toBe(true);
+  });
+
+  test("applies structured syntax-fix actions in memory for apply_diff and insert_content", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._normalizeActionPathForMatch = ChatPanel.prototype._normalizeActionPathForMatch;
+    panel._matchesSyntaxFixTarget = ChatPanel.prototype._matchesSyntaxFixTarget;
+    panel._validateGeneratedFileContent = jest.fn(() => ({ ok: true }));
+
+    const result = await panel._applyStructuredSyntaxFixActions(
+      [
+        {
+          type: "insert_content",
+          path: "src/app.js",
+          line: 1,
+          content: "import path from 'path';"
+        },
+        {
+          type: "apply_diff",
+          path: "src/app.js",
+          diff: "<<<<<<< SEARCH\n:start_line: 2\n-------\nconst answer = 41;\n=======\nconst answer = 42;\n>>>>>>> REPLACE"
+        }
+      ],
+      {
+        fileContent: "const answer = 41;\nconsole.log(answer);\n",
+        relativePath: "src/app.js",
+        absolutePath: "/workspace/src/app.js",
+        language: "javascript"
+      }
+    );
+
+    expect(result).toEqual({
+      success: true,
+      newContent:
+        "import path from 'path';\nconst answer = 42;\nconsole.log(answer);\n"
+    });
   });
 
   test("suppresses internal structured edit retry statuses", () => {

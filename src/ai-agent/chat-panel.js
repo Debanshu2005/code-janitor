@@ -18,6 +18,8 @@ const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const { createOptimizedChatPanel } = require("./optimizer-integration");
+const { applyDiffToContent } = require("./tools/apply-diff");
+const { insertContentIntoText } = require("./tools/insert-content");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
@@ -224,6 +226,8 @@ class ChatPanel {
 
     const blockPatterns = [
       /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
+      /APPLY_DIFF:\s*[^\r\n`]+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
+      /INSERT_CONTENT:\s*[^\r\n`]+\s+AT\s+LINE\s+\d+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
       /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
       /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
@@ -271,6 +275,8 @@ class ChatPanel {
 
     const counts = {
       patch: 0,
+      apply_diff: 0,
+      insert_content: 0,
       file: 0,
       read: 0,
       grep: 0,
@@ -297,6 +303,14 @@ class ChatPanel {
     const parts = [];
     if (counts.patch) {
       parts.push(`${counts.patch} patch${counts.patch === 1 ? "" : "es"}`);
+    }
+    if (counts.apply_diff) {
+      parts.push(`${counts.apply_diff} diff edit${counts.apply_diff === 1 ? "" : "s"}`);
+    }
+    if (counts.insert_content) {
+      parts.push(
+        `${counts.insert_content} content insertion${counts.insert_content === 1 ? "" : "s"}`
+      );
     }
     if (counts.file) {
       parts.push(`${counts.file} file update${counts.file === 1 ? "" : "s"}`);
@@ -371,6 +385,10 @@ class ChatPanel {
     for (const action of previewableActions) {
       if (action.type === "patch") {
         lines.push(`- Patch ${action.path || "the active file"}`);
+      } else if (action.type === "apply_diff") {
+        lines.push(`- Apply diff to ${action.path || "the active file"}`);
+      } else if (action.type === "insert_content") {
+        lines.push(`- Insert content into ${action.path || "the active file"}`);
       } else if (action.type === "file") {
         lines.push(`- Update ${action.path || "a file"}`);
       } else if (action.type === "read") {
@@ -1605,6 +1623,23 @@ class ChatPanel {
       if (action.type === "patch") {
         return typeof action.search === "string" && typeof action.replace === "string";
       }
+      if (action.type === "apply_diff") {
+        return (
+          typeof action.path === "string" &&
+          action.path.trim().length > 0 &&
+          typeof action.diff === "string" &&
+          action.diff.trim().length > 0
+        );
+      }
+      if (action.type === "insert_content") {
+        return (
+          typeof action.path === "string" &&
+          action.path.trim().length > 0 &&
+          typeof action.line === "number" &&
+          action.line >= 0 &&
+          typeof action.content === "string"
+        );
+      }
       return false;
     });
   }
@@ -1678,7 +1713,24 @@ class ChatPanel {
     const language = this._getSyntaxFixLanguage(fileName);
     const rawError = syntaxCheck?.error || syntaxCheck?.output || "Unknown syntax error";
     const errorOutput = this._sanitizeSyntaxErrorOutput(rawError);
-    const prompt = `Fix the syntax errors in this ${language} file. Return exactly one FILE action with the complete corrected file.\n\nFile: ${relativePath}\n\nSyntax errors:\n${errorOutput}\n\nCurrent file content:\n\`\`\`${language}\n${fileContent}\n\`\`\``;
+    const prompt = `Fix the syntax errors in this ${language} file.
+
+Return executable edit actions only for "${relativePath}".
+- Prefer APPLY_DIFF or PATCH for targeted repairs in larger or more complex files.
+- Use INSERT_CONTENT only when the fix is purely additive.
+- Use FILE only when a full-file rewrite is genuinely safer than surgical edits.
+- Do not edit any other file.
+- Do not output explanations, commands, or markdown outside executable actions.
+
+File: ${relativePath}
+
+Syntax errors:
+${errorOutput}
+
+Current file content:
+\`\`\`${language}
+${fileContent}
+\`\`\``;
     return { prompt, language, errorOutput };
   }
 
@@ -1698,6 +1750,151 @@ class ChatPanel {
     }
 
     return "heavy";
+  }
+
+  _isSyntaxFixEditAction(action) {
+    if (!action || typeof action.type !== "string") {
+      return false;
+    }
+    return (
+      action.type === "file" ||
+      action.type === "patch" ||
+      action.type === "apply_diff" ||
+      action.type === "insert_content"
+    );
+  }
+
+  _matchesSyntaxFixTarget(actionPath, relativePath, absolutePath) {
+    const normalizedActionPath = this._normalizeActionPathForMatch(actionPath);
+    if (!normalizedActionPath) {
+      return false;
+    }
+
+    const normalizedRelativePath = this._normalizeActionPathForMatch(relativePath);
+    const normalizedAbsolutePath = this._normalizeActionPathForMatch(absolutePath);
+    const relativeBase = path.basename(normalizedRelativePath || "");
+    const absoluteBase = path.basename(normalizedAbsolutePath || "");
+
+    return (
+      normalizedActionPath === normalizedRelativePath ||
+      normalizedActionPath === normalizedAbsolutePath ||
+      normalizedRelativePath.endsWith(`/${normalizedActionPath}`) ||
+      normalizedAbsolutePath.endsWith(`/${normalizedActionPath}`) ||
+      normalizedActionPath.endsWith(`/${normalizedRelativePath}`) ||
+      normalizedActionPath.endsWith(`/${normalizedAbsolutePath}`) ||
+      normalizedActionPath === relativeBase ||
+      normalizedActionPath === absoluteBase
+    );
+  }
+
+  async _applyStructuredSyntaxFixActions(
+    editActions,
+    {
+      fileContent,
+      relativePath,
+      absolutePath,
+      language
+    }
+  ) {
+    if (!Array.isArray(editActions) || editActions.length === 0) {
+      return {
+        success: false,
+        error: "No executable syntax-fix edits were generated."
+      };
+    }
+
+    const fileActions = editActions.filter((action) => action.type === "file");
+    if (fileActions.length > 1 || (fileActions.length === 1 && editActions.length > 1)) {
+      return {
+        success: false,
+        error: "Syntax repair returned conflicting edit styles. Use either FILE or structured patch actions, not both."
+      };
+    }
+
+    for (const action of editActions) {
+      if (!this._matchesSyntaxFixTarget(action.path, relativePath, absolutePath)) {
+        return {
+          success: false,
+          error: `Syntax repair tried to edit a different file (${action.path}). Please retry the fix.`
+        };
+      }
+    }
+
+    let nextContent = fileContent;
+
+    for (const action of editActions) {
+      if (action.type === "file") {
+        const generatedContentCheck = this._validateGeneratedFileContent(
+          nextContent,
+          action.content,
+          language,
+          relativePath
+        );
+        if (!generatedContentCheck.ok) {
+          return {
+            success: false,
+            error: generatedContentCheck.reason
+          };
+        }
+        nextContent = action.content;
+        continue;
+      }
+
+      if (action.type === "patch") {
+        const patchResult = await this._matchPatchedContent(
+          nextContent,
+          action.search,
+          action.replace
+        );
+        if (!patchResult.matched) {
+          return {
+            success: false,
+            error:
+              patchResult.reason === "empty_search"
+                ? `Generated PATCH for ${relativePath} had an empty SEARCH block.`
+                : patchResult.reason === "ambiguous_search"
+                  ? `Generated PATCH for ${relativePath} matched ${patchResult.matchCount || "multiple"} locations.`
+                  : `Generated PATCH for ${relativePath} did not match the current file content.`
+          };
+        }
+        nextContent = patchResult.content;
+        continue;
+      }
+
+      if (action.type === "apply_diff") {
+        try {
+          const diffResult = applyDiffToContent(nextContent, action.diff);
+          nextContent = diffResult.newContent;
+        } catch (error) {
+          return {
+            success: false,
+            error: `Generated APPLY_DIFF for ${relativePath} could not be applied: ${error.message}`
+          };
+        }
+        continue;
+      }
+
+      if (action.type === "insert_content") {
+        try {
+          const insertResult = insertContentIntoText(
+            nextContent,
+            action.line,
+            action.content
+          );
+          nextContent = insertResult.newContent;
+        } catch (error) {
+          return {
+            success: false,
+            error: `Generated INSERT_CONTENT for ${relativePath} could not be applied: ${error.message}`
+          };
+        }
+      }
+    }
+
+    return {
+      success: true,
+      newContent: nextContent
+    };
   }
 
   async _requestSyntaxFixAction(
@@ -1743,35 +1940,25 @@ class ChatPanel {
       };
     }
 
-    const fileAction = (response.actions || []).find(
-      (action) => action.type === "file" && action.content
+    const editActions = (response.actions || []).filter((action) =>
+      this._isSyntaxFixEditAction(action)
     );
-    if (!fileAction) {
+    if (editActions.length === 0) {
       return {
         success: false,
         error:
-          "AI did not generate a file fix. Try rephrasing your request or use a different AI model.",
-        errorOutput
-      };
-    }
-
-    const generatedContentCheck = this._validateGeneratedFileContent(
-      fileContent,
-      fileAction.content,
-      language,
-      relativePath
-    );
-    if (!generatedContentCheck.ok) {
-      return {
-        success: false,
-        error: generatedContentCheck.reason,
+          "AI did not generate a syntax fix. Try rephrasing your request or use a different AI model.",
         errorOutput
       };
     }
 
     return {
       success: true,
-      fileAction,
+      editActions,
+      fileAction:
+        editActions.length === 1 && editActions[0].type === "file"
+          ? editActions[0]
+          : null,
       language,
       errorOutput
     };
@@ -1807,9 +1994,23 @@ class ChatPanel {
       return repairPlan;
     }
 
+    const preparedRepair = await this._applyStructuredSyntaxFixActions(
+      repairPlan.editActions ||
+        (repairPlan.fileAction ? [repairPlan.fileAction] : []),
+      {
+        fileContent,
+        relativePath,
+        absolutePath: fullPath,
+        language: repairPlan.language
+      }
+    );
+    if (!preparedRepair.success) {
+      return preparedRepair;
+    }
+
     const applyResult = await this.agent.applyChanges(
       relativePath,
-      repairPlan.fileAction.content,
+      preparedRepair.newContent,
       false,
       this._withWorkspaceRoot(writeOptions, workspaceFolder)
     );
@@ -1957,11 +2158,30 @@ class ChatPanel {
       return;
     }
 
+    const preparedRepair = await this._applyStructuredSyntaxFixActions(
+      repairPlan.editActions ||
+        (repairPlan.fileAction ? [repairPlan.fileAction] : []),
+      {
+        fileContent,
+        relativePath,
+        absolutePath: fileName,
+        language: repairPlan.language
+      }
+    );
+    if (!preparedRepair.success) {
+      this._postMessage({
+        type: "error",
+        text: preparedRepair.error
+      });
+      this._postMessage({ type: "done" });
+      return;
+    }
+
     const safetyCheck = await this._assessEditSafetyBeforeApply(
       workspaceFolder,
       relativePath,
       fileContent,
-      repairPlan.fileAction.content
+      preparedRepair.newContent
     );
     if (!safetyCheck.ok) {
       this._postMessage({
@@ -1976,7 +2196,7 @@ class ChatPanel {
     // the syntax check still fails on the repaired buffer.
     const applyResult = await this._applyToEditor(
       activeEditor,
-      repairPlan.fileAction.content
+      preparedRepair.newContent
     );
     if (!applyResult.success) {
       this._postMessage({
@@ -2912,6 +3132,14 @@ ${document.getText()}
         fileSummaries.push(`patch ${action.path}`);
         continue;
       }
+      if (action.type === "apply_diff") {
+        fileSummaries.push(`diff ${action.path}`);
+        continue;
+      }
+      if (action.type === "insert_content") {
+        fileSummaries.push(`insert ${action.path}`);
+        continue;
+      }
       if (action.type === "update_todo_list") {
         todoUpdateCount += 1;
         continue;
@@ -2926,6 +3154,8 @@ ${document.getText()}
     for (const { action } of outsideFiles) {
       if (action.type === "file") fileSummaries.push(`edit ${action.path}`);
       if (action.type === "patch") fileSummaries.push(`patch ${action.path}`);
+      if (action.type === "apply_diff") fileSummaries.push(`diff ${action.path}`);
+      if (action.type === "insert_content") fileSummaries.push(`insert ${action.path}`);
       if (action.type === "mkdir") fileSummaries.push(`mkdir ${action.path}`);
     }
 
@@ -4426,10 +4656,19 @@ ${trimmedText}`;
       };
     } catch (err) {
       results.fileInfo = { exists: false, error: err.message };
-      if (actionType === "patch") {
+      if (
+        actionType === "patch" ||
+        actionType === "apply_diff" ||
+        actionType === "insert_content"
+      ) {
         results.diagnostics.push({
           type: "missing",
-          message: "Patch target does not exist yet."
+          message:
+            actionType === "patch"
+              ? "Patch target does not exist yet."
+              : actionType === "apply_diff"
+                ? "Diff target does not exist yet."
+                : "Insert target does not exist yet."
         });
         results.success = false;
       }
@@ -5612,7 +5851,14 @@ ${trimmedText}`;
               action.content.trim().length > 0) ||
               (action.type === "patch" &&
               typeof action.search === "string" &&
-              typeof action.replace === "string")
+              typeof action.replace === "string") ||
+              (action.type === "apply_diff" &&
+              typeof action.diff === "string" &&
+              action.diff.trim().length > 0) ||
+              (action.type === "insert_content" &&
+              typeof action.line === "number" &&
+              action.line >= 0 &&
+              typeof action.content === "string")
           );
           const hasPreviewInspectionAction = response.actions.some(
             (action) => action.type === "preview_inspect"
@@ -5623,7 +5869,7 @@ ${trimmedText}`;
           if (isEditLikeIntent && !hasFileAction && !hasPreviewInspectionAction) {
             this._postMessage({
               type: "status",
-              text: "Blocked execution: edit requests must include at least one PATCH or FILE action."
+              text: "Blocked execution: edit requests must include at least one PATCH, APPLY_DIFF, INSERT_CONTENT, or FILE action."
             });
             this._postMessage({
               type: "error",
@@ -5755,6 +6001,93 @@ ${trimmedText}`;
                     result.newContent
                   );
                 }
+              } else if (action.type === "apply_diff" || action.type === "insert_content") {
+                const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+                const activeFileName = activeEditor?.document?.fileName || "";
+                const activeNormalized = activeFileName
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetNormalized = String(action.path || "")
+                  .replace(/\\/g, "/")
+                  .toLowerCase();
+                const targetBaseName = path.basename(targetNormalized);
+                const canEditOpenFile =
+                  !!activeEditor &&
+                  !!activeEditor.document &&
+                  (wantsActiveFileEdit ||
+                    !targetNormalized ||
+                    activeNormalized === targetNormalized ||
+                    activeNormalized.endsWith(`/${targetNormalized}`) ||
+                    path.basename(activeNormalized) === targetBaseName);
+
+                if (!canEditOpenFile) {
+                  this._postMessage({
+                    type: "error",
+                    text:
+                      action.type === "apply_diff"
+                        ? `Cannot apply diff to ${action.path}: open the target file or use a workspace so APPLY_DIFF actions can be applied.`
+                        : `Cannot insert content into ${action.path}: open the target file or use a workspace so INSERT_CONTENT actions can be applied.`
+                  });
+                  continue;
+                }
+
+                const beforeContent = activeEditor.document.getText();
+                let nextContent = beforeContent;
+
+                try {
+                  if (action.type === "apply_diff") {
+                    nextContent = applyDiffToContent(beforeContent, action.diff).newContent;
+                  } else {
+                    nextContent = insertContentIntoText(
+                      beforeContent,
+                      action.line,
+                      action.content
+                    ).newContent;
+                  }
+                } catch (error) {
+                  this._postMessage({
+                    type: "error",
+                    text:
+                      action.type === "apply_diff"
+                        ? `Cannot apply diff to ${action.path}: ${error.message}`
+                        : `Cannot insert content into ${action.path}: ${error.message}`
+                  });
+                  continue;
+                }
+
+                this._postMessage({
+                  type: "status",
+                  text:
+                    action.type === "apply_diff"
+                      ? `Applying diff to open file: ${path.basename(activeFileName || action.path)}`
+                      : `Inserting content into open file: ${path.basename(activeFileName || action.path)}`
+                });
+                const result = await this._applyToEditor(activeEditor, nextContent);
+                const undoId = result.success
+                  ? this._registerEditForUndo({
+                      filePath: result.path || action.path,
+                      before: result.previousContent,
+                      after: result.newContent,
+                      label: action.type
+                    })
+                  : null;
+                this._postMessage({
+                  type: result.success ? "applied" : "error",
+                  filePath: result.success ? result.path : undefined,
+                  undoId,
+                  text: result.success
+                    ? action.type === "apply_diff"
+                      ? `\u2705 Applied diff to open file ${result.relativePath || result.path}`
+                      : `\u2705 Inserted content into open file ${result.relativePath || result.path}`
+                    : result.error
+                });
+                if (result.success) {
+                  this._postFixInsights(
+                    result.path || action.path,
+                    result.previousContent,
+                    result.newContent
+                  );
+                }
               } else if (action.type === "mkdir") {
                 this._postMessage({
                   type: "status",
@@ -5793,27 +6126,22 @@ ${trimmedText}`;
           );
           const fileActionPaths = new Set(
             response.actions
-              .filter((a) => (a.type === "file" || a.type === "patch") && a.path)
+              .filter((a) =>
+                (a.type === "file" ||
+                  a.type === "patch" ||
+                  a.type === "apply_diff" ||
+                  a.type === "insert_content") &&
+                a.path
+              )
               .map((a) => a.path.replace(/\\/g, "/").toLowerCase())
           );
           for (const action of response.actions) {
-            if (action.type === "patch") {
-              // PATCH actions need to check if file is outside workspace
-              const fullPath = this._resolveActionFilePath(
-                workspaceFolder,
-                action.path
-              );
-              const relativePath = workspaceFolder
-                ? path.relative(workspaceFolder, fullPath)
-                : action.path;
-              const isOutside = relativePath.startsWith("..") || path.isAbsolute(relativePath);
-              
-              if (isOutside) {
-                outsideFiles.push({ action, path: fullPath });
-              } else {
-                insideActions.push({ action, result: null });
-              }
-            } else if (action.type === "file") {
+            if (
+              action.type === "patch" ||
+              action.type === "file" ||
+              action.type === "apply_diff" ||
+              action.type === "insert_content"
+            ) {
               const fullPath = this._resolveActionFilePath(
                 workspaceFolder,
                 action.path
@@ -5896,7 +6224,12 @@ ${trimmedText}`;
           let stopFurtherActions = false;
 
           // Run pre-edit diagnostics for file actions
-          const fileActions = allActions.filter(a => a.action.type === "file" || a.action.type === "patch");
+          const fileActions = allActions.filter((a) =>
+            a.action.type === "file" ||
+            a.action.type === "patch" ||
+            a.action.type === "apply_diff" ||
+            a.action.type === "insert_content"
+          );
           if (fileActions.length > 0 && workspaceFolder) {
             this._postMessage({
               type: "status",
@@ -5917,6 +6250,10 @@ ${trimmedText}`;
                   text:
                     action.type === "patch"
                       ? `Missing patch target: ${action.path}`
+                      : action.type === "apply_diff"
+                        ? `Missing diff target: ${action.path}`
+                        : action.type === "insert_content"
+                          ? `Missing insert target: ${action.path}`
                       : `Creating new file: ${action.path}`
                 });
               } else if (diagnostics.diagnostics.length > 0) {
@@ -6230,23 +6567,13 @@ ${trimmedText}`;
                 }, workspaceFolder);
                 
                 if (result.success) {
-                  // Read file for undo support
-                  const fullPath = path.join(workspaceFolder, action.path);
-                  let beforeContent = "";
-                  let afterContent = "";
-                  try {
-                    afterContent = await fs.readFile(fullPath, "utf8");
-                    // We don't have before content easily, but the tool tracks it
-                  } catch (error) {
-                    // File might not exist yet
-                  }
-                  
                   const undoId = this._registerEditForUndo({
-                    filePath: fullPath,
-                    before: beforeContent,
-                    after: afterContent,
+                    filePath: result.absolutePath || path.join(workspaceFolder, action.path),
+                    before: result.previousContent,
+                    after: result.newContent,
                     label: "apply_diff"
                   });
+                  const fullPath = result.absolutePath || path.join(workspaceFolder, action.path);
                   
                   this._postMessage({
                     type: "applied",
@@ -6254,6 +6581,11 @@ ${trimmedText}`;
                     undoId: undoId,
                     text: `\u2705 Applied ${result.blocksApplied} diff block(s) to ${action.path}\nFinal line count: ${result.finalLineCount}`
                   });
+                  this._postFixInsights(
+                    fullPath,
+                    result.previousContent,
+                    result.newContent
+                  );
                   
                   changedFiles.push(action.path);
                   await this._revealWorkspaceFile(fullPath);
@@ -6286,20 +6618,13 @@ ${trimmedText}`;
                 }, workspaceFolder);
                 
                 if (result.success) {
-                  const fullPath = path.join(workspaceFolder, action.path);
-                  let afterContent = "";
-                  try {
-                    afterContent = await fs.readFile(fullPath, "utf8");
-                  } catch (error) {
-                    // Ignore
-                  }
-                  
                   const undoId = this._registerEditForUndo({
-                    filePath: fullPath,
-                    before: "",
-                    after: afterContent,
+                    filePath: result.absolutePath || path.join(workspaceFolder, action.path),
+                    before: result.previousContent,
+                    after: result.newContent,
                     label: "insert_content"
                   });
+                  const fullPath = result.absolutePath || path.join(workspaceFolder, action.path);
                   
                   const operationText = result.operation === "append" ? "Appended" : "Inserted";
                   this._postMessage({
@@ -6308,6 +6633,11 @@ ${trimmedText}`;
                     undoId: undoId,
                     text: `\u2705 ${operationText} ${result.linesInserted} line(s) at line ${result.insertedAt} in ${action.path}\nFinal line count: ${result.finalLineCount}`
                   });
+                  this._postFixInsights(
+                    fullPath,
+                    result.previousContent,
+                    result.newContent
+                  );
                   
                   changedFiles.push(action.path);
                   await this._revealWorkspaceFile(fullPath);

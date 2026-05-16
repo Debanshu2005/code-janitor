@@ -2,7 +2,7 @@
  * Tests for apply-diff tool
  */
 
-const { applyDiff, validateDiff, parseDiffBlocks, validateSyntax } = require("../apply-diff");
+const { applyDiff, applyDiffToContent, validateDiff, parseDiffBlocks, validateSyntax } = require("../apply-diff");
 const fs = require("fs").promises;
 const path = require("path");
 const os = require("os");
@@ -184,6 +184,34 @@ new line 4
       expect(newContent).toContain("new line 4");
     });
 
+<<<<<<< HEAD
+    test("falls back to a unique whole-file match when the line anchor drifts", async () => {
+      const textFile = path.join(tempDir, "test.txt");
+      const content = `alpha
+beta
+target line
+omega`;
+
+      await fs.writeFile(textFile, content);
+
+      const diff = `<<<<<<< SEARCH
+:start_line: 10
+-------
+target line
+=======
+updated target line
+>>>>>>> REPLACE`;
+
+      const result = await applyDiff(textFile, diff, tempDir);
+
+      expect(result.success).toBe(true);
+      expect(result.details[0].warning).toMatch(/whole-file search/i);
+      expect(result.previousContent).toBe(content);
+      expect(result.newContent).toContain("updated target line");
+    });
+    
+=======
+>>>>>>> 6a89ac4e8f878a283d55f687cf277dbe45fe227d
     test("handles CRLF line endings", async () => {
       const content = "line 1\r\nline 2\r\nline 3";
 
@@ -366,6 +394,25 @@ def hello():
     test("skips validation for unsupported file types", async () => {
       const result = await validateSyntax("test.txt", "any content");
       expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("applyDiffToContent", () => {
+    test("returns updated content without touching the filesystem", () => {
+      const result = applyDiffToContent(
+        "line 1\nline 2\nline 3\n",
+        `<<<<<<< SEARCH
+:start_line: 2
+-------
+line 2
+=======
+patched line 2
+>>>>>>> REPLACE`
+      );
+
+      expect(result.blocksApplied).toBe(1);
+      expect(result.previousContent).toBe("line 1\nline 2\nline 3\n");
+      expect(result.newContent).toBe("line 1\npatched line 2\nline 3\n");
     });
   });
 });

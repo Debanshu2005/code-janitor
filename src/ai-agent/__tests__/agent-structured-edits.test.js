@@ -59,6 +59,63 @@ describe("AIAgent structured edit parsing", () => {
     ).toBe(true);
   });
 
+  test("treats APPLY_DIFF actions as valid edit actions", () => {
+    const agent = new AIAgent();
+    const response = [
+      "APPLY_DIFF: src/example.js",
+      "<<<<<<< SEARCH",
+      ":start_line: 2",
+      "-------",
+      "const answer = 41;",
+      "=======",
+      "const answer = 42;",
+      ">>>>>>> REPLACE"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "apply_diff",
+        path: "src/example.js",
+        diff: [
+          "<<<<<<< SEARCH",
+          ":start_line: 2",
+          "-------",
+          "const answer = 41;",
+          "=======",
+          "const answer = 42;",
+          ">>>>>>> REPLACE"
+        ].join("\n")
+      }
+    ]);
+    expect(
+      agent._hasRequiredActions("edit", "please edit src/example.js", parsed.actions)
+    ).toBe(true);
+  });
+
+  test("treats INSERT_CONTENT actions as valid edit actions", () => {
+    const agent = new AIAgent();
+    const response = [
+      "INSERT_CONTENT: src/example.js AT LINE 1",
+      "import path from 'path';"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "insert_content",
+        path: "src/example.js",
+        line: 1,
+        content: "import path from 'path';"
+      }
+    ]);
+    expect(
+      agent._hasRequiredActions("edit", "please edit src/example.js", parsed.actions)
+    ).toBe(true);
+  });
+
   test("normalizes leading dot segments in structured edit paths", () => {
     const agent = new AIAgent();
     agent.currentEditableTargets = new Set(["src/example.js"]);
