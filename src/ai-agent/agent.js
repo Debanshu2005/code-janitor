@@ -41,7 +41,7 @@ const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const MAX_FETCHED_URLS = 2;
 const MAX_FETCHED_CONTENT_CHARS = 5_000;
-const MAX_WORKSPACE_MEMORY_CONTEXT_CHARS = 1_800;
+const MAX_WORKSPACE_MEMORY_CONTEXT_CHARS = 2_400;
 const PERSISTED_HISTORY_TRUNCATION_NOTICE =
   "[chat history truncated for storage]";
 const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
@@ -3423,11 +3423,14 @@ ${resolvedMessage}`;
 
       const memoryText = await fs.readFile(workspaceMemoryPath, "utf8");
       const sections = [
+        memoryText.match(/## Repository Blueprint[\s\S]*?(?=## |$)/),
         memoryText.match(/## Current Workspace[\s\S]*?(?=## |$)/),
+        memoryText.match(/## Current Stack[\s\S]*?(?=## |$)/),
         memoryText.match(/## Recent Changes[\s\S]*?(?=## |$)/),
         memoryText.match(/## Hot Files[\s\S]*?(?=## |$)/),
         memoryText.match(/## Git Snapshot[\s\S]*?(?=## |$)/),
-        memoryText.match(/## GitHub Snapshot[\s\S]*?(?=## |$)/)
+        memoryText.match(/## GitHub Snapshot[\s\S]*?(?=## |$)/),
+        memoryText.match(/## Graphify Snapshot[\s\S]*?(?=## |$)/)
       ]
         .map((match) => (match ? match[0].trim() : ""))
         .filter(Boolean)
@@ -3437,7 +3440,7 @@ ${resolvedMessage}`;
         return "";
       }
 
-      return `\n**Workspace Memory Context**\nA tracked assistant memory file is available in \`graphify-out/WORKSPACE_MEMORY.md\`. Use it for recent change history, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, MAX_WORKSPACE_MEMORY_CONTEXT_CHARS)}\n`;
+      return `\n**Workspace Memory Context**\nA tracked assistant memory file is available in \`graphify-out/WORKSPACE_MEMORY.md\`. Use it for the repo blueprint, change ledger, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, MAX_WORKSPACE_MEMORY_CONTEXT_CHARS)}\n`;
     } catch {
       return "";
     }
@@ -4679,7 +4682,7 @@ ${resolvedMessage}`;
       : "";
     const base =
       silentPreamble +
-      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Workspace memory tracking that keeps `graphify-out/WORKSPACE_MEMORY.md` updated with recent changes, hot files, Git status, and AI handoff notes\n- GitHub-aware repository context for repo summaries, issues, pull requests, and richer assistant grounding when GitHub access is configured\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Session-scoped todo tracking via `UPDATE_TODO_LIST:` with `pending`, `in_progress`, and `completed` task states\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Workspace memory tracking that keeps `graphify-out/WORKSPACE_MEMORY.md` updated with a repo blueprint, before/after change ledger, hot files, Git status, and AI handoff notes\n- GitHub-aware repository context for repo summaries, issues, pull requests, and richer assistant grounding when GitHub access is configured\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Session-scoped todo tracking via `UPDATE_TODO_LIST:` with `pending`, `in_progress`, and `completed` task states\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
       thinkingInstruction;
     const fastRules = [
       "Operational rules (fast):",
@@ -4716,7 +4719,7 @@ ${resolvedMessage}`;
       "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
       "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
-      "- When the workspace contains `graphify-out/WORKSPACE_MEMORY.md`, use it alongside Graphify before broad rescans so you inherit recent changes, hotspots, Git status, and handoff notes.",
+      "- When the workspace contains `graphify-out/WORKSPACE_MEMORY.md`, use it alongside Graphify before broad rescans so you inherit the repo blueprint, recent before/after changes, hotspots, Git status, and handoff notes.",
       "- When asked to find or locate functions, classes, or code elements, intelligently use READ: actions to inspect likely files based on naming patterns, graphify data, and project structure rather than blindly running grep commands.",
       "- Before executing CMD: searches for code, consider if you can infer the location from file names, the knowledge graph, or directory structure to provide faster, more accurate results.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",

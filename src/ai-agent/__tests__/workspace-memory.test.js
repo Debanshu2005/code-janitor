@@ -15,6 +15,7 @@ jest.mock(
       getWorkspaceFolder: jest.fn(),
       getConfiguration: jest.fn(),
       openTextDocument: jest.fn(),
+      onWillSaveTextDocument: jest.fn(() => ({ dispose() {} })),
       onDidSaveTextDocument: jest.fn(() => ({ dispose() {} })),
       onDidCreateFiles: jest.fn(() => ({ dispose() {} })),
       onDidDeleteFiles: jest.fn(() => ({ dispose() {} })),
@@ -52,7 +53,7 @@ describe("WorkspaceMemoryService", () => {
     fetchGitHubContext.mockReset();
   });
 
-  test("writes workspace memory markdown with tracked changes and GitHub context", async () => {
+  test("writes workspace memory markdown with repo blueprint and before/after tracked changes", async () => {
     const workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "cj-workspace-memory-")
     );
@@ -72,11 +73,8 @@ describe("WorkspaceMemoryService", () => {
       "module.exports = {};\n",
       "utf8"
     );
-    fs.writeFileSync(
-      path.join(workspaceRoot, "src", "ai-agent", "agent.js"),
-      "class Agent {}\nmodule.exports = Agent;\n",
-      "utf8"
-    );
+    const trackedFilePath = path.join(workspaceRoot, "src", "ai-agent", "agent.js");
+    fs.writeFileSync(trackedFilePath, "class Agent {}\nmodule.exports = Agent;\n", "utf8");
     fs.writeFileSync(
       path.join(workspaceRoot, "graphify-out", "GRAPH_REPORT.md"),
       [
@@ -122,18 +120,42 @@ describe("WorkspaceMemoryService", () => {
       error: null
     });
 
-    service._recordWorkspaceChange(workspaceRoot, {
-      type: "save",
-      path: "src/ai-agent/agent.js",
-      lineCount: 2,
-      recordedAt: Date.parse("2026-05-16T10:00:00Z")
+    const nextCode = [
+      "class Agent {",
+      "  constructor() {",
+      "    this.mode = \"workspace-memory\";",
+      "  }",
+      "}",
+      "",
+      "module.exports = Agent;",
+      ""
+    ].join("\n");
+
+    await service._capturePendingSave({
+      isUntitled: false,
+      uri: { scheme: "file" },
+      fileName: trackedFilePath,
+      getText: jest.fn(() => nextCode)
+    });
+    fs.writeFileSync(trackedFilePath, nextCode, "utf8");
+    service._handleDocumentSave({
+      isUntitled: false,
+      uri: { scheme: "file" },
+      fileName: trackedFilePath,
+      getText: jest.fn(() => nextCode)
     });
 
     const result = await service.refreshWorkspaceMemory(workspaceRoot, "manual");
     const markdown = fs.readFileSync(result.outputPath, "utf8");
 
     expect(markdown).toContain("# Workspace Memory");
+    expect(markdown).toContain("## Repository Blueprint");
+    expect(markdown).toContain("## Current Stack");
     expect(markdown).toContain("src/ai-agent/agent.js");
+    expect(markdown).toContain("Before:");
+    expect(markdown).toContain("After:");
+    expect(markdown).toContain("Previous fragment:");
+    expect(markdown).toContain("Current fragment:");
     expect(markdown).toContain("GitHub Repository: demo/code-janitor");
     expect(markdown).toContain("Branch: main");
     expect(markdown).toContain("src/extension.js");

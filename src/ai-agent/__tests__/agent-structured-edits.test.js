@@ -128,8 +128,14 @@ describe("AIAgent structured edit parsing", () => {
       [
         "# Workspace Memory",
         "",
+        "## Repository Blueprint",
+        "- Graphify report: available",
+        "",
         "## Current Workspace",
         "- Active file: src/extension.js",
+        "",
+        "## Current Stack",
+        "- Logged change events: 1",
         "",
         "## Recent Changes",
         "- 2026-05-16T10:00:00.000Z | saved | src/ai-agent/agent.js",
@@ -148,6 +154,7 @@ describe("AIAgent structured edit parsing", () => {
     );
 
     expect(result).toContain("Workspace Memory Context");
+    expect(result).toContain("Repository Blueprint");
     expect(result).toContain("Recent Changes");
     expect(result).toContain("Git Snapshot");
   });

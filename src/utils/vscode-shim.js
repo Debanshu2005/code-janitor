@@ -98,6 +98,9 @@ if (vscode) {
       getWorkspaceFolder() {
         return null;
       },
+      onWillSaveTextDocument() {
+        return { dispose() {} };
+      },
       getConfiguration() {
         return createConfigSection();
       }

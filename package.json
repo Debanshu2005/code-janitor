@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.22.2",
+  "version": "1.22.3",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -236,7 +236,7 @@
         "codeJanitor.assistant.workspaceMemory.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Continuously track workspace file activity and maintain a reusable Markdown memory file for AI handoff."
+          "description": "Continuously track workspace file activity and maintain a reusable Markdown repo ledger with Graphify, Git, and GitHub context for AI handoff."
         },
         "codeJanitor.assistant.workspaceMemory.autoRefreshDelay": {
           "type": "number",
@@ -248,7 +248,7 @@
           "default": 40,
           "minimum": 5,
           "maximum": 200,
-          "description": "Maximum number of recent tracked workspace changes kept in the assistant memory log."
+          "description": "Maximum number of recent tracked workspace changes, including before/after snapshots, kept in the assistant memory log."
         },
         "codeJanitor.assistant.workspaceMemory.includeGitHub": {
           "type": "boolean",
@@ -258,7 +258,7 @@
         "codeJanitor.assistant.workspaceMemory.outputPath": {
           "type": "string",
           "default": "graphify-out/WORKSPACE_MEMORY.md",
-          "description": "Workspace-relative path for the generated assistant memory Markdown file."
+          "description": "Workspace-relative path for the generated assistant memory Markdown repo ledger."
         }
 
       }
