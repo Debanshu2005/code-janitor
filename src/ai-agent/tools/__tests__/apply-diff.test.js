@@ -2,7 +2,7 @@
  * Tests for apply-diff tool
  */
 
-const { applyDiff, validateDiff, parseDiffBlocks } = require("../apply-diff");
+const { applyDiff, validateDiff, parseDiffBlocks, validateSyntax } = require("../apply-diff");
 const fs = require("fs").promises;
 const path = require("path");
 const os = require("os");
@@ -55,13 +55,9 @@ first old
 first new
 >>>>>>> REPLACE
 
-<<<<<<< SEARCH
 :start_line: 15
 -------
 second old
-=======
-second new
->>>>>>> REPLACE`;
       
       const blocks = parseDiffBlocks(diff);
       
@@ -236,6 +232,147 @@ new
 >>>>>>> REPLACE`;
       
       await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow("out of range");
+
+    test("rejects syntax-invalid Python code", async () => {
+      const pythonFile = path.join(tempDir, "test.py");
+      await fs.writeFile(pythonFile, "def hello():\n    print('Hello')\n", "utf8");
+
+      // Create a diff that introduces indentation error
+      const diff = `
+<<<<<<< SEARCH
+:start_line:1
+-------
+def hello():
+    print('Hello')
+=======
+def hello():
+    print('Hello')
+  print('Bad indent')
+>>>>>>> REPLACE
+`;
+
+      await expect(applyDiff(pythonFile, diff, tempDir)).rejects.toThrow(/syntax-invalid|IndentationError/i);
+      
+      // Verify original file is unchanged
+      const content = await fs.readFile(pythonFile, "utf8");
+      expect(content).toBe("def hello():\n    print('Hello')\n");
+    });
+
+    test("rejects syntax-invalid JavaScript code", async () => {
+      const jsFile = path.join(tempDir, "test.js");
+      await fs.writeFile(jsFile, "function hello() {\n  console.log('Hello');\n}\n", "utf8");
+
+      // Create a diff that introduces syntax error
+      const diff = `
+<<<<<<< SEARCH
+:start_line:1
+-------
+function hello() {
+  console.log('Hello');
+}
+=======
+function hello() {
+  console.log('Hello')
+  // Missing closing brace
+>>>>>>> REPLACE
+`;
+
+      await expect(applyDiff(jsFile, diff, tempDir)).rejects.toThrow(/syntax-invalid/i);
+      
+      // Verify original file is unchanged
+      const content = await fs.readFile(jsFile, "utf8");
+      expect(content).toBe("function hello() {\n  console.log('Hello');\n}\n");
+    });
+
+    test("rejects invalid JSON", async () => {
+      const jsonFile = path.join(tempDir, "test.json");
+      await fs.writeFile(jsonFile, '{"name": "test"}', "utf8");
+
+      // Create a diff that introduces JSON error
+      const diff = `
+<<<<<<< SEARCH
+:start_line:1
+-------
+{"name": "test"}
+=======
+{"name": "test",}
+>>>>>>> REPLACE
+`;
+
+      await expect(applyDiff(jsonFile, diff, tempDir)).rejects.toThrow(/syntax-invalid|JSON/i);
+      
+      // Verify original file is unchanged
+      const content = await fs.readFile(jsonFile, "utf8");
+      expect(content).toBe('{"name": "test"}');
+    });
+
+    test("accepts valid syntax changes", async () => {
+      const pythonFile = path.join(tempDir, "test.py");
+      await fs.writeFile(pythonFile, "def hello():\n    print('Hello')\n", "utf8");
+
+      // Create a diff with valid Python code
+      const diff = `
+<<<<<<< SEARCH
+:start_line:1
+-------
+def hello():
+    print('Hello')
+=======
+def hello():
+    print('Hello')
+    print('World')
+>>>>>>> REPLACE
+`;
+
+      const result = await applyDiff(pythonFile, diff, tempDir);
+      expect(result.success).toBe(true);
+      
+      const content = await fs.readFile(pythonFile, "utf8");
+      expect(content).toContain("print('World')");
+    });
+  });
+
+  describe("validateSyntax", () => {
+    test("validates Python syntax correctly", async () => {
+      const validPython = "def hello():\n    print('Hello')\n";
+      const invalidPython = "def hello():\n  print('Hello')\n    print('Bad indent')\n";
+      
+      const validResult = await validateSyntax("test.py", validPython);
+      expect(validResult.valid).toBe(true);
+      
+      const invalidResult = await validateSyntax("test.py", invalidPython);
+      expect(invalidResult.valid).toBe(false);
+      expect(invalidResult.error).toMatch(/syntax|indent/i);
+    });
+
+    test("validates JavaScript syntax correctly", async () => {
+      const validJS = "function hello() {\n  console.log('Hello');\n}\n";
+      const invalidJS = "function hello() {\n  console.log('Hello')\n";
+      
+      const validResult = await validateSyntax("test.js", validJS);
+      expect(validResult.valid).toBe(true);
+      
+      const invalidResult = await validateSyntax("test.js", invalidJS);
+      expect(invalidResult.valid).toBe(false);
+      expect(invalidResult.error).toMatch(/syntax/i);
+    });
+
+    test("validates JSON syntax correctly", async () => {
+      const validJSON = '{"name": "test"}';
+      const invalidJSON = '{"name": "test",}';
+      
+      const validResult = await validateSyntax("test.json", validJSON);
+      expect(validResult.valid).toBe(true);
+      
+      const invalidResult = await validateSyntax("test.json", invalidJSON);
+      expect(invalidResult.valid).toBe(false);
+      expect(invalidResult.error).toMatch(/JSON/i);
+    });
+
+    test("skips validation for unsupported file types", async () => {
+      const result = await validateSyntax("test.txt", "any content");
+      expect(result.valid).toBe(true);
+    });
     });
   });
 });

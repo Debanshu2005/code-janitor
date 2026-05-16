@@ -7,6 +7,8 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const { execSync } = require("child_process");
+const os = require("os");
 
 /**
  * Parse diff string into structured blocks
@@ -61,6 +63,102 @@ function matchesBlock(lines, startIndex, searchLines) {
  */
 function normalizeLineEndings(text) {
   return text.replace(/\r\n/g, "\n");
+}
+
+/**
+ * Get syntax check command for a file based on extension
+ */
+function getSyntaxCheckCommand(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  
+  // On Windows, use double quotes; on Unix, use single quotes
+  const quotedPath = process.platform === "win32"
+    ? `"${filePath.replace(/"/g, '""')}"`
+    : `'${filePath.replace(/'/g, `'\\''`)}'`;
+  
+  if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
+    return `node --check ${quotedPath}`;
+  }
+  if (ext === ".py") {
+    return `python -m py_compile ${quotedPath}`;
+  }
+  if (ext === ".java") {
+    return `javac ${quotedPath}`;
+  }
+  // JSON is validated separately
+  if (ext === ".json") {
+    return null;
+  }
+  // HTML, CSS, and other files don't have simple CLI syntax checkers
+  return null;
+}
+
+/**
+ * Validate syntax of content before writing to file
+ * Returns { valid: true } or { valid: false, error: string }
+ */
+async function validateSyntax(filePath, content) {
+  const ext = path.extname(filePath).toLowerCase();
+  
+  // JSON validation
+  if (ext === ".json") {
+    try {
+      JSON.parse(content);
+      return { valid: true };
+    } catch (err) {
+      return {
+        valid: false,
+        error: `JSON syntax error: ${err.message}`
+      };
+    }
+  }
+  
+  // Get syntax check command
+  const cmd = getSyntaxCheckCommand(filePath);
+  if (!cmd) {
+    // No syntax checker available for this file type
+    return { valid: true };
+  }
+  
+  // Write content to temp file and check syntax
+  const tempName = `code-janitor-syntax-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`;
+  const tempPath = path.join(os.tmpdir(), tempName);
+  
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    
+    // Run syntax check command
+    const tempCmd = getSyntaxCheckCommand(tempPath);
+    try {
+      execSync(tempCmd, {
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 10000,
+        windowsHide: true
+      });
+      
+      // Command succeeded - syntax is valid
+      await fs.unlink(tempPath).catch(() => {});
+      return { valid: true };
+    } catch (err) {
+      // Command failed - syntax error
+      await fs.unlink(tempPath).catch(() => {});
+      
+      // Extract error message
+      const output = err.stderr || err.stdout || err.message || "Syntax check failed";
+      return {
+        valid: false,
+        error: `Syntax error: ${output}`
+      };
+    }
+  } catch (err) {
+    // Failed to create temp file or other error
+    await fs.unlink(tempPath).catch(() => {});
+    return {
+      valid: false,
+      error: `Failed to validate syntax: ${err.message}`
+    };
+  }
 }
 
 /**
@@ -169,6 +267,14 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
     newContent = newContent.replace(/\n/g, "\r\n");
   }
   
+  // Validate syntax before writing
+  const syntaxValidation = await validateSyntax(absolutePath, newContent);
+  if (!syntaxValidation.valid) {
+    throw new Error(
+      `Refusing to apply syntax-invalid update to ${filePath}: ${syntaxValidation.error}`
+    );
+  }
+  
   // Write back to file
   try {
     await fs.writeFile(absolutePath, newContent, "utf8");
@@ -216,7 +322,8 @@ function validateDiff(diffString) {
 module.exports = {
   applyDiff,
   validateDiff,
-  parseDiffBlocks
+  parseDiffBlocks,
+  validateSyntax
 };
 
 // Made with Bob
