@@ -5259,6 +5259,33 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
     });
   }
 
+  _hasApplyDiffActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || action.type !== "apply_diff") return false;
+      return (
+        typeof action.path === "string" &&
+        action.path.trim().length > 0 &&
+        typeof action.diff === "string" &&
+        action.diff.trim().length > 0
+      );
+    });
+  }
+
+  _hasInsertContentActions(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) return false;
+    return actions.some((action) => {
+      if (!action || action.type !== "insert_content") return false;
+      return (
+        typeof action.path === "string" &&
+        action.path.trim().length > 0 &&
+        typeof action.line === "number" &&
+        action.line >= 0 &&
+        typeof action.content === "string"
+      );
+    });
+  }
+
   _hasFileActions(actions) {
     if (!Array.isArray(actions) || actions.length === 0) return false;
     return actions.some((action) => {
@@ -5268,7 +5295,12 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
   }
 
   _hasEditActions(actions) {
-    return this._hasPatchActions(actions) || this._hasFileActions(actions);
+    return (
+      this._hasPatchActions(actions) ||
+      this._hasApplyDiffActions(actions) ||
+      this._hasInsertContentActions(actions) ||
+      this._hasFileActions(actions)
+    );
   }
 
   _hasGroundingActions(actions) {
@@ -5349,6 +5381,23 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       if (action.type === "file") {
         return (
           typeof action.content === "string" && action.content.trim().length > 0
+        );
+      }
+      if (action.type === "apply_diff") {
+        return (
+          typeof action.path === "string" &&
+          action.path.trim().length > 0 &&
+          typeof action.diff === "string" &&
+          action.diff.trim().length > 0
+        );
+      }
+      if (action.type === "insert_content") {
+        return (
+          typeof action.path === "string" &&
+          action.path.trim().length > 0 &&
+          typeof action.line === "number" &&
+          action.line >= 0 &&
+          typeof action.content === "string"
         );
       }
       if (action.type === "read") {

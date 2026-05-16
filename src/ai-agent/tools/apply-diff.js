@@ -65,6 +65,13 @@ function normalizeLineEndings(text) {
   return text.replace(/\r\n/g, "\n");
 }
 
+function restoreLineEndings(text, prefersCrlf) {
+  if (!prefersCrlf) {
+    return text;
+  }
+  return text.replace(/\n/g, "\r\n");
+}
+
 /**
  * Get syntax check command for a file based on extension
  */
@@ -176,13 +183,13 @@ function applySingleDiff(lines, block) {
   
   // Try exact match at specified line (1-based to 0-based)
   const searchStart = startLine - 1;
-  
-  if (searchStart < 0 || searchStart >= lines.length) {
-    throw new Error(`Start line ${startLine} is out of range (file has ${lines.length} lines)`);
-  }
-  
+
   // Check if search block matches at the specified location
-  if (matchesBlock(lines, searchStart, searchLines)) {
+  if (
+    searchStart >= 0 &&
+    searchStart < lines.length &&
+    matchesBlock(lines, searchStart, searchLines)
+  ) {
     // Replace the matched lines
     lines.splice(searchStart, searchLines.length, ...replaceLines);
     return {
@@ -210,11 +217,71 @@ function applySingleDiff(lines, block) {
       };
     }
   }
+
+  // Fall back to a whole-file search when line anchors drift in larger files.
+  // Only a unique global match is considered safe to apply automatically.
+  const globalMatches = [];
+  for (let i = 0; i <= lines.length - searchLines.length; i++) {
+    if (matchesBlock(lines, i, searchLines)) {
+      globalMatches.push(i);
+    }
+  }
+
+  if (globalMatches.length === 1) {
+    const matchIndex = globalMatches[0];
+    lines.splice(matchIndex, searchLines.length, ...replaceLines);
+    return {
+      success: true,
+      matchedAt: matchIndex + 1,
+      linesRemoved: searchLines.length,
+      linesAdded: replaceLines.length,
+      warning: `Match found at line ${matchIndex + 1} after a whole-file search instead of specified line ${startLine}`
+    };
+  }
+
+  if (globalMatches.length > 1) {
+    throw new Error(
+      `Search block matched ${globalMatches.length} locations, so Code Janitor could not apply it safely. ` +
+      "Make the SEARCH block more specific."
+    );
+  }
+
+  if (searchStart < 0 || searchStart >= lines.length) {
+    throw new Error(`Start line ${startLine} is out of range (file has ${lines.length} lines)`);
+  }
   
   throw new Error(
     `Search block not found at line ${startLine} or nearby.\n` +
     `Expected:\n${searchLines.slice(0, 3).join("\n")}${searchLines.length > 3 ? "\n..." : ""}`
   );
+}
+
+function applyDiffToContent(content, diffString) {
+  const originalContent = typeof content === "string" ? content : "";
+  const prefersCrlf = originalContent.includes("\r\n");
+  const normalizedContent = normalizeLineEndings(originalContent);
+  const lines = normalizedContent.split("\n");
+  const blocks = parseDiffBlocks(diffString);
+
+  blocks.sort((a, b) => b.startLine - a.startLine);
+
+  const details = [];
+  for (const block of blocks) {
+    try {
+      const result = applySingleDiff(lines, block);
+      details.push(result);
+    } catch (error) {
+      throw new Error(`Failed to apply diff block at line ${block.startLine}: ${error.message}`);
+    }
+  }
+
+  return {
+    blocksApplied: details.length,
+    details,
+    finalLineCount: lines.length,
+    previousContent: originalContent,
+    newContent: restoreLineEndings(lines.join("\n"), prefersCrlf)
+  };
 }
 
 /**
@@ -234,38 +301,8 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
   } catch (error) {
     throw new Error(`Failed to read file ${filePath}: ${error.message}`);
   }
-  
-  // Detect line ending preference
-  const prefersCrlf = content.includes("\r\n");
-  
-  // Normalize and split into lines
-  const normalizedContent = normalizeLineEndings(content);
-  const lines = normalizedContent.split("\n");
-  
-  // Parse diff blocks
-  const blocks = parseDiffBlocks(diffString);
-  
-  // Sort blocks by start line in descending order (apply bottom to top)
-  blocks.sort((a, b) => b.startLine - a.startLine);
-  
-  // Apply each block
-  const results = [];
-  for (const block of blocks) {
-    try {
-      const result = applySingleDiff(lines, block);
-      results.push(result);
-    } catch (error) {
-      throw new Error(`Failed to apply diff block at line ${block.startLine}: ${error.message}`);
-    }
-  }
-  
-  // Reconstruct file content
-  let newContent = lines.join("\n");
-  
-  // Restore original line endings if needed
-  if (prefersCrlf) {
-    newContent = newContent.replace(/\n/g, "\r\n");
-  }
+  const diffResult = applyDiffToContent(content, diffString);
+  const newContent = diffResult.newContent;
   
   // Validate syntax before writing
   const syntaxValidation = await validateSyntax(absolutePath, newContent);
@@ -285,9 +322,12 @@ async function applyDiff(filePath, diffString, workspaceRoot) {
   return {
     success: true,
     filePath: filePath,
-    blocksApplied: results.length,
-    details: results,
-    finalLineCount: lines.length
+    absolutePath,
+    blocksApplied: diffResult.blocksApplied,
+    details: diffResult.details,
+    finalLineCount: diffResult.finalLineCount,
+    previousContent: content,
+    newContent
   };
 }
 
@@ -321,6 +361,7 @@ function validateDiff(diffString) {
 
 module.exports = {
   applyDiff,
+  applyDiffToContent,
   validateDiff,
   parseDiffBlocks,
   validateSyntax
