@@ -59,10 +59,7 @@ first new
 :start_line: 15
 -------
 second old
-=======
-second new
->>>>>>> REPLACE`;
-
+      
       const blocks = parseDiffBlocks(diff);
 
       expect(blocks).toHaveLength(2);
