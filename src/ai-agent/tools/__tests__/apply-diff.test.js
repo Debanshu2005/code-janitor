@@ -6,6 +6,22 @@ const { applyDiff, applyDiffToContent, validateDiff, parseDiffBlocks, validateSy
 const fs = require("fs").promises;
 const path = require("path");
 const os = require("os");
+const { spawnSync } = require("child_process");
+
+function hasCommand(command, args = ["--version"]) {
+  const probe = spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    windowsHide: true
+  });
+
+  return !probe.error && probe.status === 0;
+}
+
+const hasPythonRuntime =
+  hasCommand("python") ||
+  hasCommand("py", ["-3", "--version"]);
+const pythonTest = hasPythonRuntime ? test : test.skip;
 
 describe("apply-diff tool", () => {
   let tempDir;
@@ -14,7 +30,7 @@ describe("apply-diff tool", () => {
   beforeEach(async () => {
     // Create temp directory
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "apply-diff-test-"));
-    testFile = path.join(tempDir, "test.js");
+    testFile = path.join(tempDir, "test.txt");
   });
 
   afterEach(async () => {
@@ -59,6 +75,9 @@ first new
 :start_line: 15
 -------
 second old
+=======
+second new
+>>>>>>> REPLACE`;
       
       const blocks = parseDiffBlocks(diff);
 
@@ -181,7 +200,6 @@ new line 4
       expect(newContent).toContain("new line 4");
     });
 
-<<<<<<< HEAD
     test("falls back to a unique whole-file match when the line anchor drifts", async () => {
       const textFile = path.join(tempDir, "test.txt");
       const content = `alpha
@@ -206,9 +224,7 @@ updated target line
       expect(result.previousContent).toBe(content);
       expect(result.newContent).toContain("updated target line");
     });
-    
-=======
->>>>>>> 6a89ac4e8f878a283d55f687cf277dbe45fe227d
+
     test("handles CRLF line endings", async () => {
       const content = "line 1\r\nline 2\r\nline 3";
 
@@ -263,22 +279,24 @@ new
       await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow("out of range");
     });
 
-    test("rejects syntax-invalid Python code", async () => {
+    pythonTest("rejects syntax-invalid Python code", async () => {
       const pythonFile = path.join(tempDir, "test.py");
       await fs.writeFile(pythonFile, "def hello():\n    print('Hello')\n", "utf8");
 
-      // Create a diff that introduces indentation error
+      // Create a diff that introduces a definite Python syntax error.
       const diff = `<<<<<<< SEARCH
 :start_line: 1
 -------
 def hello():
     print('Hello')
 =======
-def hello():
-  print('Hello')
+def hello()
+    print('Hello')
 >>>>>>> REPLACE`;
 
-      await expect(applyDiff(pythonFile, diff, tempDir)).rejects.toThrow(/syntax-invalid|IndentationError/i);
+      await expect(applyDiff(pythonFile, diff, tempDir)).rejects.toThrow(
+        /syntax-invalid|SyntaxError/i
+      );
 
       // Verify original file is unchanged
       const content = await fs.readFile(pythonFile, "utf8");
@@ -328,7 +346,7 @@ function hello() {
       expect(content).toBe('{"name": "test"}');
     });
 
-    test("accepts valid syntax changes", async () => {
+    pythonTest("accepts valid syntax changes", async () => {
       const pythonFile = path.join(tempDir, "test.py");
       await fs.writeFile(pythonFile, "def hello():\n    print('Hello')\n", "utf8");
 
@@ -352,7 +370,7 @@ def hello():
   });
 
   describe("validateSyntax", () => {
-    test("validates Python syntax correctly", async () => {
+    pythonTest("validates Python syntax correctly", async () => {
       const validPython = "def hello():\n    print('Hello')\n";
       const invalidPython = "def hello():\n  print('Hello')\n    print('Bad indent')\n";
 

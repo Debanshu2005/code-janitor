@@ -122,6 +122,58 @@ function createOptimizedAgent(agent) {
       markConsumedRange(match.index, match[0]);
     }
 
+    const incompleteStructuredEditWarning =
+      "Structured edit output appears incomplete; retrying may recover missing edits.";
+    const trailingUnterminatedFileRegex =
+      /(?:^|\r?\n)FILE:\s*([^\r\n`]+)\r?\n```[\w-]*\r?\n?([\s\S]*)$/;
+    const trailingUnterminatedFileMatch =
+      trailingUnterminatedFileRegex.exec(response);
+    if (
+      trailingUnterminatedFileMatch &&
+      !response.trimEnd().endsWith("```")
+    ) {
+      const normalizedPath = normalizeActionPath(
+        trailingUnterminatedFileMatch[1]
+      ).path;
+      const content = String(trailingUnterminatedFileMatch[2] || "");
+      const blockIndex =
+        trailingUnterminatedFileMatch.index +
+        (trailingUnterminatedFileMatch[0].startsWith("\r\n")
+          ? 2
+          : trailingUnterminatedFileMatch[0].startsWith("\n")
+            ? 1
+            : 0);
+      const alreadyRecovered = actions.some(
+        (action) =>
+          action.type === "file" &&
+          action.path === normalizedPath &&
+          action.content === content
+      );
+
+      if (
+        !isWithinConsumedRange(blockIndex) &&
+        normalizedPath &&
+        !normalizedPath.includes("\n") &&
+        content.trim() &&
+        !alreadyRecovered
+      ) {
+        if (
+          agent.currentEditableTargets &&
+          !agent.currentEditableTargets.has(normalizedPath)
+        ) {
+          warnings.push(`Blocked edit outside allowed targets: ${normalizedPath}`);
+        } else {
+          actions.push({
+            type: "file",
+            path: normalizedPath,
+            language: "text",
+            content
+          });
+          warnings.push(incompleteStructuredEditWarning);
+        }
+      }
+    }
+
     // MKDIR actions
     patterns.mkdir.lastIndex = 0;
     while ((match = patterns.mkdir.exec(response)) !== null) {
