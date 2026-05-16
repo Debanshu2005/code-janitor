@@ -19,7 +19,9 @@ const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_FILE_SNIPPET = 1_200;
 const MAX_EDIT_TARGET_SNIPPET = 6_000;
-const MAX_FAST_EDIT_ACTIVE_FILE_CHARS = 4_000;
+const MAX_ACTIVE_FILE_CONTEXT_CHARS = 24_000;
+const MAX_ACTIVE_FILE_FULL_CONTEXT_CHARS = 60_000;
+const MAX_ACTIVE_FILE_FULL_CONTEXT_LINES = 1_000;
 const MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS = 12_000;
 const MAX_FULL_EDITABLE_TARGET_CHARS = 48_000;
 const MAX_RELEVANT_FILES = 3;
@@ -2792,7 +2794,7 @@ class AIAgent {
       const activeFileContext = focusedEditableTargetContext ||
         this._getActiveFileContext(
           effectiveWorkspace,
-          isEditIntent ? MAX_FAST_EDIT_ACTIVE_FILE_CHARS : 1_200
+          isEditIntent ? MAX_ACTIVE_FILE_CONTEXT_CHARS : 1_200
         );
       this.currentEditableTargets =
         intent !== "create" && editableTargets.paths.length
@@ -3379,7 +3381,10 @@ ${resolvedMessage}`;
     }
   }
 
-  _getActiveFileContext(workspaceFolder, maxChars = 4_000) {
+  _getActiveFileContext(
+    workspaceFolder,
+    maxChars = MAX_ACTIVE_FILE_CONTEXT_CHARS
+  ) {
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor;
     if (!activeEditor) return "";
@@ -3395,7 +3400,16 @@ ${resolvedMessage}`;
       const relative = path.relative(workspaceFolder, doc.fileName);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         // Still include it but with full path label
-        return this._buildDocumentContext("Active file", doc, null, 4_000);
+        return this._buildDocumentContext(
+          "Active file",
+          doc,
+          null,
+          maxChars,
+          {
+            fullFileCharLimit: MAX_ACTIVE_FILE_FULL_CONTEXT_CHARS,
+            fullFileLineLimit: MAX_ACTIVE_FILE_FULL_CONTEXT_LINES
+          }
+        );
       }
     }
 
@@ -3403,7 +3417,11 @@ ${resolvedMessage}`;
       "Active file",
       doc,
       workspaceFolder,
-      maxChars
+      maxChars,
+      {
+        fullFileCharLimit: MAX_ACTIVE_FILE_FULL_CONTEXT_CHARS,
+        fullFileLineLimit: MAX_ACTIVE_FILE_FULL_CONTEXT_LINES
+      }
     );
   }
 
@@ -3473,23 +3491,50 @@ ${resolvedMessage}`;
       : relativePath.replace(/\\/g, "/");
   }
 
-  _buildDocumentContext(label, document, workspaceFolder, maxChars = 1_200) {
+  _buildDocumentContext(
+    label,
+    document,
+    workspaceFolder,
+    maxChars = 1_200,
+    options = {}
+  ) {
     if (!document) {
       return "";
     }
 
     const filePath = document.isUntitled ? null : document.fileName;
     const displayPath = this._formatContextPath(filePath, workspaceFolder);
-    const content = document.getText().slice(0, maxChars);
-
-    return `${label}: ${displayPath}${document.isDirty ? " (unsaved changes)" : ""}\n\`\`\`\n${content}\n\`\`\``;
+    return this._buildContentContext(
+      label,
+      `${displayPath}${document.isDirty ? " (unsaved changes)" : ""}`,
+      document.getText(),
+      maxChars,
+      options
+    );
   }
 
-  _buildContentContext(label, displayPath, content, maxChars) {
+  _buildContentContext(label, displayPath, content, maxChars, options = {}) {
     const source = typeof content === "string" ? content : "";
     if (!source) return "";
 
-    if (!Number.isFinite(maxChars) || maxChars <= 0 || source.length <= maxChars) {
+    const fullFileCharLimit =
+      Number.isFinite(options.fullFileCharLimit) &&
+      options.fullFileCharLimit > 0
+        ? options.fullFileCharLimit
+        : null;
+    const fullFileLineLimit =
+      Number.isFinite(options.fullFileLineLimit) &&
+      options.fullFileLineLimit > 0
+        ? options.fullFileLineLimit
+        : null;
+    const lineCount = source.split("\n").length;
+    const fitsRequestedWindow =
+      !Number.isFinite(maxChars) || maxChars <= 0 || source.length <= maxChars;
+    const fitsFullFileBudget =
+      (!fullFileCharLimit || source.length <= fullFileCharLimit) &&
+      (!fullFileLineLimit || lineCount <= fullFileLineLimit);
+
+    if (fitsRequestedWindow || fitsFullFileBudget) {
       return `${label}: ${displayPath}\n\`\`\`\n${source}\n\`\`\``;
     }
 
@@ -3842,10 +3887,12 @@ ${resolvedMessage}`;
           continue;
         }
 
-        snippet = `Open tab content: ${tabPath}\n\`\`\`\n${fileData.content.slice(
-          0,
+        snippet = this._buildContentContext(
+          "Open tab content",
+          tabPath,
+          fileData.content,
           MAX_FILE_SNIPPET
-        )}\n\`\`\``;
+        );
       }
 
       snippetBlocks.push(`${snippet}\n\n`);
@@ -3896,10 +3943,12 @@ ${resolvedMessage}`;
           continue;
         }
 
-        snippet = `Editable target content: ${targetPath}\n\`\`\`\n${fileData.content.slice(
-          0,
+        snippet = this._buildContentContext(
+          "Editable target content",
+          targetPath,
+          fileData.content,
           maxChars
-        )}\n\`\`\``;
+        );
       }
 
       snippetBlocks.push(`${snippet}\n\n`);
@@ -5090,6 +5139,7 @@ Rules:
 You have access to structured tool actions when needed. Prefer PATCH and FILE for edits, READ and GREP for grounding, and CMD only when shell output is the best evidence.
 When the current file state is unclear, inspect first instead of guessing.
 Use READ for exact file contents, GREP for workspace symbol/text search, and focused CMD checks when they directly confirm the fix.
+When checking syntax or debugging a large file, do not conclude from a tiny snippet. Read enough of the file first, preferably with READ_FILES and line ranges.
 After edits, include focused verification CMDs when they materially prove the change.
 Safe high-value CMD patterns include project search/read commands and targeted verification such as npm run lint, npm test, node --check, python -m py_compile, or similar project-local checks.
 READ: src/path/to/file.js
@@ -5159,6 +5209,7 @@ Rules:
 - Use PATCH: for small targeted edits with SEARCH:/REPLACE: blocks.
 - Use FILE: for new files, broad rewrites, or when PATCH would be brittle.
 - Use READ: for exact file contents and GREP: for indexed workspace search when inspection is needed before editing.
+- When debugging syntax or a large file, prefer READ_FILES with line ranges over guessing from partial snippets.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
 - Keep commands minimal and directly relevant to the request.
@@ -6837,13 +6888,12 @@ ${userMessage}`;
     // actions already parsed successfully.
     let recoveredIncompleteFileBlock = false;
     const looseFIleRegex =
-      /FILE:\s*([^\r\n`]+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+      /FILE:\s*([^\r\n`]+)\r?\n(?:```[\w-]*\r?\n)?([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = looseFIleRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
       const normalizedPath = pathInfo.path;
       const rawContent = String(match[2] || "")
-        .replace(/^```[\w-]*\r?\n?/, "")
         .replace(/\r?\n?```$/, "");
       const content = rawContent.startsWith("\n")
         ? rawContent.slice(1)
@@ -6868,6 +6918,38 @@ ${userMessage}`;
       });
       recoveredIncompleteFileBlock = true;
       markConsumedRange(match.index, match[0]);
+    }
+
+    if (!recoveredIncompleteFileBlock) {
+      const trailingFileMatch = response.match(
+        /(?:^|\r?\n)FILE:\s*([^\r\n`]+)\r?\n(?:```[\w-]*\r?\n)?([\s\S]*)$/m
+      );
+      if (trailingFileMatch) {
+        const pathInfo = normalizeActionPath(trailingFileMatch[1]);
+        const normalizedPath = pathInfo.path;
+        const content = String(trailingFileMatch[2] || "")
+          .replace(/\r?\n?```$/, "")
+          .trim();
+        const matchIndex = trailingFileMatch.index || 0;
+
+        if (
+          normalizedPath &&
+          !normalizedPath.includes("\n") &&
+          content &&
+          !isWithinConsumedRange(matchIndex) &&
+          (!this.currentEditableTargets ||
+            this.currentEditableTargets.has(normalizedPath))
+        ) {
+          actions.push({
+            type: "file",
+            path: normalizedPath,
+            language: "text",
+            content
+          });
+          recoveredIncompleteFileBlock = true;
+          markConsumedRange(matchIndex, trailingFileMatch[0]);
+        }
+      }
     }
 
     if (recoveredIncompleteFileBlock) {
