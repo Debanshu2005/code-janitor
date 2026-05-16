@@ -7,7 +7,7 @@
 
 const fs = require("fs").promises;
 const path = require("path");
-const { execSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const os = require("os");
 
 /**
@@ -75,23 +75,60 @@ function restoreLineEndings(text, prefersCrlf) {
 /**
  * Get syntax check command for a file based on extension
  */
-function getSyntaxCheckCommand(filePath) {
+function commandExists(command, args = ["--version"]) {
+  const probe = spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    windowsHide: true
+  });
+
+  return !probe.error && probe.status === 0;
+}
+
+function getSyntaxCheckInvocation(filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  
-  // On Windows, use double quotes; on Unix, use single quotes
-  const quotedPath = process.platform === "win32"
-    ? `"${filePath.replace(/"/g, '""')}"`
-    : `'${filePath.replace(/'/g, `'\\''`)}'`;
-  
+
   if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
-    return `node --check ${quotedPath}`;
+    return {
+      command: process.execPath,
+      args: ["--check", filePath]
+    };
   }
+
   if (ext === ".py") {
-    return `python -m py_compile ${quotedPath}`;
+    const pythonCandidates = process.platform === "win32"
+      ? [
+          { command: "python", probeArgs: ["--version"] },
+          { command: "py", probeArgs: ["-3", "--version"], argsPrefix: ["-3"] }
+        ]
+      : [
+          { command: "python3", probeArgs: ["--version"] },
+          { command: "python", probeArgs: ["--version"] }
+        ];
+
+    for (const candidate of pythonCandidates) {
+      if (commandExists(candidate.command, candidate.probeArgs)) {
+        return {
+          command: candidate.command,
+          args: [...(candidate.argsPrefix || []), "-m", "py_compile", filePath]
+        };
+      }
+    }
+
+    return null;
   }
+
   if (ext === ".java") {
-    return `javac ${quotedPath}`;
+    if (!commandExists("javac")) {
+      return null;
+    }
+
+    return {
+      command: "javac",
+      args: [filePath]
+    };
   }
+
   // JSON is validated separately
   if (ext === ".json") {
     return null;
@@ -121,8 +158,8 @@ async function validateSyntax(filePath, content) {
   }
   
   // Get syntax check command
-  const cmd = getSyntaxCheckCommand(filePath);
-  if (!cmd) {
+  const invocation = getSyntaxCheckInvocation(filePath);
+  if (!invocation) {
     // No syntax checker available for this file type
     return { valid: true };
   }
@@ -135,9 +172,14 @@ async function validateSyntax(filePath, content) {
     await fs.writeFile(tempPath, content, "utf8");
     
     // Run syntax check command
-    const tempCmd = getSyntaxCheckCommand(tempPath);
+    const tempInvocation = getSyntaxCheckInvocation(tempPath);
+    if (!tempInvocation) {
+      await fs.unlink(tempPath).catch(() => {});
+      return { valid: true };
+    }
+
     try {
-      execSync(tempCmd, {
+      execFileSync(tempInvocation.command, tempInvocation.args, {
         encoding: "utf8",
         stdio: "pipe",
         timeout: 10000,
@@ -148,6 +190,11 @@ async function validateSyntax(filePath, content) {
       await fs.unlink(tempPath).catch(() => {});
       return { valid: true };
     } catch (err) {
+      if (err.code === "ENOENT") {
+        await fs.unlink(tempPath).catch(() => {});
+        return { valid: true };
+      }
+
       // Command failed - syntax error
       await fs.unlink(tempPath).catch(() => {});
       

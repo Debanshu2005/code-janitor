@@ -6921,33 +6921,48 @@ ${userMessage}`;
     }
 
     if (!recoveredIncompleteFileBlock) {
-      const trailingFileMatch = response.match(
-        /(?:^|\r?\n)FILE:\s*([^\r\n`]+)\r?\n(?:```[\w-]*\r?\n)?([\s\S]*)$/m
-      );
+      const trailingFileRegex =
+        /(?:^|\r?\n)FILE:\s*([^\r\n`]+)\r?\n([\s\S]*)$/;
+      const trailingFileMatch = trailingFileRegex.exec(response);
       if (trailingFileMatch) {
-        const pathInfo = normalizeActionPath(trailingFileMatch[1]);
-        const normalizedPath = pathInfo.path;
-        const content = String(trailingFileMatch[2] || "")
-          .replace(/\r?\n?```$/, "")
-          .trim();
-        const matchIndex = trailingFileMatch.index || 0;
+        const leadingPrefix = trailingFileMatch[0].startsWith("\n") ? 1 : 0;
+        const leadingPrefixLength =
+          trailingFileMatch[0].startsWith("\r\n") ? 2 : leadingPrefix;
+        const blockIndex = trailingFileMatch.index + leadingPrefixLength;
 
-        if (
-          normalizedPath &&
-          !normalizedPath.includes("\n") &&
-          content &&
-          !isWithinConsumedRange(matchIndex) &&
-          (!this.currentEditableTargets ||
-            this.currentEditableTargets.has(normalizedPath))
-        ) {
-          actions.push({
-            type: "file",
-            path: normalizedPath,
-            language: "text",
-            content
-          });
-          recoveredIncompleteFileBlock = true;
-          markConsumedRange(matchIndex, trailingFileMatch[0]);
+        if (!isWithinConsumedRange(blockIndex)) {
+          const pathInfo = normalizeActionPath(trailingFileMatch[1]);
+          const normalizedPath = pathInfo.path;
+          const rawContent = String(trailingFileMatch[2] || "")
+            .replace(/^```[\w-]*\r?\n?/, "")
+            .replace(/\r?\n?```$/, "");
+          const content = rawContent.startsWith("\n")
+            ? rawContent.slice(1)
+            : rawContent;
+
+          if (
+            normalizedPath &&
+            !normalizedPath.includes("\n") &&
+            content.trim()
+          ) {
+            if (
+              this.currentEditableTargets &&
+              !this.currentEditableTargets.has(normalizedPath)
+            ) {
+              warnings.push(
+                `Blocked edit outside allowed targets: ${normalizedPath}`
+              );
+            } else {
+              actions.push({
+                type: "file",
+                path: normalizedPath,
+                language: "text",
+                content
+              });
+              recoveredIncompleteFileBlock = true;
+              markConsumedRange(blockIndex, trailingFileMatch[0].slice(leadingPrefixLength));
+            }
+          }
         }
       }
     }
@@ -7023,6 +7038,45 @@ ${userMessage}`;
       const url = match[1].trim();
       if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
         actions.push({ type: "fetch", url });
+      }
+    }
+
+    const trailingUnterminatedFileRegex =
+      /(?:^|\r?\n)FILE:\s*([^\r\n`]+)\r?\n```[\w-]*\r?\n?([\s\S]*)$/;
+    const trailingUnterminatedFileMatch =
+      trailingUnterminatedFileRegex.exec(response);
+    if (
+      trailingUnterminatedFileMatch &&
+      !response.trimEnd().endsWith("```")
+    ) {
+      const pathInfo = normalizeActionPath(trailingUnterminatedFileMatch[1]);
+      const normalizedPath = pathInfo.path;
+      const content = String(trailingUnterminatedFileMatch[2] || "");
+      const alreadyRecovered = actions.some(
+        (action) =>
+          action.type === "file" &&
+          action.path === normalizedPath &&
+          action.content === content
+      );
+
+      if (
+        normalizedPath &&
+        !normalizedPath.includes("\n") &&
+        content.trim() &&
+        !alreadyRecovered &&
+        (!this.currentEditableTargets ||
+          this.currentEditableTargets.has(normalizedPath))
+      ) {
+        actions.push({
+          type: "file",
+          path: normalizedPath,
+          language: "text",
+          content
+        });
+
+        if (!warnings.includes(incompleteStructuredEditWarning)) {
+          warnings.push(incompleteStructuredEditWarning);
+        }
       }
     }
 

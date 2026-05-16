@@ -12,6 +12,22 @@ const {
 const fs = require("fs").promises;
 const path = require("path");
 const os = require("os");
+const { spawnSync } = require("child_process");
+
+function hasCommand(command, args = ["--version"]) {
+  const probe = spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    windowsHide: true
+  });
+
+  return !probe.error && probe.status === 0;
+}
+
+const hasPythonRuntime =
+  hasCommand("python") ||
+  hasCommand("py", ["-3", "--version"]);
+const pythonTest = hasPythonRuntime ? test : test.skip;
 
 describe("apply-diff tool", () => {
   let tempDir;
@@ -180,7 +196,7 @@ new line 4
       expect(newContent).toContain("new line 4");
     });
 
-    test("falls back to a whole-file search when the line anchor drifts", async () => {
+    test("falls back to a unique whole-file match when the line anchor drifts", async () => {
       const textFile = path.join(tempDir, "notes.txt");
       const content = [
         "line 1",
@@ -268,7 +284,7 @@ new
       );
     });
 
-    test("rejects syntax-invalid Python code", async () => {
+    pythonTest("rejects syntax-invalid Python code", async () => {
       const pythonFile = path.join(tempDir, "test.py");
       await fs.writeFile(
         pythonFile,
@@ -282,12 +298,12 @@ new
 def hello():
     print('Hello')
 =======
-def hello():
-print('Hello')
+def hello()
+    print('Hello')
 >>>>>>> REPLACE`;
 
       await expect(applyDiff(pythonFile, diff, tempDir)).rejects.toThrow(
-        /syntax-invalid|indent/i
+        /syntax-invalid|SyntaxError/i
       );
 
       const content = await fs.readFile(pythonFile, "utf8");
@@ -341,7 +357,7 @@ function hello() {
       expect(content).toBe('{"name": "test"}');
     });
 
-    test("accepts valid syntax changes", async () => {
+    pythonTest("accepts valid syntax changes", async () => {
       const pythonFile = path.join(tempDir, "test.py");
       await fs.writeFile(
         pythonFile,
@@ -369,7 +385,7 @@ def hello():
   });
 
   describe("validateSyntax", () => {
-    test("validates Python syntax correctly", async () => {
+    pythonTest("validates Python syntax correctly", async () => {
       const validPython = "def hello():\n    print('Hello')\n";
       const invalidPython = "def hello():\nprint('Hello')\n";
 

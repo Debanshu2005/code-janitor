@@ -441,6 +441,51 @@ class ToolRegistry {
     
     return { valid: true };
   }
+
+  _normalizeValidatorResult(validationResult) {
+    if (!validationResult || typeof validationResult !== "object") {
+      return { valid: true };
+    }
+
+    if (validationResult.valid === true || validationResult.isValid === true) {
+      return { valid: true };
+    }
+
+    if (validationResult.valid === false || validationResult.isValid === false) {
+      return {
+        valid: false,
+        error:
+          validationResult.error ||
+          validationResult.errors?.join(", ") ||
+          "Validation failed"
+      };
+    }
+
+    return { valid: true };
+  }
+
+  async validateToolExecution(toolName, params, workspaceRoot) {
+    const tool = this.getTool(toolName);
+    if (!tool || typeof tool.validator !== "function") {
+      return { valid: true };
+    }
+
+    let validationResult;
+
+    if (toolName === "apply_diff") {
+      validationResult = tool.validator(params.diff);
+    } else if (toolName === "insert_content") {
+      validationResult = await tool.validator(params.path, params.line, workspaceRoot);
+    } else if (toolName === "attempt_completion") {
+      validationResult = tool.validator(params);
+    } else if (toolName === "submit_review_findings") {
+      validationResult = tool.validator(params.issues);
+    } else {
+      validationResult = await tool.validator(params, workspaceRoot);
+    }
+
+    return this._normalizeValidatorResult(validationResult);
+  }
   
   /**
    * Execute a tool
@@ -455,6 +500,15 @@ class ToolRegistry {
     const validation = this.validateParams(toolName, params);
     if (!validation.valid) {
       throw new Error(`Invalid parameters: ${validation.errors?.join(", ") || validation.error}`);
+    }
+
+    const toolValidation = await this.validateToolExecution(
+      toolName,
+      params,
+      workspaceRoot
+    );
+    if (!toolValidation.valid) {
+      throw new Error(`Invalid ${toolName} payload: ${toolValidation.error}`);
     }
     
     // Execute tool

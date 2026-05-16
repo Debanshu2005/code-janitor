@@ -1,0 +1,72 @@
+/* eslint-env jest */
+
+const fs = require("fs").promises;
+const os = require("os");
+const path = require("path");
+
+const { ToolRegistry } = require("../tool-registry");
+
+describe("ToolRegistry validators", () => {
+  let tempDir;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-registry-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  test("rejects malformed apply_diff payloads before tool execution", async () => {
+    const registry = new ToolRegistry();
+    const filePath = path.join(tempDir, "example.js");
+
+    await fs.writeFile(filePath, "const answer = 41;\n", "utf8");
+
+    await expect(
+      registry.executeTool(
+        "apply_diff",
+        {
+          path: filePath,
+          diff: "not a SEARCH/REPLACE diff"
+        },
+        tempDir
+      )
+    ).rejects.toThrow(/No valid SEARCH\/REPLACE blocks/i);
+  });
+
+  test("rejects insert_content requests with out-of-range line numbers", async () => {
+    const registry = new ToolRegistry();
+    const filePath = path.join(tempDir, "example.js");
+
+    await fs.writeFile(filePath, "const answer = 41;\n", "utf8");
+
+    await expect(
+      registry.executeTool(
+        "insert_content",
+        {
+          path: filePath,
+          line: 10,
+          content: "console.log(answer);"
+        },
+        tempDir
+      )
+    ).rejects.toThrow(/exceeds file length/i);
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("const answer = 41;\n");
+  });
+
+  test("rejects invalid attempt_completion payloads through the registry", async () => {
+    const registry = new ToolRegistry();
+
+    await expect(
+      registry.executeTool(
+        "attempt_completion",
+        {
+          result: "Great, would you like me to keep going?"
+        },
+        tempDir
+      )
+    ).rejects.toThrow(/should not end with a question|should not start/i);
+  });
+});
