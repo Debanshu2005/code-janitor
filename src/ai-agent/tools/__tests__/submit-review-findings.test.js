@@ -241,6 +241,8 @@ describe("submit-review-findings", () => {
       expect(result.summary.filesAffected).toBe(1);
       expect(result.summary.bySeverity.medium).toBe(1);
       expect(mockDiagnosticCollection.set).toHaveBeenCalled();
+      const submittedDiagnostics = mockDiagnosticCollection.set.mock.calls[0][1];
+      expect(submittedDiagnostics[0].source).toBe("Code Janitor Review");
     });
     
     test("throws error for invalid issues", async () => {

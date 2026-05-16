@@ -1,7 +1,7 @@
 /**
  * tools/index.js
  * 
- * Central export point for all Bob-style tools
+ * Central export point for structured Code Janitor tools
  */
 
 const { applyDiff, validateDiff, parseDiffBlocks } = require("./apply-diff");

@@ -1,7 +1,7 @@
 /**
  * tool-registry.js
  * 
- * Central registry for all Bob-style tools.
+ * Central registry for structured Code Janitor tools.
  * Manages tool definitions, validation, and execution.
  */
 
@@ -256,7 +256,7 @@ const y = 4;
 
   submit_review_findings: {
     name: "submit_review_findings",
-    description: "Create multiple formal review issues in a single call that will appear in the Bob Findings panel",
+    description: "Create multiple formal review issues in a single call that will appear in the Code Janitor review findings flow",
     handler: submitReviewFindings,
     validator: validateIssues,
     params: {
