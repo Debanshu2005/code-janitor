@@ -93,3 +93,29 @@ describe("AIAgent HTML syntax checks", () => {
     }
   });
 });
+
+describe("AIAgent command syntax checks", () => {
+  test("quotes Python syntax check paths that contain spaces", async () => {
+    const agent = new AIAgent();
+    const executeCommand = jest
+      .spyOn(agent, "executeCommand")
+      .mockResolvedValue({
+        success: false,
+        error: "SyntaxError: invalid syntax",
+        output: "SyntaxError: invalid syntax"
+      });
+
+    const result = await agent._runSyntaxCheck(
+      "folder with space/ai_module.py",
+      "C:/workspace",
+      null
+    );
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      "python -m py_compile 'folder with space/ai_module.py'",
+      "C:/workspace"
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("SyntaxError");
+  });
+});

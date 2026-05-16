@@ -5896,13 +5896,22 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
     return filePaths.map((filePath) => `File: ${filePath}`).join("\n");
   }
 
+  _quoteCommandArg(value) {
+    const arg = String(value ?? "");
+    if (process.platform === "win32") {
+      return `'${arg.replace(/'/g, "''")}'`;
+    }
+    return `'${arg.replace(/'/g, `'\\''`)}'`;
+  }
+
   _getSyntaxCheckCommand(filePath) {
     const ext = path.extname(filePath).toLowerCase();
     const rel = filePath.replace(/\\/g, "/");
+    const quotedRel = this._quoteCommandArg(rel);
     if ([".js", ".jsx", ".ts", ".tsx"].includes(ext))
-      return `node --check ${rel}`;
-    if (ext === ".py") return `python -m py_compile ${rel}`;
-    if (ext === ".java") return `javac ${rel}`;
+      return `node --check ${quotedRel}`;
+    if (ext === ".py") return `python -m py_compile ${quotedRel}`;
+    if (ext === ".java") return `javac ${quotedRel}`;
     if ([".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".ino"].includes(ext))
       return `node -e "process.exit(0)" && echo "C/C++ syntax check requires a compiler - run: gcc -fsyntax-only ${rel}"`;
     if (ext === ".html") return null; // HTML checked via parse5 in agent
