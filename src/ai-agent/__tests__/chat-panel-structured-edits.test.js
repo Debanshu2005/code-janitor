@@ -1450,4 +1450,119 @@ describe("ChatPanel structured edit helpers", () => {
       { allowEmpty: true, allowDocTruncate: true, workspaceRoot }
     );
   });
+
+  test("syntax repair escalates to deep mode for large files and blocks incomplete structured output", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const largeFile = `${"const item = 1;\n".repeat(1300)}function broken( {\n`;
+    panel._buildSyntaxFixPrompt = ChatPanel.prototype._buildSyntaxFixPrompt;
+    panel._getSyntaxFixLanguage = ChatPanel.prototype._getSyntaxFixLanguage;
+    panel._sanitizeSyntaxErrorOutput = ChatPanel.prototype._sanitizeSyntaxErrorOutput;
+    panel._getSyntaxFixRequestMode = ChatPanel.prototype._getSyntaxFixRequestMode;
+    panel._shouldBlockIncompleteStructuredExecution =
+      ChatPanel.prototype._shouldBlockIncompleteStructuredExecution;
+    panel._hasExecutableFileAction = ChatPanel.prototype._hasExecutableFileAction;
+    panel.agent = {
+      chat: jest.fn().mockResolvedValue({
+        text: "Structured edit output was incomplete.",
+        actions: [
+          {
+            type: "file",
+            path: "src/app.js",
+            content: largeFile
+          }
+        ],
+        warnings: ["Structured edit output appears incomplete."]
+      }),
+      _hasIncompleteStructuredEditWarning: jest.fn(() => true),
+      _buildIncompleteStructuredEditMessage: jest.fn(() => "blocked")
+    };
+
+    const result = await panel._requestSyntaxFixAction(
+      "/workspace/src/app.js",
+      "src/app.js",
+      largeFile,
+      { success: false, error: "Unexpected token" },
+      "/workspace",
+      { provider: "custom:test" }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("incomplete");
+    expect(panel.agent.chat).toHaveBeenCalledWith(
+      expect.any(String),
+      "/workspace",
+      null,
+      null,
+      expect.objectContaining({ mode: "deep" })
+    );
+  });
+
+  test("active syntax repair rolls the editor back when verification still fails", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const activeEditor = {
+      document: {
+        uri: { scheme: "file" },
+        fileName: "/workspace/src/app.js",
+        getText: jest
+          .fn()
+          .mockReturnValueOnce("const value = ;\n")
+          .mockReturnValueOnce("const value = broken(\n"),
+        save: jest.fn().mockResolvedValue(true)
+      }
+    };
+
+    panel._getCurrentFileEditor = jest.fn(() => activeEditor);
+    panel._requestSyntaxFixAction = jest.fn().mockResolvedValue({
+      success: true,
+      fileAction: {
+        type: "file",
+        path: "src/app.js",
+        content: "const value = broken(\n"
+      },
+      errorOutput: "Unexpected token"
+    });
+    panel._getEffectiveAiConfig = jest.fn().mockResolvedValue({
+      provider: "custom:test"
+    });
+    panel._assessEditSafetyBeforeApply = jest.fn().mockResolvedValue({ ok: true });
+    panel._applyToEditor = jest
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        path: "/workspace/src/app.js",
+        relativePath: "app.js",
+        previousContent: "const value = ;\n",
+        newContent: "const value = broken(\n"
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        path: "/workspace/src/app.js",
+        relativePath: "app.js",
+        previousContent: "const value = broken(\n",
+        newContent: "const value = ;\n"
+      });
+    panel._registerEditForUndo = jest.fn();
+    panel._postFixInsights = jest.fn();
+    panel._postMessage = jest.fn();
+    panel.agent = {
+      _runSyntaxCheck: jest
+        .fn()
+        .mockResolvedValueOnce({ success: false, error: "Unexpected token" })
+        .mockResolvedValueOnce({ success: false, error: "Unexpected end of input" })
+    };
+
+    await panel._runActiveSyntaxFix("/workspace");
+
+    expect(panel._applyToEditor).toHaveBeenNthCalledWith(
+      2,
+      activeEditor,
+      "const value = ;\n"
+    );
+    expect(panel._postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        text: expect.stringContaining("restored automatically")
+      })
+    );
+  });
 });

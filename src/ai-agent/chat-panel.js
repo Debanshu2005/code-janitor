@@ -1682,6 +1682,24 @@ class ChatPanel {
     return { prompt, language, errorOutput };
   }
 
+  _getSyntaxFixRequestMode(fileContent, errorOutput = "") {
+    const source = String(fileContent || "");
+    const nonEmptyLines = source
+      .split(/\r?\n/)
+      .filter((line) => line.trim()).length;
+    const diagnosticSize = String(errorOutput || "").length;
+
+    if (
+      source.length > 18_000 ||
+      nonEmptyLines > 320 ||
+      diagnosticSize > 1_200
+    ) {
+      return "deep";
+    }
+
+    return "heavy";
+  }
+
   async _requestSyntaxFixAction(
     fileName,
     relativePath,
@@ -1697,17 +1715,32 @@ class ChatPanel {
       fileContent,
       syntaxCheck
     );
+    const requestMode = this._getSyntaxFixRequestMode(fileContent, errorOutput);
 
     const response = await this.agent.chat(
       prompt,
       workspaceFolder,
       streamCallback,
       null,
-      { mode: "heavy", runtimeConfig }
+      { mode: requestMode, runtimeConfig }
     );
 
     if (response.error) {
       return { success: false, error: response.error, errorOutput };
+    }
+
+    if (this._shouldBlockIncompleteStructuredExecution(response)) {
+      return {
+        success: false,
+        error:
+          response.text ||
+          this.agent?._buildIncompleteStructuredEditMessage?.(
+            requestMode,
+            "edit"
+          ) ||
+          "Structured edit output was incomplete, so Code Janitor blocked the generated file changes.",
+        errorOutput
+      };
     }
 
     const fileAction = (response.actions || []).find(
@@ -1924,8 +1957,23 @@ class ChatPanel {
       return;
     }
 
-    // Apply the fix surgically and register it on the undo stack so the user
-    // can revert via the chat Undo button, /undo, or Ctrl+Z.
+    const safetyCheck = await this._assessEditSafetyBeforeApply(
+      workspaceFolder,
+      relativePath,
+      fileContent,
+      repairPlan.fileAction.content
+    );
+    if (!safetyCheck.ok) {
+      this._postMessage({
+        type: "error",
+        text: safetyCheck.reason
+      });
+      this._postMessage({ type: "done" });
+      return;
+    }
+
+    // Apply the fix surgically, then verify it and roll back automatically if
+    // the syntax check still fails on the repaired buffer.
     const applyResult = await this._applyToEditor(
       activeEditor,
       repairPlan.fileAction.content
@@ -1967,10 +2015,26 @@ class ChatPanel {
         text: "\n\nSyntax errors fixed successfully!"
       });
     } else {
+      let rollbackNote = "";
+      const rollbackResult = await this._applyToEditor(
+        activeEditor,
+        applyResult.previousContent
+      );
+      if (rollbackResult.success) {
+        await activeEditor.document.save();
+        rollbackNote = " The previous file contents were restored automatically.";
+      } else {
+        rollbackNote = ` Automatic rollback failed: ${rollbackResult.error || "Unknown error"}`;
+      }
+
       this._postMessage({
-        type: "stream",
-        text: "\n\nWarning: Fix applied, but some syntax issues may remain. Please review the changes."
+        type: "error",
+        text:
+          `Syntax repair did not fully resolve ${relativePath}: ${verifyCheck.error || verifyCheck.output || "Unknown syntax error"}.` +
+          rollbackNote
       });
+      this._postMessage({ type: "done" });
+      return;
     }
 
     this._postFixInsights(

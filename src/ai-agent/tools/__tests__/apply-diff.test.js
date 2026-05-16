@@ -55,9 +55,13 @@ first old
 first new
 >>>>>>> REPLACE
 
+<<<<<<< SEARCH
 :start_line: 15
 -------
 second old
+=======
+second new
+>>>>>>> REPLACE`;
       
       const blocks = parseDiffBlocks(diff);
       
@@ -232,6 +236,7 @@ new
 >>>>>>> REPLACE`;
       
       await expect(applyDiff(testFile, diff, tempDir)).rejects.toThrow("out of range");
+    });
 
     test("rejects syntax-invalid Python code", async () => {
       const pythonFile = path.join(tempDir, "test.py");
@@ -372,7 +377,6 @@ def hello():
     test("skips validation for unsupported file types", async () => {
       const result = await validateSyntax("test.txt", "any content");
       expect(result.valid).toBe(true);
-    });
     });
   });
 });
