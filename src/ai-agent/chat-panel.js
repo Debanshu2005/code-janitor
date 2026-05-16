@@ -6676,7 +6676,7 @@ ${trimmedText}`;
                   { agent: this.agent }
                 );
 
-                this._postTodoState();
+                this._postSessionState();
                 this._postMessage({
                   type: "applied",
                   text: `\u2705 ${result.summary}`
