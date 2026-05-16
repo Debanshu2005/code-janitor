@@ -4,7 +4,7 @@
  * Central export point for structured Code Janitor tools
  */
 
-const { applyDiff, validateDiff, parseDiffBlocks } = require("./apply-diff");
+const { applyDiff, validateDiff, parseDiffBlocks, validateSyntax } = require("./apply-diff");
 const { insertContent, validateInsert } = require("./insert-content");
 const { readFiles, readSingleFile, formatResults, parseLineRange, MAX_FILES_PER_REQUEST } = require("./read-file");
 const {
@@ -53,6 +53,7 @@ module.exports = {
   applyDiff,
   validateDiff,
   parseDiffBlocks,
+  validateSyntax,
   
   // Insert Content
   insertContent,
