@@ -72,6 +72,40 @@ function extractJavaScriptParams(params = []) {
   return params.map((param, index) => extractJavaScriptParam(param, index));
 }
 
+function normalizeParamName(rawName, fallbackName) {
+  const cleaned = String(rawName || "")
+    .replace(/\/\*.*?\*\//g, "")
+    .replace(/=.*/g, "")
+    .replace(/\b(?:const|volatile|register|unsigned|signed|static|final)\b/g, "")
+    .replace(/[*&]/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .pop();
+
+  return cleaned || fallbackName;
+}
+
+function parseParamList(paramSource = "") {
+  const source = String(paramSource || "").trim();
+  if (!source || source === "void") {
+    return [];
+  }
+
+  return source
+    .split(",")
+    .map((param, index) => {
+      const trimmed = param.trim();
+      if (!trimmed) {
+        return null;
+      }
+      return {
+        name: normalizeParamName(trimmed, `param${index}`)
+      };
+    })
+    .filter(Boolean);
+}
+
 /**
  * Supported file extensions and their language mappings
  */
@@ -90,7 +124,10 @@ const LANGUAGE_MAP = {
   ".cxx": "cpp",
   ".h": "c",
   ".hpp": "cpp",
-  ".hxx": "cpp"
+  ".hxx": "cpp",
+  ".ino": "cpp",
+  ".pde": "cpp",
+  ".html": "html"
 };
 
 /**
@@ -257,8 +294,8 @@ function parsePython(content) {
   
   // Regex patterns for Python
   const classPattern = /^class\s+(\w+)/;
-  const functionPattern = /^def\s+(\w+)/;
-  const methodPattern = /^\s+def\s+(\w+)/;
+  const functionPattern = /^def\s+(\w+)\s*\(([^)]*)\)/;
+  const methodPattern = /^\s+def\s+(\w+)\s*\(([^)]*)\)/;
   
   let currentClass = null;
   
@@ -274,7 +311,8 @@ function parsePython(content) {
         type: "class",
         name: currentClass,
         line: lineNum,
-        kind: "class"
+        kind: "class",
+        methods: []
       });
       continue;
     }
@@ -282,23 +320,40 @@ function parsePython(content) {
     // Check for method (indented def)
     const methodMatch = line.match(methodPattern);
     if (methodMatch && currentClass) {
+      const params = parseParamList(methodMatch[2]).filter(
+        (param) => param.name !== "self" && param.name !== "cls"
+      );
       definitions.push({
         type: "method",
         name: `${currentClass}.${methodMatch[1]}`,
         line: lineNum,
-        kind: "method"
+        kind: "method",
+        params
       });
+      const classDef = definitions.find(
+        (definition) => definition.type === "class" && definition.name === currentClass
+      );
+      if (classDef?.methods) {
+        classDef.methods.push({
+          name: methodMatch[1],
+          params
+        });
+      }
       continue;
     }
     
     // Check for function (top-level def)
     const functionMatch = line.match(functionPattern);
     if (functionMatch) {
+      const params = parseParamList(functionMatch[2]).filter(
+        (param) => param.name !== "self" && param.name !== "cls"
+      );
       definitions.push({
         type: "function",
         name: functionMatch[1],
         line: lineNum,
-        kind: "function"
+        kind: "function",
+        params
       });
       currentClass = null; // Reset class context
     }
@@ -322,7 +377,7 @@ function parseJava(content) {
   // Regex patterns for Java
   const classPattern = /(?:public|private|protected)?\s*(?:static)?\s*(?:final)?\s*class\s+(\w+)/;
   const interfacePattern = /(?:public|private|protected)?\s*interface\s+(\w+)/;
-  const methodPattern = /(?:public|private|protected)?\s*(?:static)?\s*(?:final)?\s*(?:\w+(?:<[^>]+>)?)\s+(\w+)\s*\(/;
+  const methodPattern = /(?:public|private|protected)?\s*(?:static)?\s*(?:final)?\s*(?:[\w<>\[\],?]+\s+)+(\w+)\s*\(([^)]*)\)/;
   
   let currentClass = null;
   
@@ -338,7 +393,8 @@ function parseJava(content) {
         type: "class",
         name: currentClass,
         line: lineNum,
-        kind: "class"
+        kind: "class",
+        methods: []
       });
       continue;
     }
@@ -351,7 +407,8 @@ function parseJava(content) {
         type: "interface",
         name: currentClass,
         line: lineNum,
-        kind: "interface"
+        kind: "interface",
+        methods: []
       });
       continue;
     }
@@ -359,12 +416,25 @@ function parseJava(content) {
     // Check for method
     const methodMatch = line.match(methodPattern);
     if (methodMatch && currentClass) {
+      const params = parseParamList(methodMatch[2]);
       definitions.push({
         type: "method",
         name: `${currentClass}.${methodMatch[1]}`,
         line: lineNum,
-        kind: "method"
+        kind: "method",
+        params
       });
+      const classDef = definitions.find(
+        (definition) =>
+          (definition.type === "class" || definition.type === "interface") &&
+          definition.name === currentClass
+      );
+      if (classDef?.methods) {
+        classDef.methods.push({
+          name: methodMatch[1],
+          params
+        });
+      }
     }
   }
   
@@ -380,8 +450,8 @@ function parseCpp(content) {
   
   // Regex patterns for C/C++
   const classPattern = /(?:class|struct)\s+(\w+)/;
-  const functionPattern = /^(?:\w+(?:\s*\*)?)\s+(\w+)\s*\([^)]*\)\s*(?:\{|;)/;
-  const methodPattern = /^\s*(?:\w+(?:\s*\*)?)\s+(\w+)\s*\([^)]*\)\s*(?:\{|;)/;
+  const functionPattern = /^(?:[\w:\<\>\~]+(?:\s+|[*&])+)+(\w+)\s*\(([^)]*)\)\s*(?:\{|;)/;
+  const methodPattern = /^\s*(?:[\w:\<\>\~]+(?:\s+|[*&])+)+(\w+)\s*\(([^)]*)\)\s*(?:\{|;)/;
   
   let currentClass = null;
   let braceDepth = 0;
@@ -402,7 +472,8 @@ function parseCpp(content) {
         type: "class",
         name: currentClass,
         line: lineNum,
-        kind: line.startsWith("struct") ? "struct" : "class"
+        kind: line.startsWith("struct") ? "struct" : "class",
+        methods: []
       });
       continue;
     }
@@ -411,12 +482,23 @@ function parseCpp(content) {
     if (currentClass && braceDepth > 0) {
       const methodMatch = line.match(methodPattern);
       if (methodMatch) {
+        const params = parseParamList(methodMatch[2]);
         definitions.push({
           type: "method",
           name: `${currentClass}.${methodMatch[1]}`,
           line: lineNum,
-          kind: "method"
+          kind: "method",
+          params
         });
+        const classDef = definitions.find(
+          (definition) => definition.type === "class" && definition.name === currentClass
+        );
+        if (classDef?.methods) {
+          classDef.methods.push({
+            name: methodMatch[1],
+            params
+          });
+        }
         continue;
       }
     }
@@ -425,11 +507,13 @@ function parseCpp(content) {
     if (braceDepth === 0) {
       const functionMatch = line.match(functionPattern);
       if (functionMatch && !line.includes("class") && !line.includes("struct")) {
+        const params = parseParamList(functionMatch[2]);
         definitions.push({
           type: "function",
           name: functionMatch[1],
           line: lineNum,
-          kind: "function"
+          kind: "function",
+          params
         });
       }
     }
@@ -441,6 +525,19 @@ function parseCpp(content) {
   }
   
   return definitions;
+}
+
+function parseHtml(content, filePath) {
+  return [
+    {
+      type: "document",
+      name: path.basename(filePath),
+      line: 1,
+      kind: "html document",
+      params: [],
+      methods: []
+    }
+  ];
 }
 
 /**
@@ -470,7 +567,10 @@ async function parseFile(filePath, workspaceRoot) {
     }
     
     // Read file
-    const content = await fs.readFile(absolutePath, "utf8");
+    const rawContent = await fs.readFile(absolutePath, "utf8");
+    const content = Buffer.isBuffer(rawContent)
+      ? rawContent.toString("utf8")
+      : String(rawContent);
     
     // Determine language
     const language = getLanguage(filePath);
@@ -492,6 +592,8 @@ async function parseFile(filePath, workspaceRoot) {
       definitions = parseJava(content);
     } else if (language === "c" || language === "cpp") {
       definitions = parseCpp(content);
+    } else if (language === "html") {
+      definitions = parseHtml(content, filePath);
     }
     
     // Limit definitions

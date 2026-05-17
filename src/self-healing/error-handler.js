@@ -545,6 +545,12 @@ class SelfDiagnosingErrorHandler {
         const result = await operation(context);
         
         console.log(`[Self-Diagnose] Success on attempt ${attempt}`);
+        if (result && typeof result === "object" && !Array.isArray(result)) {
+          return {
+            ...result,
+            attempts: attempt
+          };
+        }
         return { success: true, result, attempts: attempt };
         
       } catch (error) {

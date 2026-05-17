@@ -997,7 +997,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
           if (action === "View Test Code") {
             const doc = await vscode.workspace.openTextDocument({
               content: result.testCode,
-              language: result.language
+              language: result.testCodeLanguage || result.language
             });
             await vscode.window.showTextDocument(doc);
           } else if (action === "Save Test File") {
@@ -1040,6 +1040,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
         const fs = require("fs").promises;
         let generatedTestPath = null;
         let generatedSourcePath = null;
+        let generatedTestFramework = null;
 
         if (editor?.document?.uri?.scheme === "file") {
           const relativeActivePath = vscode.workspace.asRelativePath(editor.document.fileName);
@@ -1055,14 +1056,13 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
             });
 
             if (edgeCaseResult.success) {
-              const extension = path.extname(relativeActivePath);
-              const sourceBaseName = path.basename(relativeActivePath, extension);
+              const generatedTargetPath = edgeCaseResult.testFilePath.replace(
+                /\.edge-cases\.test(?=\.)/,
+                ".edge-cases.generated.test"
+              );
               generatedSourcePath = relativeActivePath;
-              generatedTestPath = path.join(
-                path.dirname(relativeActivePath),
-                "__tests__",
-                `${sourceBaseName}.edge-cases.generated.test${extension}`
-              ).replace(/\\/g, "/");
+              generatedTestPath = generatedTargetPath.replace(/\\/g, "/");
+              generatedTestFramework = edgeCaseResult.testFramework || null;
               const absoluteGeneratedTestPath = path.join(workspaceRoot, generatedTestPath);
               await fs.mkdir(path.dirname(absoluteGeneratedTestPath), { recursive: true });
               await fs.writeFile(absoluteGeneratedTestPath, edgeCaseResult.testCode);
@@ -1073,6 +1073,7 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
         const { executeTests } = require("./ai-agent/tools/execute-tests");
         const result = await executeTests({
           testPath: generatedTestPath,
+          framework: generatedTestFramework || undefined,
           generateReport: true,
           includeEdgeCases: true,
           temporaryTestPaths: generatedTestPath ? [generatedTestPath] : []

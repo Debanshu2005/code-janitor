@@ -152,9 +152,34 @@ describe("generate-edge-cases", () => {
       expect(result.edgeCaseCount).toBeGreaterThan(0);
       expect(result.testCode).toBeDefined();
       expect(result.testFilePath).toBe("src/__tests__/calculator.edge-cases.test.js");
+      expect(result.testCodeLanguage).toBe("javascript");
+      expect(result.testFramework).toBe("jest");
       expect(result.testCode).toContain("const sourceModule = require('../calculator')");
       expect(result.testCode).toContain("resolveFunctionExport");
       expect(result.testCode).toContain("target({}, undefined)");
+    });
+
+    it("should generate runnable HTML companion tests", async () => {
+      const filePath = "src/page.html";
+      const mockContent = `
+        <!DOCTYPE html>
+        <html>
+          <body><main>Hello</main></body>
+        </html>
+      `;
+
+      fs.access.mockResolvedValue(undefined);
+      fs.readFile.mockResolvedValue(mockContent);
+
+      const result = await generateEdgeCases(filePath, mockWorkspaceRoot);
+
+      expect(result.success).toBe(true);
+      expect(result.language).toBe("html");
+      expect(result.testCodeLanguage).toBe("javascript");
+      expect(result.testFramework).toBe("jest");
+      expect(result.testFilePath).toBe("src/__tests__/page.edge-cases.test.js");
+      expect(result.testCode).toContain("source file exists and is not empty");
+      expect(result.testCode).toContain("contains an HTML root marker");
     });
     
     it("should return error for non-existent file", async () => {

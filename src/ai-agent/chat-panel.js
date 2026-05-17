@@ -5271,6 +5271,33 @@ ${trimmedText}`;
     return results;
   }
 
+  async _collectPreEditDiagnostics(workspaceFolder, fileActions = []) {
+    if (!workspaceFolder || !Array.isArray(fileActions) || fileActions.length === 0) {
+      return [];
+    }
+
+    const seen = new Set();
+    const uniqueActions = fileActions.filter(({ action }) => {
+      const key = `${String(action?.type || "file")}::${String(action?.path || "").replace(/\\/g, "/").toLowerCase()}`;
+      if (!action?.path || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    return Promise.all(
+      uniqueActions.map(async ({ action }) => ({
+        action,
+        diagnostics: await this._runPreEditDiagnostics(
+          workspaceFolder,
+          action.path,
+          action.type
+        )
+      }))
+    );
+  }
+
   async _runPostEditVerification(
     workspaceFolder,
     changedFiles,
@@ -6797,14 +6824,13 @@ ${trimmedText}`;
               type: "status",
               text: `Pre-edit check: ${fileActions.length} file(s)...`
             });
-            
-            for (const { action } of fileActions) {
-              const diagnostics = await this._runPreEditDiagnostics(
-                workspaceFolder,
-                action.path,
-                action.type
-              );
-              
+
+            const diagnosticsByAction = await this._collectPreEditDiagnostics(
+              workspaceFolder,
+              fileActions
+            );
+
+            for (const { action, diagnostics } of diagnosticsByAction) {
               // Only show issues, not successes
               if (!diagnostics.fileInfo.exists) {
                 this._postMessage({

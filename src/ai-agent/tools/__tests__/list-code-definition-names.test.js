@@ -54,6 +54,12 @@ describe("list-code-definition-names tool", () => {
       expect(getLanguage("utils.cc")).toBe("cpp");
       expect(getLanguage("header.h")).toBe("c");
       expect(getLanguage("header.hpp")).toBe("cpp");
+      expect(getLanguage("firmware.ino")).toBe("cpp");
+      expect(getLanguage("legacy.pde")).toBe("cpp");
+    });
+
+    it("should identify HTML files", () => {
+      expect(getLanguage("index.html")).toBe("html");
     });
 
     it("should return null for unsupported files", () => {
@@ -195,10 +201,12 @@ def standalone_function():
       
       const methodDef = result.definitions.find(d => d.name === "MyClass.__init__");
       expect(methodDef).toBeDefined();
+      expect(methodDef.params).toEqual([]);
       
       const funcDef = result.definitions.find(d => d.name === "standalone_function");
       expect(funcDef).toBeDefined();
       expect(funcDef.type).toBe("function");
+      expect(funcDef.params).toEqual([]);
     });
   });
 
@@ -230,6 +238,12 @@ interface MyInterface {
       const classDef = result.definitions.find(d => d.name === "MyClass");
       expect(classDef).toBeDefined();
       expect(classDef.type).toBe("class");
+      expect(classDef.methods).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "myMethod" }),
+          expect.objectContaining({ name: "calculate" })
+        ])
+      );
       
       const interfaceDef = result.definitions.find(d => d.name === "MyInterface");
       expect(interfaceDef).toBeDefined();
@@ -264,6 +278,12 @@ struct MyStruct {
       
       const classDef = result.definitions.find(d => d.name === "MyClass");
       expect(classDef).toBeDefined();
+      expect(classDef.methods).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "myMethod" }),
+          expect.objectContaining({ name: "calculate" })
+        ])
+      );
       
       const structDef = result.definitions.find(d => d.name === "MyStruct");
       expect(structDef).toBeDefined();

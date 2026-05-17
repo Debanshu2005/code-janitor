@@ -103,6 +103,24 @@ describe("ChatPanel structured edit helpers", () => {
     );
   });
 
+  test("pre-edit diagnostics dedupe repeated actions on the same file", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._runPreEditDiagnostics = jest.fn().mockResolvedValue({
+      success: true,
+      diagnostics: [],
+      fileInfo: { exists: true }
+    });
+
+    const results = await panel._collectPreEditDiagnostics("/workspace", [
+      { action: { type: "patch", path: "src/app.js" } },
+      { action: { type: "patch", path: "src/app.js" } },
+      { action: { type: "file", path: "src/app.js" } }
+    ]);
+
+    expect(panel._runPreEditDiagnostics).toHaveBeenCalledTimes(2);
+    expect(results).toHaveLength(2);
+  });
+
   test("builds patched content when whitespace differs", () => {
     const panel = Object.create(ChatPanel.prototype);
 
