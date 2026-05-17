@@ -174,8 +174,6 @@ Supported targets: one file or one directory. Supported extensions currently inc
   - Dedicated provider for test report review notes
   - Supports all configured providers including custom ones
 
-For detailed information about testing and documentation features, see [TESTING_AND_DOCUMENTATION.md](TESTING_AND_DOCUMENTATION.md).
-
 ---
 
 ## 🤖 Arduino IDE Extension
