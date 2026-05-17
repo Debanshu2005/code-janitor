@@ -56,11 +56,14 @@ Supported targets: one file or one directory. Supported extensions currently inc
 6. **AI Chat Panel**: Interact with the Code Janitor AI assistant
 7. **Self-Healing Performance**: Automatically detects slow AI responses and optimizes settings
 8. **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
-9. **Workspace Scanning**: Scan your workspace and integrate with knowledge graph for better code suggestions
+9. **Workspace Scanning**: Scan your workspace and integrate with knowledge graph for better code suggestions (significantly reduces AI token usage by providing targeted context instead of full file contents)
 10. **Graphify**: Visualize your codebase as a graph to understand component relationships
 11. **Edge Case Testing**: Automatically generate comprehensive edge cases for testing functions and classes
 12. **Test Execution & Reporting**: Execute tests with detailed reports and coverage analysis
 13. **Documentation Generation**: Automatically generate README, API docs, and contributing guides
+14. **TODO List Management**: Track and manage TODO comments across your codebase with an interactive panel
+15. **Shared Workspace Memory**: Persistent workspace context mirrored to `workspacememory.md` for multi-agent handoff
+16. **Project Planner**: Time-based todo list with progress tracking, deadline monitoring, and stagnation rescue
 
 ### Installation
 
@@ -103,9 +106,10 @@ Supported targets: one file or one directory. Supported extensions currently inc
 
 - **Smart Code Editing**: PATCH format for targeted edits (1-20 lines), FILE format for larger changes
 - **Pre-Edit Diagnostics**: Automatic file status checks before making changes
-  - Git status detection for uncommitted changes
+  - Git status detection for uncommitted changes (with automatic git repository detection)
   - Syntax validation for code files
   - File existence and readability checks
+  - Smart path resolution to prevent targeting wrong files
 - **Post-Edit Verification**: Automatic validation after code changes
   - Syntax checking for Python, Java, JavaScript/TypeScript
   - npm script execution (lint, typecheck, build, test)
@@ -127,11 +131,13 @@ Supported targets: one file or one directory. Supported extensions currently inc
   - Powered by DuckDuckGo
 - **Self-Healing**: Automatically detects slow models and switches to faster alternatives
 - **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
+- **Improved File Operations**: Enhanced FILE action processing with detailed logging and double-apply prevention
 - **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
    - Track response times
    - Monitor model performance
    - View auto-heal history
    - Get optimization recommendations
+   - Automatic detection of degraded models with fallback suggestions
 - **Edge Case Testing**: Generate comprehensive edge cases for functions and classes
   - Automatic boundary value analysis
   - Security test cases (XSS, SQL injection)
@@ -147,8 +153,26 @@ Supported targets: one file or one directory. Supported extensions currently inc
   - API documentation for classes and functions
   - Contributing guides with best practices
   - Full documentation suite generation
-
-For detailed information about testing and documentation features, see [TESTING_AND_DOCUMENTATION.md](TESTING_AND_DOCUMENTATION.md).
+- **TODO List Management**: Interactive TODO tracking panel
+  - Scans workspace for TODO, FIXME, HACK, NOTE comments
+  - Click to jump to TODO location in code
+  - Filter by file, priority, or keyword
+  - Mark TODOs as complete or add new ones
+- **Shared Workspace Memory**: Persistent context ledger for multi-agent collaboration
+  - Template-based or AI-rewritten workspace summaries
+  - Mirrored to `workspacememory.md` at workspace root
+  - Configurable preferred provider
+  - Enables seamless handoff between agents without rescanning
+- **Project Planner**: AI-powered project management with progress tracking
+  - Toggle planner mode with outcome, deadline, and stagnation settings
+  - Generates time-based todo lists from project outcomes
+  - Pinned progress bar in chat header
+  - Automatic rescue briefs when progress stalls
+  - Provider-backed plan regeneration without silent code edits
+- **Provider-Specific Testing**: Configure dedicated AI providers for testing workflows
+  - Separate provider for edge-case generation
+  - Dedicated provider for test report review notes
+  - Supports all configured providers including custom ones
 
 ---
 
