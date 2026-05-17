@@ -1,6 +1,7 @@
-# Ignore all markdown files except README.md
+# Ignore all markdown files except README.md and bob_sessions
 *.md
 !README.md
+!bob_sessions/*.md
 
 # Node modules
 node_modules/
