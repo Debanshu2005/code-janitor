@@ -63,13 +63,14 @@ const TEST_FRAMEWORKS = {
   python: {
     pytest: {
       pattern: /pytest/i,
-      command: "pytest --verbose --json-report",
+      command: "pytest --verbose",
       configFiles: ["pytest.ini", "pyproject.toml"],
-      testPattern: /test_.*\.py$|.*_test\.py$/
+      testPattern: /test_.*\.py$|.*_test\.py$/,
+      fallbackCommand: "python -m pytest --verbose"
     },
     unittest: {
       pattern: /unittest/i,
-      command: "python -m unittest discover",
+      command: "python -m unittest discover -v",
       configFiles: [],
       testPattern: /test_.*\.py$/
     }
@@ -327,6 +328,27 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
       commandFailed = true;
       testOutput = error.stdout || "";
       testError = error.stderr || error.message;
+      
+      // Handle pytest not installed - try fallback to unittest
+      if (detectedFramework.name === "pytest" &&
+          (testError.includes("not recognized") || testError.includes("not found") || testError.includes("No module named"))) {
+        try {
+          const unittestFramework = TEST_FRAMEWORKS.python.unittest;
+          const unittestCommand = testPath
+            ? `${unittestFramework.command} -s ${quoteShellArg(path.dirname(testPath))}`
+            : unittestFramework.command;
+          const unittestResult = await execAsync(unittestCommand, {
+            cwd: workspaceRoot,
+            maxBuffer: 10 * 1024 * 1024
+          });
+          testOutput = unittestResult.stdout;
+          testError = unittestResult.stderr;
+          commandFailed = false;
+          detectedFramework.name = "unittest";
+        } catch (unittestError) {
+          testError = `pytest not installed. Install with: pip install pytest\n\nFallback to unittest also failed: ${unittestError.message}`;
+        }
+      }
     }
     
     const duration = Date.now() - startTime;

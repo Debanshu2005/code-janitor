@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.23.9",
+  "version": "1.24.0",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -308,7 +308,6 @@
           "default": "",
           "description": "Preferred provider id for AI-assisted edge-case generation and test review. Leave empty to use the current chat provider."
         }
-
       }
     },
     "commands": [
@@ -496,7 +495,10 @@
   "scripts": {
     "start": "node src/cli.js",
     "build": "npm run package",
-    "test": "jest",
+    "test": "node node_modules/jest/bin/jest.js",
+    "test:setup": "node setup-tests.js",
+    "test:watch": "node node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node node_modules/jest/bin/jest.js --coverage",
     "lint": "eslint src/**/*.js",
     "lint:fix": "eslint --fix src/**/*.js",
     "format:js": "prettier --write \"src/**/*.js\"",
@@ -517,17 +519,18 @@
     "@babel/types": "^7.26.0",
     "eslint": "^8.57.1",
     "fs-extra": "^11.3.2",
-    "parse5": "^8.0.0",
-    "prettier": "^3.6.2",
-    "parent-module": "^1.0.1",
-    "import-fresh": "^3.3.0",
+    "glob-parent": "^6.0.2",
     "globals": "^13.24.0",
-    "glob-parent": "^6.0.2"
+    "import-fresh": "^3.3.0",
+    "parent-module": "^1.0.1",
+    "parse5": "^8.0.0",
+    "prettier": "^3.6.2"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.32.0",
     "adm-zip": "^0.5.16",
     "axios": "^1.15.2",
+    "baseline-browser-mapping": "^2.10.30",
     "cross-env": "^7.0.3",
     "jest": "^29.7.0",
     "rimraf": "^5.0.1"
