@@ -190,14 +190,45 @@ function serializeJavaValue(value) {
   return JSON.stringify(value);
 }
 
-function buildInvocationValues(testCase, serializer) {
+function buildInvocationValues(edgeCase, serializer) {
+  const { testCase, parameterCount = 0, parameterIndex } = edgeCase || {};
+
   if (Array.isArray(testCase?.values)) {
     return testCase.values.map((value) => serializer(value));
   }
+
   if (Object.prototype.hasOwnProperty.call(testCase || {}, "value")) {
+    if (Number.isInteger(parameterIndex) && parameterCount > 1) {
+      const invocationValues = Array.from(
+        { length: parameterCount },
+        () => serializer(undefined)
+      );
+      invocationValues[parameterIndex] = serializer(testCase.value);
+      return invocationValues;
+    }
+
     return [serializer(testCase.value)];
   }
+
+  if (parameterCount > 0) {
+    return Array.from({ length: parameterCount }, () => serializer(undefined));
+  }
+
   return [];
+}
+
+function buildJavaScriptRequirePath(fileName) {
+  const normalizedFilePath = String(fileName || "").replace(/\\/g, "/");
+  const sourceDirectory = path.posix.dirname(normalizedFilePath);
+  const testDirectory = path.posix.join(sourceDirectory, "__tests__");
+  let relativeImport = path.posix.relative(testDirectory, normalizedFilePath);
+  relativeImport = relativeImport.replace(/\.[^.]+$/, "");
+
+  if (!relativeImport.startsWith(".")) {
+    relativeImport = `./${relativeImport}`;
+  }
+
+  return relativeImport;
 }
 
 async function generateAiEdgeCases(
@@ -350,6 +381,7 @@ function generateFunctionEdgeCases(functionDef) {
         functionName: name,
         parameterIndex: index,
         parameterName: paramName,
+        parameterCount: params.length,
         testCase: edgeCase,
         category: paramType
       });
@@ -360,6 +392,7 @@ function generateFunctionEdgeCases(functionDef) {
   if (params.length > 1) {
     edgeCases.push({
       functionName: name,
+      parameterCount: params.length,
       testCase: {
         description: "All parameters null",
         values: params.map(() => null)
@@ -369,6 +402,7 @@ function generateFunctionEdgeCases(functionDef) {
     
     edgeCases.push({
       functionName: name,
+      parameterCount: params.length,
       testCase: {
         description: "All parameters undefined",
         values: params.map(() => undefined)
@@ -502,14 +536,44 @@ function generateTestCode(edgeCases, language, fileName) {
  * Generate JavaScript/TypeScript test
  */
 function generateJavaScriptTest(testName, edgeCase) {
-  const { functionName, testCase } = edgeCase;
-  const values = buildInvocationValues(testCase, serializeJavaScriptValue);
+  const { functionName, className, methodName, testCase } = edgeCase;
+  const values = buildInvocationValues(edgeCase, serializeJavaScriptValue);
   const invocation = values.join(", ");
-  
+
+  if (className && methodName) {
+    return `
+  test('${testName}', () => {
+    // ${testCase.description}
+    const instance = createInstance('${className}');
+    expect(instance).toBeDefined();
+    expect(typeof instance['${methodName}']).toBe('function');
+    expect(() => instance['${methodName}'](${invocation})).not.toThrow();
+  });`;
+  }
+
+  if (className && testCase?.type === "constructor") {
+    return `
+  test('${testName}', () => {
+    // ${testCase.description}
+    const TargetClass = resolveClassExport('${className}');
+    expect(() => new TargetClass()).not.toThrow();
+  });`;
+  }
+
+  if (functionName) {
+    return `
+  test('${testName}', () => {
+    // ${testCase.description}
+    const target = resolveFunctionExport('${functionName}');
+    expect(typeof target).toBe('function');
+    expect(() => target(${invocation})).not.toThrow();
+  });`;
+  }
+
   return `
   test('${testName}', () => {
     // ${testCase.description}
-    expect(() => ${functionName}(${invocation})).not.toThrow();
+    expect(true).toBe(true);
   });`;
 }
 
@@ -518,7 +582,7 @@ function generateJavaScriptTest(testName, edgeCase) {
  */
 function generatePythonTest(testName, edgeCase) {
   const { functionName, testCase } = edgeCase;
-  const invocation = buildInvocationValues(testCase, serializePythonValue).join(", ");
+  const invocation = buildInvocationValues(edgeCase, serializePythonValue).join(", ");
   
   return `
     def test_${testName}(self):
@@ -536,7 +600,7 @@ function generatePythonTest(testName, edgeCase) {
  */
 function generateJavaTest(testName, edgeCase) {
   const { functionName, testCase } = edgeCase;
-  const invocation = buildInvocationValues(testCase, serializeJavaValue).join(", ");
+  const invocation = buildInvocationValues(edgeCase, serializeJavaValue).join(", ");
   
   return `
     @Test
@@ -555,12 +619,51 @@ function wrapTestCases(testCases, language, fileName) {
   const baseName = path.basename(fileName, path.extname(fileName));
   
   if (language === "javascript" || language === "typescript") {
+    const requirePath = buildJavaScriptRequirePath(fileName);
     return `/**
  * Edge case tests for ${fileName}
  * Generated by Code Janitor
  */
 
-const { ${baseName} } = require('./${baseName}');
+const sourceModule = require('${requirePath}');
+const defaultExport = sourceModule && sourceModule.default ? sourceModule.default : sourceModule;
+
+function resolveFunctionExport(name) {
+  if (sourceModule && typeof sourceModule[name] === 'function') {
+    return sourceModule[name];
+  }
+  if (defaultExport && typeof defaultExport[name] === 'function') {
+    return defaultExport[name];
+  }
+  if (typeof defaultExport === 'function') {
+    return defaultExport;
+  }
+  if (typeof sourceModule === 'function') {
+    return sourceModule;
+  }
+  throw new Error(\`Could not resolve function export: \${name}\`);
+}
+
+function resolveClassExport(name) {
+  if (sourceModule && typeof sourceModule[name] === 'function') {
+    return sourceModule[name];
+  }
+  if (defaultExport && typeof defaultExport[name] === 'function') {
+    return defaultExport[name];
+  }
+  if (typeof defaultExport === 'function') {
+    return defaultExport;
+  }
+  if (typeof sourceModule === 'function') {
+    return sourceModule;
+  }
+  throw new Error(\`Could not resolve class export: \${name}\`);
+}
+
+function createInstance(name) {
+  const TargetClass = resolveClassExport(name);
+  return new TargetClass();
+}
 
 describe('${baseName} - Edge Cases', () => {
 ${testCases.join("\n")}
@@ -675,8 +778,8 @@ async function generateEdgeCases(filePath, workspaceRoot, executionContext = {})
     const testCode = generateTestCode(mergedEdgeCases, language, filePath);
     
     // Determine test file path
-    const testFileName = path.basename(filePath, path.extname(filePath)) + 
-                        ".edge-cases" + path.extname(filePath);
+    const testFileName = path.basename(filePath, path.extname(filePath)) +
+                        ".edge-cases.test" + path.extname(filePath);
     const testFilePath = path.join(path.dirname(absolutePath), "__tests__", testFileName);
     
     return {
@@ -686,7 +789,7 @@ async function generateEdgeCases(filePath, workspaceRoot, executionContext = {})
       edgeCaseCount: mergedEdgeCases.length,
       edgeCases: mergedEdgeCases,
       testCode,
-      testFilePath: path.relative(workspaceRoot, testFilePath),
+      testFilePath: path.relative(workspaceRoot, testFilePath).replace(/\\/g, "/"),
       aiNotes: aiResult.notes || [],
       aiAugmentedCount: Array.isArray(aiResult.edgeCases)
         ? aiResult.edgeCases.length

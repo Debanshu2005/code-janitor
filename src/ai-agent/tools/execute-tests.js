@@ -32,20 +32,31 @@ const TEST_FRAMEWORKS = {
   javascript: {
     jest: {
       pattern: /jest/i,
-      command: "npm test",
-      configFiles: ["jest.config.js", "jest.config.json"],
+      command: "npx jest",
+      configFiles: [
+        "jest.config.js",
+        "jest.config.cjs",
+        "jest.config.mjs",
+        "jest.config.ts",
+        "jest.config.json"
+      ],
       testPattern: /\.(test|spec)\.(js|ts|jsx|tsx)$/
     },
     mocha: {
       pattern: /mocha/i,
-      command: "npm test",
-      configFiles: [".mocharc.json", ".mocharc.js"],
+      command: "npx mocha",
+      configFiles: [".mocharc.json", ".mocharc.js", ".mocharc.cjs"],
       testPattern: /\.(test|spec)\.(js|ts)$/
     },
     vitest: {
       pattern: /vitest/i,
-      command: "npm test",
-      configFiles: ["vitest.config.js", "vitest.config.ts"],
+      command: "npx vitest run",
+      configFiles: [
+        "vitest.config.js",
+        "vitest.config.mjs",
+        "vitest.config.cjs",
+        "vitest.config.ts"
+      ],
       testPattern: /\.(test|spec)\.(js|ts|jsx|tsx)$/
     }
   },
@@ -91,6 +102,55 @@ function getAiTestingProvider() {
       .getConfiguration("codeJanitor.testing.aiAssist")
       .get("provider", "") || ""
   ).trim();
+}
+
+function quoteShellArg(value) {
+  return `"${String(value || "").replace(/"/g, '\\"')}"`;
+}
+
+function buildTestCommand(framework, testPath) {
+  if (!testPath) {
+    return framework.command;
+  }
+
+  const quotedPath = quoteShellArg(testPath);
+
+  if (framework.name === "jest") {
+    return `${framework.command} --runTestsByPath ${quotedPath}`;
+  }
+
+  if (framework.name === "vitest") {
+    return `${framework.command} ${quotedPath}`;
+  }
+
+  if (framework.name === "mocha" || framework.name === "pytest") {
+    return `${framework.command} ${quotedPath}`;
+  }
+
+  return framework.command;
+}
+
+async function cleanupTemporaryTestFiles(temporaryTestPaths, workspaceRoot) {
+  const removed = [];
+  const failed = [];
+
+  for (const testPath of temporaryTestPaths) {
+    const absolutePath = path.isAbsolute(testPath)
+      ? testPath
+      : path.join(workspaceRoot, testPath);
+
+    try {
+      await fs.unlink(absolutePath);
+      removed.push(path.relative(workspaceRoot, absolutePath).replace(/\\/g, "/"));
+    } catch (error) {
+      failed.push({
+        path: path.relative(workspaceRoot, absolutePath).replace(/\\/g, "/"),
+        error: error.message
+      });
+    }
+  }
+
+  return { removed, failed };
 }
 
 async function generateAiTestingReview(
@@ -145,9 +205,13 @@ async function detectTestFramework(workspaceRoot, language) {
         ...packageJson.dependencies,
         ...packageJson.devDependencies
       };
+      const testScript = String(packageJson.scripts?.test || "");
       
       for (const [name, framework] of Object.entries(frameworks)) {
         if (Object.keys(dependencies).some(dep => framework.pattern.test(dep))) {
+          return { name, ...framework };
+        }
+        if (testScript && framework.pattern.test(testScript)) {
           return { name, ...framework };
         }
       }
@@ -210,7 +274,8 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
     testPath = null,
     framework = null,
     generateReport = true,
-    includeEdgeCases = true
+    includeEdgeCases = true,
+    temporaryTestPaths = []
   } = options;
   
   try {
@@ -244,9 +309,7 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
     }
     
     // Execute tests
-    const testCommand = testPath
-      ? `${detectedFramework.command} ${testPath}`
-      : detectedFramework.command;
+    const testCommand = buildTestCommand(detectedFramework, testPath);
     
     const startTime = Date.now();
     let testOutput;
@@ -297,6 +360,11 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
         aiReview
       });
     }
+
+    let cleanup = null;
+    if (temporaryTestPaths.length > 0 && results.failed === 0) {
+      cleanup = await cleanupTemporaryTestFiles(temporaryTestPaths, workspaceRoot);
+    }
     
     return {
       success: true,
@@ -306,6 +374,7 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
       report,
       aiReview,
       duration,
+      cleanup,
       summary: {
         total: results.total,
         passed: results.passed,
@@ -562,7 +631,8 @@ module.exports = {
   detectTestFramework,
   findTestFiles,
   parseTestResults,
-  generateTestReport
+  generateTestReport,
+  buildTestCommand
 };
 
 // Made with Bob

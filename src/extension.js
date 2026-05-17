@@ -1035,10 +1035,47 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
 
         vscode.window.showInformationMessage("Executing tests...");
 
+        const editor = vscode.window.activeTextEditor;
+        const path = require("path");
+        const fs = require("fs").promises;
+        let generatedTestPath = null;
+        let generatedSourcePath = null;
+
+        if (editor?.document?.uri?.scheme === "file") {
+          const relativeActivePath = vscode.workspace.asRelativePath(editor.document.fileName);
+          const { getLanguage } = require("./ai-agent/tools/list-code-definition-names");
+          const activeLanguage = getLanguage(relativeActivePath);
+          const isExistingTestFile = /\.(test|spec)\.[^.]+$/i.test(relativeActivePath);
+
+          if (activeLanguage && !isExistingTestFile) {
+            const { generateEdgeCases } = require("./ai-agent/tools/generate-edge-cases");
+            const edgeCaseResult = await generateEdgeCases(relativeActivePath, workspaceRoot, {
+              context,
+              agent: chatPanelInstance?.agent || backgroundAiAgent
+            });
+
+            if (edgeCaseResult.success) {
+              const extension = path.extname(relativeActivePath);
+              const sourceBaseName = path.basename(relativeActivePath, extension);
+              generatedSourcePath = relativeActivePath;
+              generatedTestPath = path.join(
+                path.dirname(relativeActivePath),
+                "__tests__",
+                `${sourceBaseName}.edge-cases.generated.test${extension}`
+              ).replace(/\\/g, "/");
+              const absoluteGeneratedTestPath = path.join(workspaceRoot, generatedTestPath);
+              await fs.mkdir(path.dirname(absoluteGeneratedTestPath), { recursive: true });
+              await fs.writeFile(absoluteGeneratedTestPath, edgeCaseResult.testCode);
+            }
+          }
+        }
+
         const { executeTests } = require("./ai-agent/tools/execute-tests");
         const result = await executeTests({
+          testPath: generatedTestPath,
           generateReport: true,
-          includeEdgeCases: true
+          includeEdgeCases: true,
+          temporaryTestPaths: generatedTestPath ? [generatedTestPath] : []
         }, workspaceRoot, {
           context,
           agent: chatPanelInstance?.agent || backgroundAiAgent
@@ -1050,7 +1087,10 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
             ? ((summary.passed / summary.total) * 100).toFixed(2) 
             : 0;
 
-          const message = `Tests: ${summary.passed}/${summary.total} passed (${successRate}%)`;
+          const scopeLabel = generatedSourcePath
+            ? `Generated edge-case tests for ${generatedSourcePath}`
+            : "Tests";
+          const message = `${scopeLabel}: ${summary.passed}/${summary.total} passed (${successRate}%)`;
           const action = await vscode.window.showInformationMessage(
             message,
             "View Report",
@@ -1071,13 +1111,32 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
               `Failed: ${summary.failed}\n` +
               `Skipped: ${summary.skipped}\n` +
               `Duration: ${(summary.duration / 1000).toFixed(2)}s\n` +
-              `Success Rate: ${successRate}%`;
+              `Success Rate: ${successRate}%\n` +
+              `Generated Test File: ${
+                generatedTestPath
+                  ? result.cleanup?.removed?.includes(generatedTestPath)
+                    ? `Removed after success (${generatedTestPath})`
+                    : summary.failed > 0
+                      ? `Kept for inspection (${generatedTestPath})`
+                      : generatedTestPath
+                  : "Not used"
+              }`;
             
             const doc = await vscode.workspace.openTextDocument({
               content: details,
               language: "plaintext"
             });
             await vscode.window.showTextDocument(doc);
+          }
+
+          if (generatedTestPath && summary.failed > 0) {
+            vscode.window.showWarningMessage(
+              `Generated test file kept for inspection: ${generatedTestPath}`
+            );
+          } else if (generatedTestPath && result.cleanup?.failed?.length) {
+            vscode.window.showWarningMessage(
+              `Tests passed, but cleanup failed for: ${result.cleanup.failed.map((item) => item.path).join(", ")}`
+            );
           }
         } else {
           vscode.window.showErrorMessage(`Test execution failed: ${result.error}`);

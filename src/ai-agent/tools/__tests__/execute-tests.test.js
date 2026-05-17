@@ -10,10 +10,12 @@ const {
   detectTestFramework,
   findTestFiles,
   parseTestResults,
-  generateTestReport
+  generateTestReport,
+  buildTestCommand
 } = require("../execute-tests");
 const fs = require("fs").promises;
 const { exec } = require("child_process");
+const path = require("path");
 
 // Mock dependencies
 jest.mock("fs", () => ({
@@ -22,7 +24,8 @@ jest.mock("fs", () => ({
     writeFile: jest.fn(),
     mkdir: jest.fn(),
     readdir: jest.fn(),
-    access: jest.fn()
+    access: jest.fn(),
+    unlink: jest.fn()
   }
 }));
 
@@ -80,6 +83,21 @@ describe("execute-tests", () => {
       
       expect(framework).toBeDefined();
       expect(framework.name).toBe("pytest");
+    });
+
+    it("should detect Jest from the test script", async () => {
+      const mockPackageJson = {
+        scripts: {
+          test: "jest --runInBand"
+        }
+      };
+
+      fs.readFile.mockResolvedValue(JSON.stringify(mockPackageJson));
+
+      const framework = await detectTestFramework(mockWorkspaceRoot, "javascript");
+
+      expect(framework).toBeDefined();
+      expect(framework.name).toBe("jest");
     });
     
     it("should return null for unsupported language", async () => {
@@ -241,6 +259,17 @@ describe("execute-tests", () => {
       expect(report.markdown).toContain("Error in test B");
     });
   });
+
+  describe("buildTestCommand", () => {
+    it("should build a Jest command for a specific test file", () => {
+      const command = buildTestCommand(
+        { name: "jest", command: "npx jest" },
+        "src/__tests__/cli.test.js"
+      );
+
+      expect(command).toBe('npx jest --runTestsByPath "src/__tests__/cli.test.js"');
+    });
+  });
   
   describe("executeTests", () => {
     it("should execute tests and return results", async () => {
@@ -261,12 +290,14 @@ describe("execute-tests", () => {
       
       const result = await executeTests({
         framework: "jest",
-        testPath: "app.test.js"
+        testPath: "app.test.js",
+        temporaryTestPaths: ["app.test.js"]
       }, mockWorkspaceRoot);
       
       expect(result.success).toBe(true);
       expect(result.framework).toBe("jest");
       expect(result.results).toBeDefined();
+      expect(fs.unlink).toHaveBeenCalledWith(path.join(mockWorkspaceRoot, "app.test.js"));
     });
     
     it("should handle test execution errors", async () => {

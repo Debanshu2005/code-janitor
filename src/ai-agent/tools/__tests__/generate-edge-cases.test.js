@@ -151,7 +151,10 @@ describe("generate-edge-cases", () => {
       expect(result.language).toBe("javascript");
       expect(result.edgeCaseCount).toBeGreaterThan(0);
       expect(result.testCode).toBeDefined();
-      expect(result.testFilePath).toBeDefined();
+      expect(result.testFilePath).toBe("src/__tests__/calculator.edge-cases.test.js");
+      expect(result.testCode).toContain("const sourceModule = require('../calculator')");
+      expect(result.testCode).toContain("resolveFunctionExport");
+      expect(result.testCode).toContain("target({}, undefined)");
     });
     
     it("should return error for non-existent file", async () => {

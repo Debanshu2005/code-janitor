@@ -15,6 +15,63 @@ const traverse = require("@babel/traverse").default;
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_DEFINITIONS_PER_FILE = 500;
 
+function extractTypeAnnotationName(typeAnnotation) {
+  const annotation = typeAnnotation?.typeAnnotation;
+  if (!annotation) {
+    return "";
+  }
+
+  if (annotation.type === "TSStringKeyword") return "string";
+  if (annotation.type === "TSNumberKeyword") return "number";
+  if (annotation.type === "TSBooleanKeyword") return "boolean";
+  if (annotation.type === "TSArrayType") return "array";
+  if (annotation.type === "TSFunctionType") return "function";
+  if (annotation.type === "TSTypeReference") {
+    return annotation.typeName?.name || "";
+  }
+
+  return "";
+}
+
+function extractJavaScriptParam(param, index) {
+  if (!param) {
+    return { name: `param${index}` };
+  }
+
+  if (param.type === "Identifier") {
+    return {
+      name: param.name,
+      type: extractTypeAnnotationName(param.typeAnnotation)
+    };
+  }
+
+  if (param.type === "AssignmentPattern") {
+    return extractJavaScriptParam(param.left, index);
+  }
+
+  if (param.type === "RestElement") {
+    const inner = extractJavaScriptParam(param.argument, index);
+    return {
+      ...inner,
+      name: inner.name ? `...${inner.name}` : `...param${index}`
+    };
+  }
+
+  if (param.type === "ObjectPattern") {
+    return { name: `objectParam${index}` };
+  }
+
+  if (param.type === "ArrayPattern") {
+    return { name: `arrayParam${index}` };
+  }
+
+  return { name: `param${index}` };
+}
+
+function extractJavaScriptParams(params = []) {
+  return params.map((param, index) => extractJavaScriptParam(param, index));
+}
+
 /**
  * Supported file extensions and their language mappings
  */
@@ -42,6 +99,7 @@ const LANGUAGE_MAP = {
 function parseJavaScript(content, filePath) {
   const definitions = [];
   const isTypeScript = filePath.endsWith(".ts") || filePath.endsWith(".tsx");
+  const classDefinitions = new Map();
   
   try {
     const ast = babelParser.parse(content, {
@@ -65,12 +123,15 @@ function parseJavaScript(content, filePath) {
       ClassDeclaration(path) {
         const node = path.node;
         if (node.id) {
-          definitions.push({
+          const classDefinition = {
             type: "class",
             name: node.id.name,
             line: node.loc?.start.line || 0,
-            kind: "declaration"
-          });
+            kind: "declaration",
+            methods: []
+          };
+          definitions.push(classDefinition);
+          classDefinitions.set(node.id.name, classDefinition);
         }
       },
       
@@ -82,7 +143,8 @@ function parseJavaScript(content, filePath) {
             type: "function",
             name: node.id.name,
             line: node.loc?.start.line || 0,
-            kind: node.async ? "async function" : "function"
+            kind: node.async ? "async function" : "function",
+            params: extractJavaScriptParams(node.params)
           });
         }
       },
@@ -96,7 +158,8 @@ function parseJavaScript(content, filePath) {
               type: "function",
               name: node.id.name,
               line: node.loc?.start.line || 0,
-              kind: node.init.type === "ArrowFunctionExpression" ? "arrow function" : "function expression"
+              kind: node.init.type === "ArrowFunctionExpression" ? "arrow function" : "function expression",
+              params: extractJavaScriptParams(node.init.params)
             });
           }
         }
@@ -107,11 +170,20 @@ function parseJavaScript(content, filePath) {
         const node = path.node;
         if (node.key && node.key.type === "Identifier") {
           const className = path.findParent(p => p.isClassDeclaration())?.node?.id?.name || "anonymous";
+          const methodDefinition = {
+            name: node.key.name,
+            params: extractJavaScriptParams(node.params)
+          };
+          const classDefinition = classDefinitions.get(className);
+          if (classDefinition) {
+            classDefinition.methods.push(methodDefinition);
+          }
           definitions.push({
             type: "method",
             name: `${className}.${node.key.name}`,
             line: node.loc?.start.line || 0,
-            kind: node.kind === "constructor" ? "constructor" : node.static ? "static method" : "method"
+            kind: node.kind === "constructor" ? "constructor" : node.static ? "static method" : "method",
+            params: methodDefinition.params
           });
         }
       },
@@ -124,7 +196,8 @@ function parseJavaScript(content, filePath) {
             type: "method",
             name: node.key.name,
             line: node.loc?.start.line || 0,
-            kind: "object method"
+            kind: "object method",
+            params: extractJavaScriptParams(node.params)
           });
         }
       },
