@@ -3206,7 +3206,9 @@ ${fileContent}
 
   async _openDraftFile(filePath, content) {
     const suggested = (filePath || "untitled.txt").replace(/\\/g, "/").replace(/^\/+/, "");
-    const uri = vscode.Uri.parse(`untitled:${encodeURI(suggested)}`);
+    const draftBasePath = this._getEffectiveWorkspaceFolder() || os.homedir();
+    const draftAbsolutePath = path.join(draftBasePath, suggested);
+    const uri = vscode.Uri.file(draftAbsolutePath).with({ scheme: "untitled" });
     const document = await vscode.workspace.openTextDocument(uri);
     const editor = await vscode.window.showTextDocument(document, { preview: false });
     await editor.edit((editBuilder) => {
@@ -7904,6 +7906,21 @@ ${trimmedText}`;
         this._postSessionState();
       } else if (message.type === "openChatCommand") {
         await vscode.commands.executeCommand("codeJanitor.openChat");
+      } else if (message.type === "runShortcutCommand") {
+        const allowedCommands = new Set([
+          "codeJanitor.generateEdgeCases",
+          "codeJanitor.executeTests",
+          "codeJanitor.generateDocumentation"
+        ]);
+        const command = String(message.command || "").trim();
+        if (!allowedCommands.has(command)) {
+          this._postMessage({
+            type: "error",
+            text: `Unsupported shortcut command: ${command || "unknown"}`
+          });
+          return;
+        }
+        await vscode.commands.executeCommand(command);
       } else if (message.type === "openFile") {
         await this._revealWorkspaceFile(message.path);
       } else if (message.type === "scanOverview") {
@@ -8146,6 +8163,8 @@ ${trimmedText}`;
               text: `Custom provider ${provider.name} added and selected.`
             });
           }
+          await this._postWorkspaceMemorySettings();
+          this._fetchAndSendModels(provider.id);
         } catch (error) {
           if (this.panel) {
             this._postMessage({

@@ -3541,6 +3541,33 @@
         setFocusMode(false);
       });
 
+      document.addEventListener("keydown", function (event) {
+        var key = String(event.key || "").toLowerCase();
+        var command = "";
+        var isPlainAlt = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        var isDocsShortcut =
+          key === "d" &&
+          event.altKey &&
+          !event.shiftKey &&
+          ((event.ctrlKey && !event.metaKey) || (event.metaKey && !event.ctrlKey));
+
+        if (isPlainAlt && key === "e") {
+          command = "codeJanitor.generateEdgeCases";
+        } else if (isPlainAlt && key === "t") {
+          command = "codeJanitor.executeTests";
+        } else if (isDocsShortcut) {
+          command = "codeJanitor.generateDocumentation";
+        }
+
+        if (!command) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({ type: "runShortcutCommand", command: command });
+      });
+
       function setUndoButtonState(canUndo, undoId) {
         if (typeof undoId !== "undefined") {
           latestUndoId = undoId || null;
