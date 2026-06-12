@@ -114,8 +114,8 @@ class GraphifyPanel {
 
     const rootPath = workspaceFolders[0].uri.fsPath;
     const graphData =
-      (await this._loadGeneratedGraphData(rootPath)) ||
-      (await this.buildGraphData(rootPath));
+      (await this.buildGraphData(rootPath)) ||
+      (await this._loadGeneratedGraphData(rootPath));
 
     this.panel.webview.postMessage({
       command: "renderGraph",
@@ -213,93 +213,12 @@ class GraphifyPanel {
   }
 
   async buildGraphData(rootPath) {
-    const nodes = [];
-    const edges = [];
-    const fileMap = new Map();
-    const pendingEdges = [];
-    let nodeId = 0;
-
-    const codeExtensions = /\.(js|jsx|ts|tsx|mjs|cjs|py|java|c|cpp|h|hpp|ino|cs|go|rb|php|rs)$/i;
-    const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__"]);
-
-    const scanDirectory = async (dirPath, depth = 0) => {
-      if (depth > 5) return;
-
-      try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-        for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name);
-          const relativePath = path.relative(rootPath, fullPath);
-
-          if (entry.isDirectory()) {
-            if (ignoreDirs.has(entry.name)) continue;
-
-            const dirNodeId = nodeId++;
-            nodes.push({
-              id: dirNodeId,
-              label: entry.name,
-              type: "directory",
-              path: relativePath,
-              group: depth
-            });
-
-            fileMap.set(relativePath, dirNodeId);
-            await scanDirectory(fullPath, depth + 1);
-          } else if (codeExtensions.test(entry.name)) {
-            const fileNodeId = nodeId++;
-            const ext = path.extname(entry.name).slice(1);
-
-            nodes.push({
-              id: fileNodeId,
-              label: entry.name,
-              type: "file",
-              extension: ext,
-              path: relativePath,
-              group: depth
-            });
-
-            fileMap.set(relativePath, fileNodeId);
-
-            try {
-              const content = await fs.readFile(fullPath, "utf8");
-              const dependencies = this.extractDependencies(content, ext);
-
-              for (const dep of dependencies) {
-                pendingEdges.push({
-                  from: fileNodeId,
-                  dep,
-                  dirPath
-                });
-              }
-            } catch (err) {
-              // Skip files that can't be read
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`Error scanning ${dirPath}:`, err);
-      }
-    };
-
-    await scanDirectory(rootPath);
-
-    for (const pendingEdge of pendingEdges) {
-      const depPath = this.resolveDependencyPath(
-        pendingEdge.dep,
-        pendingEdge.dirPath,
-        rootPath
-      );
-      if (depPath && fileMap.has(depPath)) {
-        edges.push({
-          from: pendingEdge.from,
-          to: fileMap.get(depPath),
-          label: "imports"
-        });
-      }
-    }
-
-    return { nodes, edges };
+    const analyzer = new GraphifyAnalyzer(rootPath);
+    await analyzer.analyzeCodebase();
+    analyzer.detectCommunities();
+    return this._convertKnowledgeGraphToViewData(
+      analyzer.getSerializableGraph()
+    );
   }
 
   extractDependencies(content, extension) {

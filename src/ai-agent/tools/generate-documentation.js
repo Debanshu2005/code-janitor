@@ -7,6 +7,7 @@
 const fs = require("fs").promises;
 const path = require("path");
 const { parseFile, getLanguage } = require("./list-code-definition-names");
+const { runProviderPrompt } = require("../provider-utils");
 
 /**
  * Documentation templates
@@ -40,52 +41,276 @@ const DOC_TEMPLATES = {
   }
 };
 
+const MAX_AI_SUMMARY_FILES = 20;
+const MAX_AI_SUMMARY_FUNCTIONS = 20;
+const MAX_AI_SUMMARY_CLASSES = 20;
+const MAX_AI_SUMMARY_DEPENDENCIES = 24;
+const MAX_AI_SUMMARY_SCRIPTS = 16;
+
+function extractJsonPayload(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch ? fencedMatch[1].trim() : raw;
+  const firstBrace = candidate.indexOf("{");
+  const lastBrace = candidate.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+  } catch {
+    return null;
+  }
+}
+
+function buildDocumentationAiSummary(analysis) {
+  return {
+    repository: {
+      name: analysis.name,
+      description: analysis.description || "",
+      version: analysis.version || "",
+      fileCount: Array.isArray(analysis.files) ? analysis.files.length : 0,
+      classCount: Array.isArray(analysis.classes) ? analysis.classes.length : 0,
+      functionCount: Array.isArray(analysis.functions) ? analysis.functions.length : 0,
+      languages: Object.keys(analysis.languageStats || {}),
+      sourceFiles: (analysis.files || []).slice(0, MAX_AI_SUMMARY_FILES),
+      dependencies: Object.keys(analysis.dependencies || {}).slice(
+        0,
+        MAX_AI_SUMMARY_DEPENDENCIES
+      ),
+      scripts: Object.keys(analysis.scripts || {}).slice(0, MAX_AI_SUMMARY_SCRIPTS)
+    },
+    classes: (analysis.classes || [])
+      .slice(0, MAX_AI_SUMMARY_CLASSES)
+      .map((item) => ({
+        name: item.name,
+        file: item.file,
+        methodCount: Array.isArray(item.methods) ? item.methods.length : 0,
+        methods: (item.methods || []).slice(0, 8).map((method) => ({
+          name: method.name,
+          params: (method.params || []).map((param) => param.name || param)
+        }))
+      })),
+    functions: (analysis.functions || [])
+      .slice(0, MAX_AI_SUMMARY_FUNCTIONS)
+      .map((item) => ({
+        name: item.name,
+        file: item.file,
+        params: (item.params || []).map((param) => param.name || param)
+      }))
+  };
+}
+
+function normalizeGeneratedMarkdown(value, fallback = "") {
+  const text = String(value || "").trim();
+  return text ? `${text}\n` : fallback;
+}
+
+async function maybeGenerateDocumentationWithAi(
+  type,
+  workspaceRoot,
+  analysis,
+  genericDocumentation,
+  executionContext = {}
+) {
+  if (!executionContext?.agent || !executionContext?.context) {
+    return {
+      documentation: genericDocumentation,
+      aiGenerated: false,
+      aiProvider: "",
+      aiProviderDisplayName: ""
+    };
+  }
+
+  try {
+    const genericDraft =
+      type === "full"
+        ? {
+            readme: genericDocumentation.content,
+            api: genericDocumentation.additional?.api || "",
+            contributing: genericDocumentation.additional?.contributing || ""
+          }
+        : { content: genericDocumentation.content };
+
+    const expectedShape =
+      type === "full"
+        ? '{ "readme": "markdown", "api": "markdown", "contributing": "markdown" }'
+        : '{ "content": "markdown" }';
+
+    const result = await runProviderPrompt({
+      context: executionContext.context,
+      agent: executionContext.agent,
+      workspaceRoot,
+      preferredProvider: executionContext.preferredProvider || "",
+      mode: "fast",
+      intent: "general",
+      systemOverlay: "Return JSON only. Do not include prose outside the JSON payload.",
+      prompt:
+        "Generate polished repository documentation using only the provided repository facts. " +
+        "Do not invent APIs, commands, files, packages, or workflows that are not grounded in the input. " +
+        `Return JSON with exactly this shape: ${expectedShape}.\n\n` +
+        `Documentation type: ${type}\n` +
+        `Repository summary:\n${JSON.stringify(buildDocumentationAiSummary(analysis), null, 2)}\n\n` +
+        `Generic draft fallback:\n${JSON.stringify(genericDraft, null, 2)}`
+    });
+
+    const payload = extractJsonPayload(result.text);
+    if (!payload || typeof payload !== "object") {
+      throw new Error("AI did not return valid JSON documentation.");
+    }
+
+    if (type === "full") {
+      const readme = normalizeGeneratedMarkdown(payload.readme, genericDocumentation.content);
+      const api = normalizeGeneratedMarkdown(
+        payload.api,
+        genericDocumentation.additional?.api || ""
+      );
+      const contributing = normalizeGeneratedMarkdown(
+        payload.contributing,
+        genericDocumentation.additional?.contributing || ""
+      );
+
+      if (!readme.trim() || !api.trim() || !contributing.trim()) {
+        throw new Error("AI documentation payload was incomplete.");
+      }
+
+      return {
+        documentation: {
+          ...genericDocumentation,
+          content: readme,
+          additional: {
+            api,
+            contributing
+          }
+        },
+        aiGenerated: true,
+        aiProvider: result.provider || "",
+        aiProviderDisplayName: result.providerDisplayName || ""
+      };
+    }
+
+    const content = normalizeGeneratedMarkdown(payload.content, genericDocumentation.content);
+    if (!content.trim()) {
+      throw new Error("AI documentation payload was empty.");
+    }
+
+    return {
+      documentation: {
+        ...genericDocumentation,
+        content
+      },
+      aiGenerated: true,
+      aiProvider: result.provider || "",
+      aiProviderDisplayName: result.providerDisplayName || ""
+    };
+  } catch {
+    return {
+      documentation: genericDocumentation,
+      aiGenerated: false,
+      aiProvider: "",
+      aiProviderDisplayName: ""
+    };
+  }
+}
+
 /**
  * Generate documentation for a repository
  */
 async function generateDocumentation(options, workspaceRoot, executionContext = {}) {
+  if (!options || typeof options !== "object") {
+    return {
+      success: false,
+      error: "Options must be an object"
+    };
+  }
+
   const {
     type = "readme",
     outputPath = null,
     includeApi = true,
     includeExamples = true,
-    scanDirectory = "src"
+    scanDirectory = "src",
+    preferredProvider = ""
   } = options;
+
+  if (!["readme", "api", "contributing", "full"].includes(type)) {
+    return {
+      success: false,
+      error: `Unknown documentation type: ${type}`
+    };
+  }
   
   try {
     // Analyze repository structure
     const repoAnalysis = await analyzeRepository(workspaceRoot, scanDirectory);
+    if (!repoAnalysis.packageMetadataLoaded && repoAnalysis.files.length === 0) {
+      throw new Error(
+        `Could not gather repository metadata or source files from ${scanDirectory}`
+      );
+    }
     
     // Generate documentation based on type
-    let documentation;
+    let genericDocumentation;
     if (type === "readme") {
-      documentation = await generateReadme(repoAnalysis, workspaceRoot);
+      genericDocumentation = await generateReadme(repoAnalysis, workspaceRoot);
     } else if (type === "api") {
-      documentation = await generateApiDocs(repoAnalysis, includeExamples);
+      genericDocumentation = await generateApiDocs(repoAnalysis, includeExamples);
     } else if (type === "contributing") {
-      documentation = await generateContributingGuide(repoAnalysis);
+      genericDocumentation = await generateContributingGuide(repoAnalysis);
     } else if (type === "full") {
-      documentation = await generateFullDocumentation(repoAnalysis, workspaceRoot);
+      genericDocumentation = await generateFullDocumentation(repoAnalysis, workspaceRoot);
     } else {
       return {
         success: false,
         error: `Unknown documentation type: ${type}`
       };
     }
+
+    const aiResult = await maybeGenerateDocumentationWithAi(
+      type,
+      workspaceRoot,
+      repoAnalysis,
+      genericDocumentation,
+      {
+        ...executionContext,
+        preferredProvider:
+          preferredProvider || executionContext.preferredProvider || ""
+      }
+    );
+    const documentation = aiResult.documentation;
     
-    // Determine output path
-    const finalOutputPath = outputPath || getDefaultOutputPath(type, workspaceRoot);
-    
-    // Write documentation to file
-    await fs.mkdir(path.dirname(finalOutputPath), { recursive: true });
-    await fs.writeFile(finalOutputPath, documentation.content);
+    const filesToWrite = buildDocumentationFiles(
+      type,
+      workspaceRoot,
+      documentation,
+      outputPath
+    );
+
+    for (const file of filesToWrite) {
+      await fs.mkdir(path.dirname(file.absolutePath), { recursive: true });
+      await fs.writeFile(file.absolutePath, file.content);
+    }
     
     return {
       success: true,
       type,
-      outputPath: path.relative(workspaceRoot, finalOutputPath),
+      scanDirectory,
+      outputPath: filesToWrite[0]?.relativePath || "",
+      aiGenerated: aiResult.aiGenerated === true,
+      aiProvider: aiResult.aiProvider || "",
+      aiProviderDisplayName: aiResult.aiProviderDisplayName || "",
+      generatedFiles: filesToWrite.map((file) => ({
+        type: file.type,
+        outputPath: file.relativePath
+      })),
       documentation,
       analysis: {
+        scanDirectory: repoAnalysis.scanDirectory,
         files: repoAnalysis.files.length,
         functions: repoAnalysis.functions.length,
         classes: repoAnalysis.classes.length,
@@ -106,11 +331,14 @@ async function generateDocumentation(options, workspaceRoot, executionContext = 
 async function analyzeRepository(workspaceRoot, scanDirectory) {
   const analysis = {
     name: path.basename(workspaceRoot),
+    scanDirectory: scanDirectory || ".",
     files: [],
     functions: [],
     classes: [],
     modules: [],
     dependencies: {},
+    packageMetadataLoaded: false,
+    scripts: {},
     languageStats: {},
     structure: {}
   };
@@ -122,75 +350,136 @@ async function analyzeRepository(workspaceRoot, scanDirectory) {
     analysis.name = packageJson.name || analysis.name;
     analysis.description = packageJson.description;
     analysis.version = packageJson.version;
+    analysis.packageMetadataLoaded = true;
     analysis.dependencies = {
       ...packageJson.dependencies,
       ...packageJson.devDependencies
     };
+    analysis.scripts = packageJson.scripts || {};
   } catch (error) {
     // No package.json
   }
   
-  // Scan source directory
-  const scanPath = path.join(workspaceRoot, scanDirectory);
+  // Scan the requested directory when present, otherwise fall back to the
+  // workspace root so documentation still works for repos without src/.
+  const resolvedScan = await resolveDocumentationScanPath(
+    workspaceRoot,
+    scanDirectory
+  );
+  analysis.scanDirectory = resolvedScan.relativeDirectory;
+  const scanPath = resolvedScan.absolutePath;
   await scanDirectoryForCode(scanPath, workspaceRoot, analysis);
   
   return analysis;
+}
+
+async function resolveDocumentationScanPath(workspaceRoot, scanDirectory) {
+  const normalizedRequested = String(scanDirectory || "src").trim() || "src";
+  const requestedRelative =
+    normalizedRequested === "." || normalizedRequested === "./"
+      ? "."
+      : normalizedRequested.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (relativeDirectory) => {
+    const relative =
+      !relativeDirectory || relativeDirectory === "." || relativeDirectory === "./"
+        ? "."
+        : String(relativeDirectory).replace(/\\/g, "/").replace(/^\.\/+/, "");
+    if (seen.has(relative)) {
+      return;
+    }
+    seen.add(relative);
+    candidates.push({
+      relativeDirectory: relative,
+      absolutePath:
+        relative === "."
+          ? workspaceRoot
+          : path.join(workspaceRoot, relative)
+    });
+  };
+
+  addCandidate(requestedRelative);
+  if (requestedRelative !== ".") {
+    addCandidate(".");
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const entries = await fs.readdir(candidate.absolutePath, {
+        withFileTypes: true
+      });
+      if (Array.isArray(entries)) {
+        return candidate;
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error(
+    `Could not find a scannable documentation directory. Tried: ${candidates
+      .map((candidate) => candidate.relativeDirectory)
+      .join(", ")}`
+  );
 }
 
 /**
  * Scan directory for code files
  */
 async function scanDirectoryForCode(dir, workspaceRoot, analysis) {
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      
-      if (entry.isDirectory()) {
-        // Skip common directories
-        if (!["node_modules", ".git", "dist", "build", "out", "__tests__"].includes(entry.name)) {
-          await scanDirectoryForCode(fullPath, workspaceRoot, analysis);
-        }
-      } else if (entry.isFile()) {
-        const language = getLanguage(entry.name);
-        if (language) {
-          const relativePath = path.relative(workspaceRoot, fullPath);
-          analysis.files.push(relativePath);
-          
-          // Update language stats
-          analysis.languageStats[language] = (analysis.languageStats[language] || 0) + 1;
-          
-          // Parse file for definitions
-          try {
-            const content = await fs.readFile(fullPath, "utf-8");
-            const definitions = await parseFile(content, language, entry.name);
-            
-            definitions.forEach(def => {
-              if (def.type === "function") {
-                analysis.functions.push({
-                  name: def.name,
-                  file: relativePath,
-                  params: def.params,
-                  description: def.description
-                });
-              } else if (def.type === "class") {
-                analysis.classes.push({
-                  name: def.name,
-                  file: relativePath,
-                  methods: def.methods,
-                  description: def.description
-                });
-              }
-            });
-          } catch (error) {
-            // Failed to parse file
-          }
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  if (!Array.isArray(entries)) {
+    throw new Error(`Failed to scan ${dir}: directory listing was unavailable`);
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      // Skip common directories
+      if (!["node_modules", ".git", "dist", "build", "out", "__tests__"].includes(entry.name)) {
+        await scanDirectoryForCode(fullPath, workspaceRoot, analysis);
+      }
+    } else if (entry.isFile()) {
+      const language = getLanguage(entry.name);
+      if (language) {
+        const relativePath = path.relative(workspaceRoot, fullPath);
+        analysis.files.push(relativePath);
+
+        // Update language stats
+        analysis.languageStats[language] = (analysis.languageStats[language] || 0) + 1;
+
+        // Parse file for definitions
+        try {
+          const content = await fs.readFile(fullPath, "utf-8");
+          const definitions = await parseFile(content, language, entry.name);
+
+          definitions.forEach(def => {
+            if (def.type === "function") {
+              analysis.functions.push({
+                name: def.name,
+                file: relativePath,
+                params: def.params,
+                description: def.description
+              });
+            } else if (def.type === "class") {
+              analysis.classes.push({
+                name: def.name,
+                file: relativePath,
+                methods: def.methods,
+                description: def.description
+              });
+            }
+          });
+        } catch (error) {
+          // Failed to parse file
         }
       }
     }
-  } catch (error) {
-    // Directory not accessible
   }
 }
 
@@ -462,6 +751,45 @@ async function generateFullDocumentation(analysis, workspaceRoot) {
   };
 }
 
+function buildDocumentationFiles(type, workspaceRoot, documentation, outputPath = null) {
+  if (type === "full") {
+    const readmePath = outputPath || getDefaultOutputPath("readme", workspaceRoot);
+    const apiPath = getDefaultOutputPath("api", workspaceRoot);
+    const contributingPath = getDefaultOutputPath("contributing", workspaceRoot);
+
+    return [
+      {
+        type: "readme",
+        absolutePath: readmePath,
+        relativePath: path.relative(workspaceRoot, readmePath).replace(/\\/g, "/"),
+        content: documentation.content
+      },
+      {
+        type: "api",
+        absolutePath: apiPath,
+        relativePath: path.relative(workspaceRoot, apiPath).replace(/\\/g, "/"),
+        content: documentation.additional?.api || ""
+      },
+      {
+        type: "contributing",
+        absolutePath: contributingPath,
+        relativePath: path.relative(workspaceRoot, contributingPath).replace(/\\/g, "/"),
+        content: documentation.additional?.contributing || ""
+      }
+    ];
+  }
+
+  const finalOutputPath = outputPath || getDefaultOutputPath(type, workspaceRoot);
+  return [
+    {
+      type,
+      absolutePath: finalOutputPath,
+      relativePath: path.relative(workspaceRoot, finalOutputPath).replace(/\\/g, "/"),
+      content: documentation.content
+    }
+  ];
+}
+
 /**
  * Get default output path for documentation type
  */
@@ -504,7 +832,8 @@ module.exports = {
   analyzeRepository,
   generateReadme,
   generateApiDocs,
-  generateContributingGuide
+  generateContributingGuide,
+  buildDocumentationFiles
 };
 
 // Made with Bob

@@ -151,10 +151,16 @@ describe("WorkspaceMemoryService", () => {
       path.join(workspaceRoot, "workspacememory.md"),
       "utf8"
     );
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(workspaceRoot, "workspace.json"), "utf8")
+    );
 
     expect(markdown).toContain("# Workspace Memory");
     expect(markdown).toContain("## Repository Blueprint");
+    expect(markdown).toContain("## Workspace Focus");
+    expect(markdown).toContain("## Package Snapshot");
     expect(markdown).toContain("## Current Stack");
+    expect(markdown).toContain("## Tracked Snapshots");
     expect(markdown).toContain("## Project Planner");
     expect(markdown).toContain("src/ai-agent/agent.js");
     expect(markdown).toContain("Before:");
@@ -166,6 +172,20 @@ describe("WorkspaceMemoryService", () => {
     expect(markdown).toContain("src/extension.js");
     expect(markdown).toContain("Tracked files in snapshot");
     expect(mirroredMarkdown).toContain("# Workspace Memory");
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.workspace.outputFiles.structuredManifest).toBe("workspace.json");
+    expect(manifest.workspace.stats.totalFiles).toBeGreaterThan(0);
+    expect(Array.isArray(manifest.workspace.stats.fileInventory)).toBe(true);
+    expect(
+      manifest.workspace.stats.fileInventory.some(
+        (entry) => entry.path === "src/ai-agent/agent.js"
+      )
+    ).toBe(true);
+    expect(manifest.package.name).toBe("code-janitor");
+    expect(manifest.git.branch).toBe("main");
+    expect(result.structuredManifestPath).toBe(
+      path.join(workspaceRoot, "workspace.json")
+    );
   });
 
   test("exports stable helpers for graph and path hygiene", () => {

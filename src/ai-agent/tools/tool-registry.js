@@ -17,6 +17,10 @@ const { fetchGitHubContext } = require("./fetch-github-context");
 const { generateEdgeCases, validateEdgeCaseRequest } = require("./generate-edge-cases");
 const { executeTests, validateTestRequest } = require("./execute-tests");
 const { generateDocumentation, validateDocumentationRequest } = require("./generate-documentation");
+const {
+  executeMcpTool,
+  validateMcpCall
+} = require("../../services/mcp/MCPToolExecutor");
 
 /**
  * Tool definitions with metadata
@@ -496,6 +500,42 @@ const y = 4;
 })`
       }
     ]
+  },
+
+  mcp_call: {
+    name: "mcp_call",
+    description: "Execute an MCP tool on a configured server and return the structured result",
+    handler: executeMcpTool,
+    validator: validateMcpCall,
+    params: {
+      serverName: {
+        type: "string",
+        required: true,
+        description: "Configured MCP server name such as filesystem, github, playwright, or docker"
+      },
+      toolName: {
+        type: "string",
+        required: true,
+        description: "Exact MCP tool name exposed by the selected server"
+      },
+      arguments: {
+        type: "object",
+        required: false,
+        description: "JSON object passed to the MCP tool"
+      }
+    },
+    examples: [
+      {
+        description: "Read project files through the filesystem MCP server",
+        usage: `mcp_call({
+  serverName: "filesystem",
+  toolName: "read_file",
+  arguments: {
+    path: "src/extension.js"
+  }
+})`
+      }
+    ]
   }
 };
 
@@ -694,6 +734,8 @@ class ToolRegistry {
       } else if (toolName === "execute_tests") {
         result = await tool.handler(params, workspaceRoot, executionContext);
       } else if (toolName === "generate_documentation") {
+        result = await tool.handler(params, workspaceRoot, executionContext);
+      } else if (toolName === "mcp_call") {
         result = await tool.handler(params, workspaceRoot, executionContext);
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);

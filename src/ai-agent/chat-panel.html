@@ -672,7 +672,9 @@
       }
       .workspace-field input[type="text"],
       .workspace-field input[type="password"],
-      .workspace-field input[type="number"] {
+      .workspace-field input[type="number"],
+      .workspace-field select,
+      .workspace-field textarea {
         width: 100%;
         background: var(--panel-2);
         color: var(--text);
@@ -681,7 +683,18 @@
         padding: 9px 10px;
         font-size: 12px;
       }
+      .workspace-field textarea {
+        min-height: 240px;
+        resize: vertical;
+        font-family: "Cascadia Code", "Fira Code", monospace;
+        line-height: 1.45;
+      }
       .workspace-field input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .workspace-field select:focus,
+      .workspace-field textarea:focus {
         outline: none;
         border-color: var(--accent);
       }
@@ -734,6 +747,89 @@
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
+      }
+      .mcp-server-list {
+        display: grid;
+        gap: 10px;
+      }
+      .mcp-server-card {
+        border: 1px solid rgba(48, 54, 61, 0.6);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.02);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .mcp-server-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .mcp-server-meta {
+        min-width: 0;
+      }
+      .mcp-server-name {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .mcp-server-command {
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--muted);
+        word-break: break-word;
+      }
+      .mcp-status-badge {
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .mcp-status-badge.connected {
+        color: #7ee787;
+        background: rgba(126, 231, 135, 0.12);
+      }
+      .mcp-status-badge.starting,
+      .mcp-status-badge.restarting {
+        color: #f2cc60;
+        background: rgba(242, 204, 96, 0.12);
+      }
+      .mcp-status-badge.error {
+        color: #ff7b72;
+        background: rgba(255, 123, 114, 0.12);
+      }
+      .mcp-status-badge.disabled,
+      .mcp-status-badge.stopped {
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .mcp-server-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .mcp-server-tools {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .mcp-tool-pill {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(88, 166, 255, 0.08);
+        border: 1px solid rgba(88, 166, 255, 0.18);
+        font-size: 10px;
+        color: var(--text);
+      }
+      .mcp-server-error {
+        font-size: 10px;
+        color: #ff7b72;
+        line-height: 1.45;
       }
       .workspace-settings-actions {
         display: flex;
@@ -866,33 +962,38 @@
         background: #8ba0b6;
       }
 
-      /* Progress bar */
+      /* Workspace progress banner */
       #progress-bar-wrap {
         display: none;
-        padding: 4px 14px;
-        background: transparent;
+        padding: 10px 16px 12px;
+        background:
+          linear-gradient(180deg, rgba(15, 23, 34, 0.96), rgba(10, 14, 20, 0.94));
         border-bottom: 1px solid var(--border);
         flex-shrink: 0;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
       }
       #progress-bar-wrap.visible { display: block; }
       #progress-label {
-        font-size: 10px;
-        color: var(--muted);
-        margin-bottom: 3px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--text);
+        margin-bottom: 6px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       #progress-track {
-        height: 3px;
+        height: 6px;
         background: var(--panel-2);
-        border-radius: 2px;
+        border-radius: 999px;
         overflow: hidden;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
       }
       #progress-fill {
         height: 100%;
         background: linear-gradient(90deg, #1f6feb, #58a6ff);
-        border-radius: 2px;
+        border-radius: 999px;
         width: 0%;
         transition: width 0.2s ease;
       }
@@ -1985,6 +2086,77 @@
         gap: 8px;
         margin-top: 10px;
       }
+      .followup-card {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(47, 129, 247, 0.28);
+        background:
+          radial-gradient(circle at top right, rgba(47, 129, 247, 0.14), transparent 48%),
+          linear-gradient(180deg, rgba(17, 27, 41, 0.96), rgba(13, 17, 23, 0.98));
+        box-shadow: var(--shadow-sm);
+      }
+      .followup-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #8fb8ff;
+      }
+      .followup-question {
+        font-size: 13px;
+        line-height: 1.55;
+        color: var(--text);
+        white-space: pre-wrap;
+      }
+      .followup-suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .followup-suggestion-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(47, 129, 247, 0.24);
+        background: rgba(47, 129, 247, 0.08);
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+      }
+      .followup-suggestion-btn:hover:not(:disabled) {
+        background: rgba(47, 129, 247, 0.16);
+        border-color: rgba(47, 129, 247, 0.5);
+        transform: translateY(-1px);
+      }
+      .followup-suggestion-btn:disabled {
+        cursor: default;
+        opacity: 0.72;
+      }
+      .followup-suggestion-btn.selected {
+        background: rgba(63, 185, 80, 0.16);
+        border-color: rgba(63, 185, 80, 0.42);
+        color: #d7fbe0;
+      }
+      .followup-mode-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
       .btn-allow {
         padding: 5px 14px;
         background: #16a34a;
@@ -2757,6 +2929,11 @@
     </style>
   </head>
   <body>
+    <div id="progress-bar-wrap" aria-live="polite">
+      <div id="progress-label">Workspace plan idle</div>
+      <div id="progress-track"><div id="progress-fill"></div></div>
+    </div>
+
     <!-- Tutorial Overlay -->
     <div id="tutorial-overlay" class="hidden">
       <div class="tutorial-container">
@@ -3259,6 +3436,32 @@
           </div>
 
           <div class="workspace-settings-section full">
+            <div class="workspace-settings-title">MCP Servers</div>
+            <div class="workspace-settings-copy">Manage external Model Context Protocol servers, inspect their connection state, review discovered tools, and edit the root `mcp.config.json` file.</div>
+            <div class="workspace-settings-form">
+              <div class="workspace-field">
+                <label>MCP config path</label>
+                <div id="mcp-config-path-display" class="workspace-readonly">Open a workspace to locate mcp.config.json.</div>
+              </div>
+              <div class="workspace-field">
+                <label>Server status</label>
+                <div id="mcp-server-list" class="mcp-server-list">
+                  <div class="workspace-readonly">No MCP servers loaded yet.</div>
+                </div>
+              </div>
+              <div class="workspace-action-row">
+                <button class="pill-btn mcp-action-btn" data-mcp-action="reloadMcpSettings" type="button">Reload MCP</button>
+                <button class="pill-btn mcp-action-btn" data-mcp-action="openMcpConfig" type="button">Open Config</button>
+              </div>
+              <div class="workspace-field">
+                <label for="mcp-config-editor">mcp.config.json</label>
+                <textarea id="mcp-config-editor" spellcheck="false" placeholder="{&#10;  &quot;mcpServers&quot;: {}&#10;}"></textarea>
+                <div class="workspace-field-help">Server toggle buttons save immediately. You can also edit this JSON directly, and Save Settings will write it back to the workspace root and reload the MCP manager.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="workspace-settings-section full">
             <div class="workspace-settings-title">Project Planner</div>
             <div class="workspace-settings-copy">Generate a time-based outcome plan, keep a progress bar pinned at the top, and trigger a preferred AI rescue brief when work goes stale.</div>
             <div class="workspace-settings-form">
@@ -3330,11 +3533,6 @@
           <button id="workspace-settings-save" type="button">Save Settings</button>
         </div>
       </div>
-    </div>
-
-    <div id="progress-bar-wrap">
-      <div id="progress-label">Idle</div>
-      <div id="progress-track"><div id="progress-fill"></div></div>
     </div>
 
     <div id="action-bar">
@@ -3419,6 +3617,7 @@
 
     <script nonce="__CSP_NONCE__">
       var vscode = acquireVsCodeApi();
+      var EXTENSION_MESSAGE_TOKEN = "__WEBVIEW_MESSAGE_TOKEN__";
       var chat = document.getElementById("chat");
       var input = document.getElementById("input");
       var sendBtn = document.getElementById("send-btn");
@@ -3490,6 +3689,12 @@
       var workspaceGitHubApiBaseUrl = document.getElementById("workspace-github-api-base-url");
       var workspaceGitHubTokenInput = document.getElementById("workspace-github-token-input");
       var workspaceGitHubTokenStatus = document.getElementById("workspace-github-token-status");
+      var mcpConfigPathDisplay = document.getElementById("mcp-config-path-display");
+      var mcpServerList = document.getElementById("mcp-server-list");
+      var mcpConfigEditor = document.getElementById("mcp-config-editor");
+      var mcpActionButtons = Array.prototype.slice.call(
+        document.querySelectorAll(".mcp-action-btn")
+      );
       var projectPlannerEnabledToggle = document.getElementById("project-planner-enabled-toggle");
       var projectPlannerProvider = document.getElementById("project-planner-provider");
       var projectPlannerStagnationMinutes = document.getElementById("project-planner-stagnation-minutes");
@@ -3513,6 +3718,21 @@
       var inputBusy = false;
       var imageInputEnabled = true;
       var imageInputReason = "Attach images for vision-capable models.";
+      var currentMcpSettings = null;
+      var currentMcpConfigObject = { mcpServers: {} };
+
+      function isTrustedExtensionMessage(event) {
+        var msg = event && event.data;
+        return !!msg &&
+          typeof msg === "object" &&
+          !Array.isArray(msg) &&
+          msg.__codeJanitorToken === EXTENSION_MESSAGE_TOKEN &&
+          typeof msg.type === "string";
+      }
+
+      function getTrustedExtensionMessage(event) {
+        return isTrustedExtensionMessage(event) ? event.data : null;
+      }
 
       // Ctrl+Z / Cmd+Z anywhere in the chat panel triggers an undo of the
       // most recent applied edit. The textarea retains its native typing-undo
@@ -3699,25 +3919,18 @@
       var transientProgressPinned = false;
       var lastPlannerRescueSummary = "";
 
+      function setProgressBannerVisible(visible) {
+        progressWrap.classList.toggle("visible", !!visible);
+        document.body.classList.toggle("has-progress-banner", !!visible);
+      }
+
       function applyProjectPlannerProgress() {
-        if (!plannerProgressState || plannerProgressState.enabled !== true) {
-          return false;
-        }
-
-        var percent = Math.min(100, Math.max(0, Number(plannerProgressState.progressPercent || 0)));
-        var label = plannerProgressState.outcome
-          ? "Project plan: " + percent + "% - " + plannerProgressState.outcome
-          : "Project plan: " + percent + "%";
-
-        progressWrap.classList.add("visible");
-        progressLabel.textContent = label;
-        progressFill.style.width = percent + "%";
-        return true;
+        return false;
       }
 
       function showProgress(label, pct) {
         transientProgressPinned = true;
-        progressWrap.classList.add("visible");
+        setProgressBannerVisible(true);
         progressLabel.textContent = label;
         progressFill.style.width = Math.min(100, Math.max(0, pct)) + "%";
       }
@@ -3731,13 +3944,13 @@
           if (transientProgressPinned || applyProjectPlannerProgress()) {
             return;
           }
-          progressWrap.classList.remove("visible");
+          setProgressBannerVisible(false);
           progressFill.style.width = "0%";
         }, 600);
       }
 
       var builtInProviderMeta = {
-        ollama: { id: "ollama", label: "Ollama (local)", requiresKey: false, models: [] },
+        ollama: { id: "ollama", label: "Ollama (local)", requiresKey: false, models: ["qwen2.5-coder:7b","qwen2.5-coder:3b","qwen2.5-coder:1.5b","codellama:latest","llama3:latest"] },
         groq: { id: "groq", label: "Groq (cloud)", requiresKey: true, apiKeyLink: "https://console.groq.com/keys", models: ["llama-3.1-8b-instant","llama-3.1-70b-versatile","llama3-8b-8192","llama3-70b-8192","mixtral-8x7b-32768","gemma2-9b-it"] },
         openrouter: { id: "openrouter", label: "OpenRouter", requiresKey: true, apiKeyLink: "https://openrouter.ai/keys", models: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"] },
         anthropic: { id: "anthropic", label: "Anthropic (Claude)", requiresKey: true, apiKeyLink: "https://console.anthropic.com/settings/keys", models: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"] },
@@ -4001,6 +4214,261 @@
         projectPlannerDeadlineText.value = planner.deadlineText || "";
       }
 
+      function normalizeMcpConfigObject(value) {
+        var base = value && typeof value === "object" ? value : {};
+        if (!base.mcpServers || typeof base.mcpServers !== "object") {
+          base.mcpServers = {};
+        }
+        return base;
+      }
+
+      function syncMcpConfigEditor() {
+        currentMcpConfigObject = normalizeMcpConfigObject(currentMcpConfigObject || {});
+        if (mcpConfigEditor) {
+          mcpConfigEditor.value = JSON.stringify(currentMcpConfigObject, null, 2);
+        }
+      }
+
+      function parseCurrentMcpEditorConfig() {
+        var source = (mcpConfigEditor && mcpConfigEditor.value) || "";
+        if (!source.trim()) {
+          return { mcpServers: {} };
+        }
+        try {
+          return normalizeMcpConfigObject(JSON.parse(source));
+        } catch (_error) {
+          return normalizeMcpConfigObject(currentMcpConfigObject || {});
+        }
+      }
+
+      function persistMcpConfig() {
+        vscode.postMessage({
+          type: "saveMcpConfig",
+          configText: mcpConfigEditor ? mcpConfigEditor.value : ""
+        });
+      }
+
+      function setMcpServerEnabled(serverName, enabled) {
+        currentMcpConfigObject = parseCurrentMcpEditorConfig();
+        if (!currentMcpConfigObject.mcpServers[serverName]) {
+          currentMcpConfigObject.mcpServers[serverName] = {};
+        }
+        currentMcpConfigObject.mcpServers[serverName].enabled = !!enabled;
+        if (currentMcpSettings && Array.isArray(currentMcpSettings.servers)) {
+          currentMcpSettings.servers = currentMcpSettings.servers.map(function(server) {
+            if (server.name !== serverName) {
+              return server;
+            }
+            return {
+              ...server,
+              enabled: !!enabled,
+              status: enabled ? "starting" : "disabled",
+              lastError: enabled ? "" : server.lastError,
+              tools: enabled ? [] : server.tools
+            };
+          });
+        }
+        syncMcpConfigEditor();
+        renderMcpServerList(currentMcpSettings || {});
+        persistMcpConfig();
+      }
+
+      function createMcpToolPill(label) {
+        var pill = document.createElement("span");
+        pill.className = "mcp-tool-pill";
+        pill.textContent = label;
+        return pill;
+      }
+
+      function getMcpServerToolSummary(server, serverTools) {
+        if (Array.isArray(serverTools) && serverTools.length > 0) {
+          return null;
+        }
+
+        var status = String((server && server.status) || "stopped").toLowerCase();
+        if (server && server.autoDisabledReason) {
+          return "Auto-disabled";
+        }
+        if (server && server.enabled === false) {
+          return "Server is disabled";
+        }
+        if (status === "starting" || status === "restarting") {
+          return "Discovering tools...";
+        }
+        if (status === "error") {
+          return "Server failed to start";
+        }
+        if (status === "stopped") {
+          return "Server is stopped";
+        }
+        if (status === "connected") {
+          return "Connected, but no tools discovered";
+        }
+
+        return "No tools discovered yet";
+      }
+
+      function buildMcpSummary(settings) {
+        var servers = Array.isArray(settings && settings.servers) ? settings.servers : [];
+        var connectedCount = 0;
+        var configuredCount = 0;
+        var autoDisabledCount = 0;
+        var toolCount = 0;
+
+        servers.forEach(function(server) {
+          if (!server) return;
+          if (server.configuredEnabled !== false) {
+            configuredCount += 1;
+          }
+          if (String(server.status || "").toLowerCase() === "connected") {
+            connectedCount += 1;
+          }
+          if (server.autoDisabledReason) {
+            autoDisabledCount += 1;
+          }
+          toolCount += Array.isArray(server.tools) ? server.tools.length : 0;
+        });
+
+        return (
+          "Configured: " + configuredCount +
+          " · Connected: " + connectedCount +
+          " · Auto-disabled: " + autoDisabledCount +
+          " · Tools: " + toolCount
+        );
+      }
+
+      function renderMcpServerList(settings) {
+        if (!mcpServerList) return;
+        var servers = Array.isArray(settings && settings.servers) ? settings.servers : [];
+        mcpServerList.innerHTML = "";
+
+        if (servers.length === 0) {
+          var empty = document.createElement("div");
+          empty.className = "workspace-readonly";
+          empty.textContent = "No MCP servers are configured in this workspace yet.";
+          mcpServerList.appendChild(empty);
+          return;
+        }
+
+        var summary = document.createElement("div");
+        summary.className = "workspace-readonly";
+        summary.textContent = buildMcpSummary(settings);
+        mcpServerList.appendChild(summary);
+
+        servers.forEach(function(server) {
+          var card = document.createElement("div");
+          card.className = "mcp-server-card";
+
+          var head = document.createElement("div");
+          head.className = "mcp-server-head";
+
+          var meta = document.createElement("div");
+          meta.className = "mcp-server-meta";
+
+          var name = document.createElement("div");
+          name.className = "mcp-server-name";
+          name.textContent = server.name || "unnamed";
+          meta.appendChild(name);
+
+          var command = document.createElement("div");
+          command.className = "mcp-server-command";
+          var originalCommand = server.command || "";
+          var originalArgs = Array.isArray(server.args) ? server.args.join(" ") : "";
+          command.textContent = [originalCommand, originalArgs].filter(Boolean).join(" ");
+          meta.appendChild(command);
+
+          head.appendChild(meta);
+
+          var status = document.createElement("div");
+          status.className = "mcp-status-badge " + (server.status || "stopped");
+          status.textContent = server.autoDisabledReason
+            ? "auto-disabled"
+            : (server.status || "stopped");
+          head.appendChild(status);
+          card.appendChild(head);
+
+          var actions = document.createElement("div");
+          actions.className = "mcp-server-actions";
+
+          var toggle = document.createElement("button");
+          toggle.className = "pill-btn";
+          toggle.type = "button";
+          toggle.textContent = server.enabled === false ? "Enable" : "Disable";
+          toggle.onclick = function() {
+            setMcpServerEnabled(server.name, server.enabled === false);
+          };
+          actions.appendChild(toggle);
+
+          var restart = document.createElement("button");
+          restart.className = "pill-btn";
+          restart.type = "button";
+          restart.textContent = "Restart";
+          restart.disabled = server.enabled === false;
+          restart.onclick = function() {
+            vscode.postMessage({
+              type: "mcpSettingsAction",
+              action: "restartMcpServer",
+              serverName: server.name
+            });
+          };
+          actions.appendChild(restart);
+          card.appendChild(actions);
+
+          if (server.autoDisabledReason) {
+            var autoDisabled = document.createElement("div");
+            autoDisabled.className = "mcp-server-error";
+            autoDisabled.textContent = server.autoDisabledReason;
+            card.appendChild(autoDisabled);
+          } else if (server.lastError) {
+            var error = document.createElement("div");
+            error.className = "mcp-server-error";
+            error.textContent = server.lastError;
+            card.appendChild(error);
+          }
+
+          var toolsRow = document.createElement("div");
+          toolsRow.className = "mcp-server-tools";
+          var serverTools = Array.isArray(server.tools) ? server.tools : [];
+          if (serverTools.length === 0) {
+            toolsRow.appendChild(
+              createMcpToolPill(getMcpServerToolSummary(server, serverTools))
+            );
+          } else {
+            serverTools.slice(0, 12).forEach(function(tool) {
+              toolsRow.appendChild(createMcpToolPill(tool.name || "tool"));
+            });
+            if (serverTools.length > 12) {
+              toolsRow.appendChild(createMcpToolPill("+" + (serverTools.length - 12) + " more"));
+            }
+          }
+          card.appendChild(toolsRow);
+
+          mcpServerList.appendChild(card);
+        });
+      }
+
+      function applyMcpSettings(settings) {
+        currentMcpSettings = settings || {};
+        mcpConfigPathDisplay.textContent =
+          currentMcpSettings.configPath || "Open a workspace to locate mcp.config.json.";
+        if (currentMcpSettings.configText && currentMcpSettings.configText.trim()) {
+          if (mcpConfigEditor) {
+            mcpConfigEditor.value = currentMcpSettings.configText;
+          }
+          try {
+            currentMcpConfigObject = normalizeMcpConfigObject(
+              JSON.parse(currentMcpSettings.configText)
+            );
+          } catch (_error) {
+            currentMcpConfigObject = normalizeMcpConfigObject(currentMcpConfigObject || {});
+          }
+        } else {
+          currentMcpConfigObject = normalizeMcpConfigObject(currentMcpConfigObject || {});
+          syncMcpConfigEditor();
+        }
+        renderMcpServerList(currentMcpSettings);
+      }
+
       function collectWorkspaceSettingsPayload() {
         return {
           enabled: workspaceMemoryEnabledToggle.getAttribute("aria-pressed") === "true",
@@ -4026,6 +4494,7 @@
       btnWorkspaceSettings.onclick = function() {
         openWorkspaceSettingsDialog();
         vscode.postMessage({ type: "reloadWorkspaceSettings" });
+        vscode.postMessage({ type: "reloadMcpSettings" });
       };
       workspaceSettingsClose.onclick = closeWorkspaceSettingsDialog;
       workspaceSettingsCloseSecondary.onclick = closeWorkspaceSettingsDialog;
@@ -4072,12 +4541,23 @@
           type: "saveWorkspaceMemorySettings",
           settings: collectWorkspaceSettingsPayload()
         });
+        vscode.postMessage({
+          type: "saveMcpConfig",
+          configText: mcpConfigEditor ? mcpConfigEditor.value : ""
+        });
       };
       workspaceActionButtons.forEach(function(button) {
         button.onclick = function() {
           var action = button.getAttribute("data-workspace-action");
           if (!action) return;
           vscode.postMessage({ type: "workspaceSettingsAction", action: action });
+        };
+      });
+      mcpActionButtons.forEach(function(button) {
+        button.onclick = function() {
+          var action = button.getAttribute("data-mcp-action");
+          if (!action) return;
+          vscode.postMessage({ type: "mcpSettingsAction", action: action });
         };
       });
 
@@ -4303,9 +4783,6 @@
             "Project Plan",
             plannerProgressState.summary || formatTodoSummary(plannerProgressState.todoCounts || {})
           );
-          if (!transientProgressPinned) {
-            applyProjectPlannerProgress();
-          }
           if (
             plannerProgressState.rescueSummary &&
             plannerProgressState.rescueSummary !== lastPlannerRescueSummary
@@ -4318,7 +4795,7 @@
 
         renderTodoBoard(sessionTodoState.items, sessionTodoState.counts, "Task Board");
         if (!transientProgressPinned) {
-          progressWrap.classList.remove("visible");
+          setProgressBannerVisible(false);
           progressFill.style.width = "0%";
         }
       }
@@ -4476,13 +4953,13 @@
 
       function sanitizeExternalUrl(url) {
         var raw = String(url || "").trim();
-        if (!/^https?:\/\//i.test(raw)) {
+        if (!/^https:\/\//i.test(raw)) {
           return "";
         }
 
         try {
           var parsed = new URL(raw);
-          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          if (parsed.protocol === "https:") {
             return parsed.toString();
           }
         } catch (error) {
@@ -5660,6 +6137,93 @@
         chat.scrollTop = chat.scrollHeight;
       }
 
+      function normalizeFollowupIntent(mode) {
+        var value = String(mode || "").trim().toLowerCase();
+        if (value === "code" || value === "edit") return "edit";
+        if (value === "plan") return "plan";
+        if (value === "ask" || value === "question" || value === "general") {
+          return "general";
+        }
+        return "";
+      }
+
+      function formatFollowupModeLabel(mode) {
+        var value = String(mode || "").trim().toLowerCase();
+        if (!value) return "";
+        if (value === "code") return "Code";
+        if (value === "ask") return "Ask";
+        if (value === "plan") return "Plan";
+        return value.charAt(0).toUpperCase() + value.slice(1);
+      }
+
+      function setFollowupSelectionState(card, selectedButton) {
+        if (!card) return;
+        var buttons = card.querySelectorAll(".followup-suggestion-btn");
+        for (var i = 0; i < buttons.length; i++) {
+          var button = buttons[i];
+          button.disabled = true;
+          button.classList.toggle("selected", button === selectedButton);
+        }
+      }
+
+      function makeFollowupQuestionCard(question, suggestions) {
+        var card = document.createElement("div");
+        card.className = "followup-card";
+
+        var label = document.createElement("div");
+        label.className = "followup-label";
+        label.textContent = "Need your input";
+        card.appendChild(label);
+
+        var questionNode = document.createElement("div");
+        questionNode.className = "followup-question";
+        questionNode.textContent =
+          String(question || "").trim() || "I need a bit more direction before continuing.";
+        card.appendChild(questionNode);
+
+        var suggestionList = Array.isArray(suggestions) ? suggestions.filter(Boolean) : [];
+        if (suggestionList.length === 0) {
+          return card;
+        }
+
+        var suggestionsWrap = document.createElement("div");
+        suggestionsWrap.className = "followup-suggestions";
+
+        suggestionList.forEach(function(suggestion) {
+          var answerText = String(
+            suggestion && (suggestion.text || suggestion.answer) || ""
+          ).trim() || "Continue";
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "followup-suggestion-btn";
+          button.dataset.answer = answerText;
+
+          var answerLabel = document.createElement("span");
+          answerLabel.textContent = answerText;
+          button.appendChild(answerLabel);
+
+          var modeLabel = formatFollowupModeLabel(suggestion && suggestion.mode);
+          if (modeLabel) {
+            var chip = document.createElement("span");
+            chip.className = "followup-mode-chip";
+            chip.textContent = modeLabel;
+            button.appendChild(chip);
+          }
+
+          button.onclick = function() {
+            setFollowupSelectionState(card, button);
+            sendMessage(button.dataset.answer || answerText, {
+              intentOverride: normalizeFollowupIntent(suggestion && suggestion.mode)
+            });
+          };
+
+          suggestionsWrap.appendChild(button);
+        });
+
+        card.appendChild(suggestionsWrap);
+        return card;
+      }
+
       function setInputState(busy) {
         inputBusy = !!busy;
         sendBtn.style.display = busy ? "none" : "inline-block";
@@ -5726,8 +6290,9 @@
 
       // Send
 
-      function sendMessage(text) {
+      function sendMessage(text, options) {
         try {
+          options = options || {};
           text = (text || input.value).trim();
           if (!text && pendingImages.length === 0) return;
           if (pendingImages.length > 0 && !imageInputEnabled) {
@@ -5775,7 +6340,12 @@
           }
 
           console.log("[Chat] Posting message to extension");
-          vscode.postMessage({ type: "chat", text: text, images: imagesToSend });
+          vscode.postMessage({
+            type: "chat",
+            text: text,
+            images: imagesToSend,
+            intentOverride: options.intentOverride || undefined
+          });
           console.log("[Chat] Message posted successfully");
         } catch (error) {
           console.error("[Chat] Error in sendMessage:", error);
@@ -6002,7 +6572,10 @@
       // Messages from extension
 
       window.addEventListener("message", function (event) {
-        var msg = event.data;
+        var msg = getTrustedExtensionMessage(event);
+        if (!msg) {
+          return;
+        }
 
         if (msg.type === "status") {
           addActivity(msg.text);
@@ -6117,6 +6690,13 @@
           hideProgress();
           setInputState(false);
           addRow("\u274c " + msg.text, "status");
+        } else if (msg.type === "followupQuestion") {
+          addActivity("Waiting for your answer.", "info");
+          setInputState(false);
+          addRow(
+            makeFollowupQuestionCard(msg.question, msg.suggestions || []),
+            "ai"
+          );
         } else if (msg.type === "assistantImages") {
           addRow(createImageGallery(msg.images || []), "ai");
         } else if (msg.type === "applied") {
@@ -6172,7 +6752,7 @@
             rebuildProviderOptions(msg.provider || providerSelect.value);
           }
           if (msg.keyPresence) {
-            currentKeyPresence = msg.keyPresence || {};
+            currentKeyPresence = Object.assign({}, currentKeyPresence, msg.keyPresence || {});
           }
           if (typeof msg.imageInputEnabled === "boolean") {
             imageInputEnabled = msg.imageInputEnabled;
@@ -6209,6 +6789,8 @@
           setGateModeState(msg.value);
         } else if (msg.type === "workspaceMemorySettings") {
           applyWorkspaceSettings(msg.settings || {});
+        } else if (msg.type === "mcpSettings") {
+          applyMcpSettings(msg.settings || {});
         } else if (msg.type === "triggerFix") {
           // Triggered by Alt+D - simulate clicking the Fix issues button
           var fixButton = document.querySelector('.action-chip[data-action="fix"]');
@@ -6379,49 +6961,31 @@
       }
 
       window.addEventListener("message", function(event) {
-        var msg = event.data;
-        if (msg.type === "searchComplete" || msg.type === "searchError") {
-          searchBtn.disabled = false;
-          searchBtn.textContent = "Web";
-        } else if (msg.type === "youtubeComplete" || msg.type === "youtubeError") {
-          youtubeBtn.disabled = false;
-          youtubeBtn.textContent = "YouTube";
+        var msg = getTrustedExtensionMessage(event);
+        if (!msg) {
+          return;
         }
-      });
 
-      // Handle search results from extension
-      window.addEventListener("message", function(event) {
-        var msg = event.data;
         if (msg.type === "searchComplete") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "Search";
+          searchBtn.textContent = "Web";
           hideProgress();
           addActivity("Search completed", "success");
         } else if (msg.type === "searchError") {
           searchBtn.disabled = false;
-          searchBtn.textContent = "Search";
+          searchBtn.textContent = "Web";
           hideProgress();
           addActivity("Search failed: " + msg.error, "error");
         } else if (msg.type === "youtubeComplete") {
-          searchBtn.disabled = false;
-          searchBtn.textContent = "Search";
+          youtubeBtn.disabled = false;
+          youtubeBtn.textContent = "YouTube";
           hideProgress();
           addActivity("YouTube search completed", "success");
         } else if (msg.type === "youtubeError") {
-          searchBtn.disabled = false;
-          searchBtn.textContent = "Search";
-          hideProgress();
-          addActivity("YouTube search failed: " + msg.error, "error");
-        }
-      });
-
-      window.addEventListener("message", function(event) {
-        var msg = event.data;
-        if (msg.type === "searchComplete" || msg.type === "searchError") {
-          searchBtn.textContent = "Web";
-        } else if (msg.type === "youtubeComplete" || msg.type === "youtubeError") {
           youtubeBtn.disabled = false;
           youtubeBtn.textContent = "YouTube";
+          hideProgress();
+          addActivity("YouTube search failed: " + msg.error, "error");
         }
       });
 
@@ -6753,7 +7317,7 @@
         badge: "Auto-heal on",
         summary: "Watching latency, failures, and edit safety across recent runs."
       });
-      setHeaderProviderSummary("Ollama", "qwen2.5-coder:1.5b");
+      setHeaderProviderSummary("Ollama", "qwen2.5-coder:7b");
       vscode.postMessage({ type: "ready" });
       addRow(
         "Ready. Choose a model, launch a quick action, or ask for a targeted fix.",

@@ -3,6 +3,7 @@ const readline = require("readline");
 const AIAgent = require("./ai-agent/agent");
 const { getDefaultCliConfigPath, resolveCliAiConfig } = require("./utils/cli-config");
 const {
+  BUILT_IN_PROVIDERS,
   buildChatRuntimeConfig,
   createDefaultIo,
   getDefaultModelForProvider,
@@ -17,6 +18,62 @@ function getReadOnlyOverlay() {
     "Answer in plain text only.",
     "If the user asks for code changes, explain the change or provide a patch as prose, but do not execute it."
   ].join("\n");
+}
+
+function getChatHelpText() {
+  return [
+    "Slash commands:",
+    "  /help                 Show available commands",
+    "  /status               Show the active provider, model, and mode",
+    "  /mode fast|heavy|deep Switch reasoning mode",
+    "  /provider NAME        Switch provider",
+    "  /model NAME           Set the active model",
+    "  /clear                Start a fresh chat session",
+    "  /exit                 Leave the session",
+    "",
+    "Shortcuts:",
+    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter"
+  ].join("\n");
+}
+
+function logChatStatus(io, { mode, model, provider }) {
+  io.log(`Mode: ${mode} | Provider: ${provider} | Model: ${model}`);
+}
+
+function buildProviderSwitchMessage(provider, model, options = {}) {
+  const activeConfig = resolveCliAiConfig({
+    ...options,
+    model,
+    provider
+  });
+  const missingKey =
+    (provider === "anthropic" && !activeConfig.anthropicApiKey) ||
+    (provider === "groq" && !activeConfig.groqApiKey) ||
+    (provider === "nvidia" && !activeConfig.nvidiaApiKey) ||
+    (provider === "openrouter" && !activeConfig.openrouterApiKey);
+
+  if (missingKey) {
+    return `Provider switched to ${provider}. Add the API key in env vars or ${getDefaultCliConfigPath()}.`;
+  }
+
+  return `Provider switched to ${provider} (${model}).`;
+}
+
+function pickModelForProvider(provider, currentModel) {
+  const trimmedModel = String(currentModel || "").trim();
+  if (!trimmedModel) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  if (provider === "nvidia" && !isLikelyNvidiaModel(trimmedModel)) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  if (provider !== "nvidia" && isLikelyNvidiaModel(trimmedModel)) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  return trimmedModel;
 }
 
 async function runSingleChatTurn(agent, message, options = {}, io = createDefaultIo()) {
@@ -63,13 +120,15 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
     getDefaultModelForProvider(provider);
   let agent = new AIAgent();
 
-  normalizedIo.log("Code Janitor CLI chat");
-  normalizedIo.log("Commands: /fast, /heavy, /deep, /nvidia, /ollama, /clear, /exit");
+  normalizedIo.log("Code Janitor");
+  normalizedIo.log("Interactive chat session (read-only). Use exec or agent when you want edits.");
+  logChatStatus(normalizedIo, { mode, model, provider });
+  normalizedIo.log("Type /help for commands.");
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "code-janitor> "
+    prompt: "janitor> "
   });
 
   rl.prompt();
@@ -85,6 +144,18 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
 
       if (/^\/(exit|quit)$/i.test(trimmed)) {
         rl.close();
+        return;
+      }
+
+      if (/^\/help$/i.test(trimmed)) {
+        normalizedIo.log(getChatHelpText());
+        rl.prompt();
+        return;
+      }
+
+      if (/^\/status$/i.test(trimmed)) {
+        logChatStatus(normalizedIo, { mode, model, provider });
+        rl.prompt();
         return;
       }
 
@@ -109,33 +180,46 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
         return;
       }
 
-      if (/^\/nvidia$/i.test(trimmed)) {
-        provider = "nvidia";
-        if (!isLikelyNvidiaModel(model)) {
-          model = getDefaultModelForProvider(provider);
-        }
-        const activeConfig = resolveCliAiConfig({
-          ...options,
-          model,
-          provider
-        });
-        if (!activeConfig.nvidiaApiKey) {
-          normalizedIo.log(
-            `Provider switched to NVIDIA. Set NVIDIA_API_KEY, CODE_JANITOR_NVIDIA_API_KEY, or add it to ${getDefaultCliConfigPath()}.`
-          );
-        } else {
-          normalizedIo.log(`Provider switched to NVIDIA (${model}).`);
-        }
+      const modeMatch = trimmed.match(/^\/mode\s+(fast|heavy|deep)$/i);
+      if (modeMatch) {
+        mode = modeMatch[1].toLowerCase();
+        normalizedIo.log(`Mode switched to ${mode}.`);
         rl.prompt();
         return;
       }
 
-      if (/^\/ollama$/i.test(trimmed)) {
-        provider = "ollama";
-        if (isLikelyNvidiaModel(model) || !String(model || "").trim()) {
-          model = getDefaultModelForProvider(provider);
+      const providerMatch = trimmed.match(/^\/provider\s+([a-z0-9._-]+)$/i);
+      if (providerMatch) {
+        const nextProvider = providerMatch[1].toLowerCase();
+        if (!BUILT_IN_PROVIDERS.has(nextProvider)) {
+          normalizedIo.error(
+            `Unknown provider "${nextProvider}". Choose one of: ${Array.from(BUILT_IN_PROVIDERS)
+              .sort()
+              .join(", ")}.`
+          );
+          rl.prompt();
+          return;
         }
-        normalizedIo.log(`Provider switched to Ollama (${model}).`);
+
+        provider = nextProvider;
+        model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
+        rl.prompt();
+        return;
+      }
+
+      const modelMatch = trimmed.match(/^\/model\s+(.+)$/i);
+      if (modelMatch) {
+        model = modelMatch[1].trim();
+        normalizedIo.log(`Model switched to ${model}.`);
+        rl.prompt();
+        return;
+      }
+
+      if (/^\/(anthropic|groq|nvidia|ollama|openrouter)$/i.test(trimmed)) {
+        provider = trimmed.slice(1).toLowerCase();
+        model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
         rl.prompt();
         return;
       }

@@ -62,7 +62,7 @@ Supported targets: one file or one directory. Supported extensions currently inc
 12. **Test Execution & Reporting**: Execute tests with detailed reports and coverage analysis
 13. **Documentation Generation**: Automatically generate README, API docs, and contributing guides
 14. **TODO List Management**: Track and manage TODO comments across your codebase with an interactive panel
-15. **Shared Workspace Memory**: Persistent workspace context mirrored to `workspacememory.md` for multi-agent handoff
+15. **Shared Workspace Memory**: Persistent workspace context mirrored to `workspacememory.md` plus a machine-readable `workspace.json` manifest for multi-agent handoff
 16. **Project Planner**: Time-based todo list with progress tracking, deadline monitoring, and stagnation rescue
 
 ### Installation
@@ -161,6 +161,7 @@ Supported targets: one file or one directory. Supported extensions currently inc
 - **Shared Workspace Memory**: Persistent context ledger for multi-agent collaboration
   - Template-based or AI-rewritten workspace summaries
   - Mirrored to `workspacememory.md` at workspace root
+  - Generates `workspace.json` at workspace root with structured repo metadata, file inventory, package details, Git status, and Graphify summaries
   - Configurable preferred provider
   - Enables seamless handoff between agents without rescanning
 - **Project Planner**: AI-powered project management with progress tracking

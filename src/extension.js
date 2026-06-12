@@ -8,6 +8,7 @@ const {
 const livePreviewer = require("./live-preview");
 const OllamaClient = require("./core/ai/ollama-client");
 const ChatPanel = require("./ai-agent/chat-panel");
+const ProjectPlannerView = require("./ai-agent/project-planner-view");
 const AIAgent = require("./ai-agent/agent");
 const {
   WorkspaceMemoryService
@@ -15,6 +16,8 @@ const {
 const GraphifyPanel = require("./graphify/graphify-panel");
 const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const { computeMinimalReplacement } = require("./utils/minimal-diff");
+const { MCPClientManager } = require("./services/mcp");
+const path = require("path");
 
 const FRONTEND_DIAGNOSTIC_SOURCE = "Code Janitor Frontend";
 const FRONTEND_VALIDATION_EXTENSIONS = [
@@ -31,6 +34,19 @@ const FRONTEND_VALIDATION_EXTENSIONS = [
   ".ts",
   ".tsx"
 ];
+
+function getPreferredWorkspaceRoot() {
+  const editor = vscode.window.activeTextEditor;
+  const activeWorkspaceFolder =
+    editor?.document?.uri?.scheme === "file"
+      ? vscode.workspace.getWorkspaceFolder(editor.document.uri)
+      : null;
+  return (
+    activeWorkspaceFolder?.uri?.fsPath ||
+    vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ||
+    ""
+  );
+}
 
 // Map file extensions / languageIds to fixers
 function getFixerForDocument(document, code, fileName) {
@@ -552,10 +568,21 @@ async function activate(context) {
   let isAutoFixing = false;
   let autoFixTimeout = null;
   const backgroundAiAgent = new AIAgent(context);
+  const mcpClientManager = new MCPClientManager({
+    packageVersion: context.extension?.packageJSON?.version || "1.0.0"
+  });
   const workspaceMemoryService = new WorkspaceMemoryService(context, {
     resolveAgent: () => chatPanelInstance?.agent || backgroundAiAgent
   });
-  chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+  chatPanelInstance = new ChatPanel(
+    context,
+    workspaceMemoryService,
+    mcpClientManager
+  );
+  const projectPlannerView = new ProjectPlannerView(
+    context,
+    workspaceMemoryService
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       "codeJanitor.chatSidebar",
@@ -563,7 +590,21 @@ async function activate(context) {
       { webviewOptions: { retainContextWhenHidden: true } }
     )
   );
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      "codeJanitor.projectPlanner",
+      projectPlannerView,
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  );
   context.subscriptions.push(workspaceMemoryService);
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      mcpClientManager.shutdown().catch((error) => {
+        console.warn("[Extension] Failed to shut down MCP manager:", error);
+      });
+    })
+  );
   await workspaceMemoryService.initialize();
 
   // 1. Manual Fix Command - Open AI chat and trigger Fix issues
@@ -577,7 +618,11 @@ async function activate(context) {
       }
       // Always create fresh instance or reuse if panel is still open
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+        chatPanelInstance = new ChatPanel(
+          context,
+          workspaceMemoryService,
+          mcpClientManager
+        );
       }
       // Show panel and trigger fix
       await chatPanelInstance.show();
@@ -739,7 +784,11 @@ async function activate(context) {
     "codeJanitor.quickFixWithAI",
     async (document, diagnostic) => {
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+        chatPanelInstance = new ChatPanel(
+          context,
+          workspaceMemoryService,
+          mcpClientManager
+        );
       }
       await chatPanelInstance.show();
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -763,7 +812,11 @@ async function activate(context) {
     "codeJanitor.quickFixAllWithAI",
     async (document, diagnostics) => {
       if (!chatPanelInstance) {
-        chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+        chatPanelInstance = new ChatPanel(
+          context,
+          workspaceMemoryService,
+          mcpClientManager
+        );
       }
       await chatPanelInstance.show();
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -915,7 +968,11 @@ async function activate(context) {
           console.log("[Extension] codeJanitor.openChat command triggered");
           if (!chatPanelInstance) {
             console.log("[Extension] Creating new ChatPanel instance");
-            chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+            chatPanelInstance = new ChatPanel(
+              context,
+              workspaceMemoryService,
+              mcpClientManager
+            );
           }
           console.log("[Extension] Opening full-size chat panel");
           await chatPanelInstance.show();
@@ -934,6 +991,33 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     console.error("[Extension] Failed to register codeJanitor.openChat — likely a duplicate Code Janitor install. Continuing activation.", regErr);
   }
 
+  try {
+    const showProjectPlannerDisposable = vscode.commands.registerCommand(
+      "codeJanitor.showProjectPlanner",
+      async () => {
+        try {
+          await vscode.commands.executeCommand("workbench.view.explorer");
+          await vscode.commands.executeCommand("codeJanitor.projectPlanner.focus");
+        } catch (error) {
+          console.error(
+            "[Extension] Failed to focus Project Planner view:",
+            error
+          );
+          vscode.window.showInformationMessage(
+            "Code Janitor: Open Explorer and use View: Open View to enable Project Planner if it is hidden."
+          );
+        }
+      }
+    );
+    context.subscriptions.push(showProjectPlannerDisposable);
+    console.log("[OK] Show Project Planner command registered.");
+  } catch (regErr) {
+    console.error(
+      "[Extension] Failed to register codeJanitor.showProjectPlanner.",
+      regErr
+    );
+  }
+
   // Bug Fix Scan Command (Alt+B)
   try {
     const bugFixScanDisposable = vscode.commands.registerCommand(
@@ -942,7 +1026,11 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
         try {
           const editor = vscode.window.activeTextEditor;
           if (!chatPanelInstance) {
-            chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+            chatPanelInstance = new ChatPanel(
+              context,
+              workspaceMemoryService,
+              mcpClientManager
+            );
           }
           await chatPanelInstance.show();
           await chatPanelInstance.runBugScan(editor);
@@ -1156,7 +1244,8 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     "codeJanitor.generateDocumentation",
     async () => {
       try {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = getPreferredWorkspaceRoot();
+        const activeEditor = vscode.window.activeTextEditor;
 
         if (!workspaceRoot) {
           vscode.window.showErrorMessage("No workspace folder open!");
@@ -1168,45 +1257,117 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
             { label: "README", value: "readme", description: "Generate README.md" },
             { label: "API Documentation", value: "api", description: "Generate API.md" },
             { label: "Contributing Guide", value: "contributing", description: "Generate CONTRIBUTING.md" },
-            { label: "Full Documentation", value: "full", description: "Generate complete documentation suite" }
+            { label: "Full Documentation", value: "full", description: "Generate README.md, docs/API.md, and CONTRIBUTING.md" }
           ],
-          { placeHolder: "Select documentation type" }
+          { placeHolder: "Select documentation type for Ctrl+Alt+D" }
         );
 
         if (!docType) return;
 
-        vscode.window.showInformationMessage(`Generating ${docType.label}...`);
+        const activeRelativePath =
+          activeEditor?.document?.uri?.scheme === "file"
+            ? path
+                .relative(workspaceRoot, activeEditor.document.fileName)
+                .replace(/\\/g, "/")
+            : "";
+        const activeDirectory =
+          activeRelativePath && !activeRelativePath.startsWith("..")
+            ? path.dirname(activeRelativePath).replace(/\\/g, "/")
+            : "";
+        const scopeOptions = [
+          {
+            label: "Whole workspace (Recommended)",
+            value: ".",
+            description: "Scan the workspace root with automatic folder discovery",
+            detail: "Best default when projects do not keep code under src/."
+          }
+        ];
+
+        if (activeRelativePath && !activeRelativePath.startsWith("..")) {
+          scopeOptions.push({
+            label: "Current file folder",
+            value: activeDirectory && activeDirectory !== "." ? activeDirectory : ".",
+            description:
+              activeDirectory && activeDirectory !== "."
+                ? `Scan ${activeDirectory}`
+                : "Scan the workspace root",
+            detail: `Focus documentation around ${activeRelativePath}.`
+          });
+        }
+
+        const scopePick = await vscode.window.showQuickPick(scopeOptions, {
+          placeHolder: "Choose documentation scope"
+        });
+
+        if (!scopePick) return;
 
         const { generateDocumentation } = require("./ai-agent/tools/generate-documentation");
-        const result = await generateDocumentation({
-          type: docType.value,
-          includeApi: true,
-          includeExamples: true
-        }, workspaceRoot);
+        const result = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Code Janitor: Generating ${docType.label}`,
+            cancellable: false
+          },
+          async (progress) => {
+            progress.report({
+              message: `Scanning ${scopePick.value === "." ? "workspace root" : scopePick.value}`
+            });
+            return generateDocumentation(
+              {
+                type: docType.value,
+                includeApi: true,
+                includeExamples: true,
+                scanDirectory: scopePick.value
+              },
+              workspaceRoot,
+              {
+                context,
+                agent: chatPanelInstance?.agent || backgroundAiAgent
+              }
+            );
+          }
+        );
 
         if (result.success) {
-          const message = `Documentation generated: ${result.outputPath}`;
+          const generatedFiles = Array.isArray(result.generatedFiles)
+            ? result.generatedFiles
+            : [{ type: result.type, outputPath: result.outputPath }];
+          const actionLabels = generatedFiles.length > 1
+            ? ["Open README", "Open API Docs", "Open Contributing", "View Summary"]
+            : ["Open File", "View Summary"];
           const action = await vscode.window.showInformationMessage(
-            message,
-            "Open File",
-            "View Summary"
+            `${result.aiGenerated ? `AI-generated via ${result.aiProviderDisplayName || result.aiProvider || "configured provider"}` : "Template-generated fallback"}: ${generatedFiles.map((file) => file.outputPath).join(", ")}`,
+            ...actionLabels
           );
 
-          if (action === "Open File") {
-            const docUri = vscode.Uri.file(
-              require("path").join(workspaceRoot, result.outputPath)
-            );
-            const doc = await vscode.workspace.openTextDocument(docUri);
-            await vscode.window.showTextDocument(doc);
+          if (action && action !== "View Summary") {
+            const selectedFile = action === "Open README"
+              ? generatedFiles.find((file) => file.type === "readme")
+              : action === "Open API Docs"
+                ? generatedFiles.find((file) => file.type === "api")
+                : action === "Open Contributing"
+                  ? generatedFiles.find((file) => file.type === "contributing")
+                  : generatedFiles[0];
+            if (selectedFile?.outputPath) {
+              const docUri = vscode.Uri.file(
+                path.join(workspaceRoot, selectedFile.outputPath)
+              );
+              const doc = await vscode.workspace.openTextDocument(docUri);
+              await vscode.window.showTextDocument(doc);
+            }
           } else if (action === "View Summary") {
             const summary = `Documentation Generation Summary\n\n` +
               `Type: ${result.type}\n` +
-              `Output: ${result.outputPath}\n` +
+              `Requested Scope: ${result.scanDirectory}\n` +
+              `Resolved Scan Path: ${result.analysis.scanDirectory || result.scanDirectory}\n` +
+              `Generator: ${result.aiGenerated ? `AI (${result.aiProviderDisplayName || result.aiProvider || "configured provider"})` : "Template fallback"}\n` +
+              `Primary Output: ${result.outputPath}\n` +
+              `Generated Files: ${generatedFiles.map((file) => `${file.type} -> ${file.outputPath}`).join("\n")}\n\n` +
               `Files Analyzed: ${result.analysis.files}\n` +
               `Functions Documented: ${result.analysis.functions}\n` +
               `Classes Documented: ${result.analysis.classes}\n` +
               `Languages: ${result.analysis.languages.join(", ")}`;
-            
+
             const doc = await vscode.workspace.openTextDocument({
               content: summary,
               language: "plaintext"
@@ -1231,7 +1392,11 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     async () => {
       try {
         if (!chatPanelInstance) {
-          chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+          chatPanelInstance = new ChatPanel(
+            context,
+            workspaceMemoryService,
+            mcpClientManager
+          );
         }
         await chatPanelInstance.runGitHubRepositoryContext();
       } catch (error) {
@@ -1329,7 +1494,11 @@ Check Developer Console (Help -> Toggle Developer Tools) for details.`);
     handleUri(uri) {
       if (uri.path === "/check-models") {
         if (!chatPanelInstance) {
-          chatPanelInstance = new ChatPanel(context, workspaceMemoryService);
+          chatPanelInstance = new ChatPanel(
+            context,
+            workspaceMemoryService,
+            mcpClientManager
+          );
         }
         chatPanelInstance.show();
       }
@@ -1430,7 +1599,9 @@ function updateFrontendDiagnostics(
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(startLine, startColumn, startLine, endColumn),
       issue.message,
-      vscode.DiagnosticSeverity.Error
+      issue.severity === "warning"
+        ? vscode.DiagnosticSeverity.Warning
+        : vscode.DiagnosticSeverity.Error
     );
 
     diagnostic.source = FRONTEND_DIAGNOSTIC_SOURCE;

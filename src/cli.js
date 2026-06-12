@@ -13,8 +13,9 @@ function parseArgs(argv) {
     agentMessage: "",
     chatMessage: "",
     check: false,
-    command: "fix",
+    command: "",
     help: false,
+    interactiveDefault: false,
     json: false,
     maxSteps: null,
     model: "",
@@ -27,7 +28,7 @@ function parseArgs(argv) {
     write: true
   };
   const positionals = [];
-  const chatTokens = [];
+  const freeformTokens = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -143,8 +144,8 @@ function parseArgs(argv) {
       throw new Error(`Unknown option: ${arg}`);
     }
 
-    if (options.command === "chat" || options.command === "agent") {
-      chatTokens.push(arg);
+    if (options.command === "chat" || options.command === "agent" || options.command === "exec") {
+      freeformTokens.push(arg);
       continue;
     }
 
@@ -158,21 +159,37 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === "exec" && positionals.length === 0) {
+      options.command = "exec";
+      continue;
+    }
+
+    if (arg === "fix" && positionals.length === 0) {
+      options.command = "fix";
+      continue;
+    }
+
     positionals.push(arg);
   }
 
   if (options.command === "chat") {
     return {
       ...options,
-      chatMessage: chatTokens.join(" ").trim(),
+      chatMessage: freeformTokens.join(" ").trim(),
       targetPath: process.cwd()
     };
   }
 
-  if (options.command === "agent") {
+  if (options.command === "agent" || options.command === "exec") {
+    const agentMessage = freeformTokens.join(" ").trim();
+
+    if (options.command === "exec" && !agentMessage) {
+      throw new Error("Subcommand exec requires a task.");
+    }
+
     return {
       ...options,
-      agentMessage: chatTokens.join(" ").trim(),
+      agentMessage,
       targetPath: process.cwd()
     };
   }
@@ -181,8 +198,18 @@ function parseArgs(argv) {
     throw new Error("Only one file or directory target can be provided.");
   }
 
+  if (!options.command && argv.length === 0) {
+    return {
+      ...options,
+      command: "agent",
+      interactiveDefault: true,
+      targetPath: process.cwd()
+    };
+  }
+
   return {
     ...options,
+    command: options.command || "fix",
     targetPath: positionals[0] || process.cwd()
   };
 }
@@ -193,16 +220,27 @@ function getVersion() {
 
 function getHelpText() {
   return `
-Usage: code-janitor [path] [options]
+Usage:
+  code-janitor
+  code-janitor exec <task> [options]
+  code-janitor chat [prompt] [options]
+  code-janitor fix [path] [options]
+  code-janitor agent [task] [options]
+
+Commands:
+  exec             Run a one-shot coding task, similar to codex exec
+  chat             Start a read-only chat session or answer a single prompt
+  fix              Analyze a file or directory and apply safe fixes
+  agent            Open the interactive agent loop or run a one-shot task
 
 Options:
   -h, --help        Show this help message
   -v, --version     Show version information
   --check           Report files that would change without writing them
-  --write           Apply fixes to disk (default)
-  --json            Print the final report as JSON
-  --mode NAME       Chat mode: fast, heavy, or deep
-  --max-steps N     Maximum model/tool loop rounds for the agent subcommand
+  --write           Apply fixes to disk (default for fix)
+  --json            Print the final fix report as JSON
+  --mode NAME       Agent/chat mode: fast, heavy, or deep
+  --max-steps N     Maximum model/tool loop rounds for exec or agent
   --ai              Allow AI-assisted fixes when a fixer supports them
   --provider NAME   AI provider: anthropic, groq, nvidia, ollama, or openrouter
   --model NAME      Model to use for the selected provider
@@ -210,20 +248,18 @@ Options:
   --nvidia-api-key  NVIDIA API key (or set NVIDIA_API_KEY / CODE_JANITOR_NVIDIA_API_KEY)
   --timeout MS      AI request timeout in milliseconds (0 disables timeout)
 
-Description:
-  Default mode analyzes a supported file or directory and applies safe formatting
-  and syntax fixes. If no path is provided, the current working directory is used.
-  Use the chat subcommand for a read-only terminal chat experience.
-  Use the agent subcommand for a narrated tool loop that can inspect, edit, and verify.
+Behavior:
+  Running code-janitor with no arguments opens the interactive agent session.
+  Use fix when you want the formatter and syntax-fixer workflow explicitly.
+  Legacy path-first usage still works, so code-janitor src/app.js --check remains valid.
 
 Examples:
   code-janitor
-  code-janitor src
-  code-janitor src/app.js --check
-  code-janitor chat
+  code-janitor exec fix the CLI help text in src/cli.js
+  code-janitor exec debug npm test failure --provider anthropic --max-steps 8
   code-janitor chat explain src/extension.js --mode heavy
-  code-janitor agent fix the CLI help text in src/cli.js
-  code-janitor agent debug npm test failure --provider anthropic --max-steps 8
+  code-janitor fix
+  code-janitor fix src/app.js --check
   code-janitor . --json
   code-janitor src/broken.py --ai --model qwen2.5-coder:1.5b
   code-janitor src/broken.js --ai --provider nvidia --model meta/llama-3.1-8b-instruct
@@ -294,7 +330,7 @@ async function runCli(argv, io = console) {
     return 0;
   }
 
-  if (options.command === "agent") {
+  if (options.command === "agent" || options.command === "exec") {
     return runAgentCli(options, io);
   }
 

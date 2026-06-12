@@ -101,6 +101,37 @@ const COMPILED_PATTERNS = Object.freeze({
   grep: /GREP:\s*([^\r\n`]+)\s+in\s+([^\r\n]+)/gi
 });
 
+const FILE_WRITE_ACTION_TYPES = new Set([
+  "patch",
+  "file",
+  "apply_diff",
+  "insert_content"
+]);
+
+function getActionLineFootprint(action) {
+  if (!action || typeof action !== "object") {
+    return 0;
+  }
+
+  if (action.type === "patch") {
+    return String(action.search || "").split("\n").length;
+  }
+
+  if (action.type === "file") {
+    return String(action.content || "").split("\n").length;
+  }
+
+  if (action.type === "apply_diff") {
+    return String(action.diff || "").split("\n").length;
+  }
+
+  if (action.type === "insert_content") {
+    return String(action.content || "").split("\n").length;
+  }
+
+  return 0;
+}
+
 /**
  * Action dependency graph builder and parallel executor
  */
@@ -124,7 +155,7 @@ class ParallelActionExecutor {
     const commands = [];
 
     for (const action of actions) {
-      if (action.type === "patch" || action.type === "file") {
+      if (FILE_WRITE_ACTION_TYPES.has(action.type)) {
         if (!fileWrites.has(action.path)) {
           fileWrites.set(action.path, []);
         }
@@ -588,8 +619,7 @@ class SmartEditGate {
 
     // Reduce confidence for large changes
     const totalLines = actions.reduce((sum, action) => {
-      const searchLines = (action.search || "").split("\n").length;
-      return sum + searchLines;
+      return sum + getActionLineFootprint(action);
     }, 0);
 
     if (totalLines > 100) score *= 0.7;
@@ -612,7 +642,7 @@ class SmartEditGate {
     // High risk indicators
     const hasMultipleFiles = new Set(actions.map(a => a.path)).size > 3;
     const hasLargeChanges = actions.some(a => 
-      (a.search || "").split("\n").length > 100
+      getActionLineFootprint(a) > 100
     );
     const hasCriticalFiles = actions.some(a => 
       /package\.json|tsconfig\.json|webpack\.config/i.test(a.path || "")

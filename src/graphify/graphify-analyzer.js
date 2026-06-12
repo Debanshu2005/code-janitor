@@ -24,6 +24,7 @@ const TRACKED_BINARY_EXTENSIONS = new Set([
   ".ico",
   ".bmp"
 ]);
+const MODULE_RESOLUTION_EXTENSIONS = [...SCRIPT_EXTENSIONS, ".json"];
 
 class GraphifyAnalyzer {
   constructor(workspaceRoot) {
@@ -31,6 +32,7 @@ class GraphifyAnalyzer {
     this.nodes = [];
     this.edges = [];
     this.communities = new Map();
+    this.moduleResolution = this._loadModuleResolutionConfig();
   }
 
   async generateKnowledgeGraph() {
@@ -87,7 +89,12 @@ class GraphifyAnalyzer {
   }
 
   async analyzeCodebase() {
+    this.nodes = [];
+    this.edges = [];
+    this.communities = new Map();
+    this.moduleResolution = this._loadModuleResolutionConfig();
     const ignoreDirs = new Set([".git", "node_modules", "dist", "build", "out", "venv", "__pycache__", "graphify-out"]);
+    const seenEdges = new Set();
 
     const scanDirectory = async (dirPath) => {
       try {
@@ -132,12 +139,16 @@ class GraphifyAnalyzer {
                     node.dependencies.push(resolvedDependency);
                   }
 
-                  this.edges.push({
-                    from: node.path,
-                    to: resolvedDependency,
-                    type: reference.type,
-                    specifier: reference.specifier
-                  });
+                  const edgeKey = `${node.path}=>${resolvedDependency}`;
+                  if (!seenEdges.has(edgeKey)) {
+                    seenEdges.add(edgeKey);
+                    this.edges.push({
+                      from: node.path,
+                      to: resolvedDependency,
+                      type: reference.type,
+                      specifier: reference.specifier
+                    });
+                  }
                 }
               }
 
@@ -220,7 +231,10 @@ class GraphifyAnalyzer {
     if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
       // JavaScript/TypeScript
       const importRegex = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
+      const sideEffectImportRegex = /import\s+['"](.+?)['"]/g;
       const requireRegex = /require\s*\(['"](.+?)['"]\)/g;
+      const exportFromRegex =
+        /export\s+(?:\*\s+from|\{[\s\S]*?\}\s+from)\s+['"](.+?)['"]/g;
       const exportRegex = /export\s+(default\s+)?(class|function|const|let|var)\s+(\w+)/g;
       const dynamicImportRegex = /import\s*\(\s*['"](.+?)['"]\s*\)/g;
       const importMetaAssetRegex =
@@ -235,11 +249,27 @@ class GraphifyAnalyzer {
           kind: "module"
         });
       }
+      while ((match = sideEffectImportRegex.exec(content)) !== null) {
+        node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "side-effect-import",
+          kind: "module"
+        });
+      }
       while ((match = requireRegex.exec(content)) !== null) {
         node.imports.push(match[1]);
         references.push({
           specifier: match[1],
           type: "requires",
+          kind: "module"
+        });
+      }
+      while ((match = exportFromRegex.exec(content)) !== null) {
+        node.imports.push(match[1]);
+        references.push({
+          specifier: match[1],
+          type: "re-export",
           kind: "module"
         });
       }
@@ -515,64 +545,160 @@ class GraphifyAnalyzer {
     }
 
     const baseDir = path.dirname(currentFilePath);
+    const isRelative = /^\.\.?(?:[\\/]|$)/.test(normalizedSpecifier);
     const isRootRelative =
       /^[\\/]/.test(normalizedSpecifier) &&
       !/^[a-zA-Z]:[\\/]/.test(normalizedSpecifier) &&
       !normalizedSpecifier.startsWith("//") &&
       !normalizedSpecifier.startsWith("\\\\");
+    const candidateBases = [];
 
-    const basePath = isRootRelative
-      ? path.join(this.workspaceRoot, normalizedSpecifier.replace(/^[\\/]+/, ""))
-      : path.resolve(baseDir, normalizedSpecifier);
-    const ext = path.extname(basePath).toLowerCase();
-    const candidateBases = [basePath];
-
-    if (
-      ["asset", "stylesheet", "script"].includes(kind) &&
-      !isRootRelative &&
-      !/^\.\.?(?:[\\/]|$)/.test(normalizedSpecifier) &&
-      /[\\/]/.test(normalizedSpecifier)
-    ) {
+    if (isRootRelative) {
       candidateBases.push(
         path.join(this.workspaceRoot, normalizedSpecifier.replace(/^[\\/]+/, ""))
       );
-    }
+    } else if (isRelative) {
+      candidateBases.push(path.resolve(baseDir, normalizedSpecifier));
+    } else {
+      candidateBases.push(...this._resolveAliasCandidateBases(normalizedSpecifier));
 
-    const candidates = [];
-    candidateBases.forEach((candidateBase) => {
-      candidates.push(candidateBase);
-    });
-
-    if (!ext) {
-      if (kind === "module" || kind === "script") {
-        candidateBases.forEach((candidateBase) => {
-          for (const candidateExt of SCRIPT_EXTENSIONS) {
-            candidates.push(candidateBase + candidateExt);
-            candidates.push(path.join(candidateBase, "index" + candidateExt));
-          }
-        });
-      } else if (kind === "stylesheet") {
-        candidateBases.forEach((candidateBase) => {
-          for (const candidateExt of STYLE_EXTENSIONS) {
-            candidates.push(candidateBase + candidateExt);
-            candidates.push(path.join(candidateBase, "index" + candidateExt));
-          }
-        });
+      if (
+        ["asset", "stylesheet", "script"].includes(kind) &&
+        /[\\/]/.test(normalizedSpecifier)
+      ) {
+        candidateBases.push(path.resolve(baseDir, normalizedSpecifier));
+        candidateBases.push(path.join(this.workspaceRoot, normalizedSpecifier));
       }
     }
 
-    for (const candidate of candidates) {
-      try {
-        const stat = fsSync.statSync(candidate);
-        if (stat.isFile()) {
-          return path.relative(this.workspaceRoot, candidate).replace(/\\/g, "/");
-        }
-      } catch {
+    return this._resolveFirstExistingCandidate(
+      this._buildDependencyCandidates(candidateBases, kind)
+    );
+  }
+
+  _buildDependencyCandidates(candidateBases, kind) {
+    const uniqueBases = [...new Set(candidateBases.filter(Boolean))];
+    const candidates = [];
+
+    for (const candidateBase of uniqueBases) {
+      candidates.push(candidateBase);
+      const ext = path.extname(candidateBase).toLowerCase();
+      if (ext) {
         continue;
       }
+
+      if (kind === "module" || kind === "script") {
+        for (const candidateExt of MODULE_RESOLUTION_EXTENSIONS) {
+          candidates.push(candidateBase + candidateExt);
+          candidates.push(path.join(candidateBase, "index" + candidateExt));
+        }
+      } else if (kind === "stylesheet") {
+        for (const candidateExt of STYLE_EXTENSIONS) {
+          candidates.push(candidateBase + candidateExt);
+          candidates.push(path.join(candidateBase, "index" + candidateExt));
+        }
+      }
     }
 
-    return null;
+    return candidates;
+  }
+
+  _loadModuleResolutionConfig() {
+    const aliases = [];
+    const baseDirectories = [];
+    const configFiles = ["tsconfig.json", "jsconfig.json"];
+
+    for (const fileName of configFiles) {
+      const configPath = path.join(this.workspaceRoot, fileName);
+      const config = this._readJsonConfigFile(configPath);
+      const compilerOptions = config?.compilerOptions;
+
+      if (!compilerOptions || typeof compilerOptions !== "object") {
+        continue;
+      }
+
+      const configDir = path.dirname(configPath);
+      if (typeof compilerOptions.baseUrl === "string" && compilerOptions.baseUrl.trim()) {
+        baseDirectories.push(path.resolve(configDir, compilerOptions.baseUrl.trim()));
+      }
+
+      const paths = compilerOptions.paths;
+      if (!paths || typeof paths !== "object") {
+        continue;
+      }
+
+      for (const [aliasKey, rawTargets] of Object.entries(paths)) {
+        const targets = Array.isArray(rawTargets) ? rawTargets : [rawTargets];
+        const normalizedTargets = targets
+          .map((target) => String(target || "").trim())
+          .filter(Boolean);
+        if (normalizedTargets.length === 0) {
+          continue;
+        }
+
+        if (aliasKey.endsWith("/*")) {
+          aliases.push({
+            type: "prefix",
+            key: aliasKey.slice(0, -1),
+            targets: normalizedTargets.map((target) =>
+              target.endsWith("/*") ? target.slice(0, -1) : target
+            ),
+            configDir
+          });
+        } else {
+          aliases.push({
+            type: "exact",
+            key: aliasKey,
+            targets: normalizedTargets,
+            configDir
+          });
+        }
+      }
+    }
+
+    return {
+      aliases,
+      baseDirectories: [...new Set(baseDirectories)]
+    };
+  }
+
+  _resolveAliasCandidateBases(specifier) {
+    const candidates = [];
+    const normalizedSpecifier = String(specifier || "").trim();
+    if (!normalizedSpecifier) {
+      return candidates;
+    }
+
+    if (normalizedSpecifier.startsWith("@/") || normalizedSpecifier.startsWith("~/")) {
+      candidates.push(path.join(this.workspaceRoot, normalizedSpecifier.slice(2)));
+    }
+
+    for (const alias of this.moduleResolution.aliases || []) {
+      if (alias.type === "exact") {
+        if (normalizedSpecifier !== alias.key) {
+          continue;
+        }
+        for (const target of alias.targets) {
+          candidates.push(path.resolve(alias.configDir, target));
+        }
+        continue;
+      }
+
+      if (!normalizedSpecifier.startsWith(alias.key)) {
+        continue;
+      }
+
+      const suffix = normalizedSpecifier.slice(alias.key.length);
+      for (const target of alias.targets) {
+        candidates.push(path.resolve(alias.configDir, target + suffix));
+      }
+    }
+
+    for (const baseDirectory of this.moduleResolution.baseDirectories || []) {
+      candidates.push(path.resolve(baseDirectory, normalizedSpecifier));
+    }
+
+    return [...new Set(candidates)];
   }
 
   _resolvePythonModulePath(specifier, currentFilePath) {
@@ -636,6 +762,23 @@ class GraphifyAnalyzer {
     }
 
     return null;
+  }
+
+  _readJsonConfigFile(filePath) {
+    if (!fsSync.existsSync(filePath)) {
+      return null;
+    }
+
+    try {
+      const raw = fsSync.readFileSync(filePath, "utf8");
+      const cleaned = raw
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/,\s*([}\]])/g, "$1");
+      return JSON.parse(cleaned);
+    } catch {
+      return null;
+    }
   }
 
   _stripQueryAndHash(specifier) {
@@ -803,7 +946,9 @@ Before searching raw files, consult this report to understand:
       cursor: this.generateCursorConfig(),
       gemini: this.generateGeminiConfig(),
       antigravity: this.generateAntigravityConfig(),
-      agents: this.generateAgentsConfig()
+      agents: this.generateAgentsConfig(),
+      agentsRepositoryContext: this.generateAgentsRepositoryContextConfig(),
+      agentsGraphify: this.generateAgentsGraphifyConfig()
     };
 
     // Collect all files that will be written outside workspace
@@ -891,8 +1036,16 @@ Before searching raw files, consult this report to understand:
       agentsContent = "# AI Agent Instructions\n\n";
     }
 
-    if (!agentsContent.includes("## Graphify Knowledge Graph")) {
-      agentsContent += configs.agents;
+    let nextAgentsContent = agentsContent;
+    if (!nextAgentsContent.includes("## Repository Context Priority")) {
+      nextAgentsContent += configs.agentsRepositoryContext;
+    }
+    if (!nextAgentsContent.includes("## Graphify Knowledge Graph")) {
+      nextAgentsContent += configs.agentsGraphify;
+    }
+
+    if (nextAgentsContent !== agentsContent) {
+      agentsContent = nextAgentsContent;
       await fs.writeFile(agentsPath, agentsContent, "utf8");
     }
   }
@@ -959,17 +1112,33 @@ Use the knowledge graph to navigate the codebase efficiently.
 `;
   }
 
-  generateAgentsConfig() {
+  generateAgentsRepositoryContextConfig() {
+    return `
+## Repository Context Priority
+
+**For all AI agents**: Before broad repo scans or repo-level answers, use this order:
+
+1. Read \`workspace.json\` first when it exists
+2. Read \`graphify-out/GRAPH_REPORT.md\` next when it exists
+3. Read \`graphify-out/WORKSPACE_MEMORY.md\` and \`workspacememory.md\` after that when they exist
+
+Use \`workspace.json\` for structured repo metadata such as file inventory, package details, Git status, Graphify summary, recent changes, and suggested starting points.
+`;
+  }
+
+  generateAgentsGraphifyConfig() {
     return `
 ## Graphify Knowledge Graph
 
 **For all AI agents**: Before answering architecture questions or searching files, check if \`graphify-out/GRAPH_REPORT.md\` exists.
 
 If the knowledge graph exists:
-1. Read \`graphify-out/GRAPH_REPORT.md\` first
-2. Identify god nodes (central files with high connectivity)
-3. Understand community structure (how modules are organized)
-4. Navigate via the dependency graph instead of grepping through every file
+1. Read \`workspace.json\` first when it exists so you inherit machine-readable repo context
+2. Read \`graphify-out/GRAPH_REPORT.md\`
+3. Read \`graphify-out/WORKSPACE_MEMORY.md\` or \`workspacememory.md\` for handoff notes and recent activity
+4. Identify god nodes (central files with high connectivity)
+5. Understand community structure (how modules are organized)
+6. Navigate via the dependency graph instead of grepping through every file
 
 This approach:
 - Improves accuracy by understanding architecture first
@@ -978,6 +1147,13 @@ This approach:
 
 Supported platforms: Aider, OpenClaw, Factory Droid, Trae, Hermes, Codex, OpenCode
 `;
+  }
+
+  generateAgentsConfig() {
+    return (
+      this.generateAgentsRepositoryContextConfig() +
+      this.generateAgentsGraphifyConfig()
+    );
   }
 }
 

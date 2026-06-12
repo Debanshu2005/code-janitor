@@ -17,6 +17,8 @@ const { createOptimizedAgent } = require("./optimizer-integration");
 const {
   DEFAULT_OUTPUT_RELATIVE_PATH,
   resolveWorkspaceMemoryPaths,
+  SHARED_WORKSPACE_JSON_FILENAME,
+  SHARED_WORKSPACE_MEMORY_FILENAME,
   sanitizeOutputRelativePath
 } = require("./workspace-memory-config");
 
@@ -28,7 +30,13 @@ const MAX_ACTIVE_FILE_CONTEXT_CHARS = 24_000;
 const MAX_ACTIVE_FILE_FULL_CONTEXT_CHARS = 60_000;
 const MAX_ACTIVE_FILE_FULL_CONTEXT_LINES = 1_000;
 const MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS = 12_000;
+const MAX_FAST_FOCUSED_EDIT_TARGET_SNIPPET_CHARS = 8_000;
 const MAX_FULL_EDITABLE_TARGET_CHARS = 48_000;
+const MAX_FAST_EXECUTION_PROMPT_CHARS = 16_000;
+const MAX_FAST_EXECUTION_ACTIVE_FILE_CHARS = 10_000;
+const MAX_FAST_EXECUTION_RELEVANT_CONTEXT_CHARS = 3_000;
+const MAX_FAST_EXECUTION_ASSIST_CONTEXT_CHARS = 1_200;
+const MAX_FAST_EXECUTION_HISTORY_CHARS = 500;
 const MAX_RELEVANT_FILES = 3;
 const MAX_OPEN_TAB_SNIPPETS = 1;
 const MAX_HISTORY_ENTRIES = 3;
@@ -47,8 +55,13 @@ const MAX_COMMAND_OUTPUT_CHARS = 12_000;
 const MAX_FETCHED_URLS = 2;
 const MAX_FETCHED_CONTENT_CHARS = 5_000;
 const MAX_WORKSPACE_MEMORY_CONTEXT_CHARS = 2_400;
+const MAX_COMPACT_WORKSPACE_MEMORY_CONTEXT_CHARS = 1_200;
+const MAX_AGENTS_INSTRUCTIONS_CONTEXT_CHARS = 1_800;
+const MAX_COMPACT_AGENTS_INSTRUCTIONS_CONTEXT_CHARS = 900;
 const PERSISTED_HISTORY_TRUNCATION_NOTICE =
   "[chat history truncated for storage]";
+const PROMPT_BUDGET_TRUNCATION_NOTICE =
+  "\n[context truncated for prompt budget]";
 const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -159,8 +172,10 @@ class AIAgent {
     this._lastActiveEditor = vscode.window.activeTextEditor || null;
     this._relevantFileCache = new Map();
     this._knowledgeGraphCache = new Map();
+    this._workspaceMemoryCache = new Map();
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
+    this._lastPipelineMetrics = null;
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
     this._syncCurrentSessionReferences();
@@ -180,6 +195,98 @@ class AIAgent {
     if (editor && editor.document.uri.scheme === "file") {
       this._lastActiveEditor = editor;
     }
+  }
+
+  getLastPipelineMetrics() {
+    return this._lastPipelineMetrics
+      ? JSON.parse(JSON.stringify(this._lastPipelineMetrics))
+      : null;
+  }
+
+  _createChatPipelineState({ mode = "fast", earlyIntent = "general" } = {}) {
+    this._lastPipelineMetrics = null;
+    return {
+      mode,
+      earlyIntent,
+      startedAt: Date.now(),
+      stageTimings: [],
+      flags: {
+        shortCircuitReason: "",
+        usedRepoContext: false,
+        loadedKnowledgeGraph: false,
+        loadedWorkspaceMemory: false,
+        loadedFetchedWebContext: false,
+        usedNvidiaFallback: false,
+        usedStructuredRetry: false,
+        usedFileOnlyRetry: false
+      }
+    };
+  }
+
+  async _runChatPipelineStage(state, name, handler) {
+    const startedAt = Date.now();
+    const stage = {
+      name,
+      startedAt,
+      status: "completed"
+    };
+
+    try {
+      const details = await handler();
+      stage.durationMs = Date.now() - startedAt;
+      if (
+        details &&
+        typeof details === "object" &&
+        !Array.isArray(details) &&
+        Object.keys(details).length > 0
+      ) {
+        stage.details = details;
+      }
+      state.stageTimings.push(stage);
+      return details;
+    } catch (error) {
+      stage.status = "failed";
+      stage.durationMs = Date.now() - startedAt;
+      stage.error = error?.message || String(error);
+      state.stageTimings.push(stage);
+      throw error;
+    }
+  }
+
+  _finalizeChatPipelineResponse(state, response, extra = {}) {
+    const pipelineMetrics = {
+      mode: state.mode,
+      earlyIntent: state.earlyIntent,
+      finalIntent: extra.finalIntent || state.earlyIntent,
+      totalDurationMs: Date.now() - state.startedAt,
+      promptChars:
+        typeof extra.prompt === "string" ? extra.prompt.length : 0,
+      retryBasePromptChars:
+        typeof extra.retryBasePrompt === "string"
+          ? extra.retryBasePrompt.length
+          : 0,
+      assistantWorkspaceContextChars:
+        typeof extra.assistantWorkspaceContext === "string"
+          ? extra.assistantWorkspaceContext.length
+          : 0,
+      hasEffectiveWorkspace: Boolean(extra.effectiveWorkspace),
+      flags: { ...state.flags },
+      stages: state.stageTimings.map((stage) => ({
+        ...stage,
+        details: stage.details ? { ...stage.details } : undefined
+      }))
+    };
+
+    this._lastPipelineMetrics = pipelineMetrics;
+
+    if (!response || typeof response !== "object" || response.error) {
+      return response;
+    }
+
+    return {
+      ...response,
+      pipelineMetrics
+    };
   }
 
   _getConversationStateKey() {
@@ -569,6 +676,56 @@ class AIAgent {
     );
   }
 
+  _isExplicitRepoContextRequest(message) {
+    const text = String(message || "").trim();
+    if (!text) {
+      return false;
+    }
+
+    return (
+      /\b(architecture|structure|dependency|dependencies|graph|graphify|workspace memory|handoff|recent changes|what changed|git status|hot files|activity|tracking|agents\.md|agent instructions|repo instructions)\b/i.test(
+        text
+      ) ||
+      /\b(where is|where's|locate|find|location|which file|what file|project overview|workspace overview|how does .* fit)\b/i.test(
+        text
+      )
+    );
+  }
+
+  _shouldLoadPathHintRepoAssist(message, intent = "general") {
+    const text = String(message || "").trim();
+    const pathHints = this._extractPathHints(text);
+    if (pathHints.length === 0) {
+      return false;
+    }
+
+    const explicitLookup =
+      /\b(where is|where's|locate|find|location|which file|what file|dependency|dependencies|graph|graphify|module|modules|references?|imports?|used by|calls?|neighbors?)\b/i.test(
+        text
+      );
+    const repoWideExecution =
+      (intent === "edit" || intent === "debug" || intent === "refactor") &&
+      this._shouldUseRepoContextInFastMode(text);
+
+    return explicitLookup || repoWideExecution;
+  }
+
+  _shouldLoadWorkspaceAssistContext(
+    userMessage,
+    intent = "general",
+    mode = "fast",
+    provider = ""
+  ) {
+    return (
+      mode !== "fast" ||
+      intent === "scan" ||
+      intent === "show_graph" ||
+      this._shouldUseRepoContextInFastMode(userMessage, provider) ||
+      this._isExplicitRepoContextRequest(userMessage) ||
+      this._shouldLoadPathHintRepoAssist(userMessage, intent)
+    );
+  }
+
   _buildPromptHistoryContext(isTabQuestion = false, options = {}) {
     const userOnly = options.userOnly === true;
     const session = this._getCurrentSession();
@@ -594,6 +751,182 @@ class AIAgent {
     }
 
     return parts.join("\n\n");
+  }
+
+  _trimPromptSection(text, maxChars, notice = PROMPT_BUDGET_TRUNCATION_NOTICE) {
+    const value = String(text || "").trim();
+    if (!value) {
+      return "";
+    }
+    if (!Number.isFinite(maxChars) || maxChars <= 0 || value.length <= maxChars) {
+      return value;
+    }
+
+    const suffix = String(notice || "");
+    const availableChars = Math.max(0, maxChars - suffix.length);
+    if (availableChars <= 0) {
+      return value.slice(0, maxChars).trimEnd();
+    }
+
+    return `${value.slice(0, availableChars).trimEnd()}${suffix}`;
+  }
+
+  _buildFastExecutionPrompt({
+    effectiveSystemInstruction = "",
+    editHint = "",
+    assistantWorkspaceContext = "",
+    editableTargetsContext = "",
+    focusedEditLanguageHint = "",
+    activeCtx = "",
+    contextToUse = "",
+    history = "",
+    resolvedMessage = "",
+    budgets = {}
+  } = {}) {
+    const promptBudgetChars = Number.isFinite(budgets.promptChars)
+      ? budgets.promptChars
+      : MAX_FAST_EXECUTION_PROMPT_CHARS;
+    const assistantContextChars = Number.isFinite(budgets.assistantContextChars)
+      ? budgets.assistantContextChars
+      : MAX_FAST_EXECUTION_ASSIST_CONTEXT_CHARS;
+    const activeContextChars = Number.isFinite(budgets.activeContextChars)
+      ? budgets.activeContextChars
+      : MAX_FAST_EXECUTION_ACTIVE_FILE_CHARS;
+    const relevantContextChars = Number.isFinite(budgets.relevantContextChars)
+      ? budgets.relevantContextChars
+      : MAX_FAST_EXECUTION_RELEVANT_CONTEXT_CHARS;
+    const historyChars = Number.isFinite(budgets.historyChars)
+      ? budgets.historyChars
+      : MAX_FAST_EXECUTION_HISTORY_CHARS;
+    let trimmedAssistantContext = this._trimPromptSection(
+      assistantWorkspaceContext,
+      assistantContextChars
+    );
+    let trimmedActiveContext = this._trimPromptSection(
+      activeCtx,
+      activeContextChars
+    );
+    let trimmedRelevantContext = this._trimPromptSection(
+      contextToUse,
+      relevantContextChars
+    );
+    let trimmedHistory = this._trimPromptSection(
+      history,
+      historyChars
+    );
+
+    const buildPromptPrefix = () =>
+      `${effectiveSystemInstruction}${editHint}${trimmedAssistantContext ? `\n\n${trimmedAssistantContext}` : ""}${editableTargetsContext ? `\n\n${editableTargetsContext}` : ""}${focusedEditLanguageHint ? `\n\n${focusedEditLanguageHint}` : ""}${trimmedActiveContext ? `\n\n${trimmedActiveContext}` : ""}${trimmedRelevantContext ? `\n\n${trimmedRelevantContext}` : ""}`;
+    const buildPrompt = () =>
+      `${buildPromptPrefix()}${trimmedHistory ? `\n\n${trimmedHistory}` : ""}
+
+### USER_MESSAGE ###
+${resolvedMessage}`;
+
+    let prompt = buildPrompt();
+
+    if (prompt.length > promptBudgetChars && trimmedHistory) {
+      trimmedHistory = "";
+      prompt = buildPrompt();
+    }
+
+    if (prompt.length > promptBudgetChars && trimmedRelevantContext) {
+      trimmedRelevantContext = "";
+      prompt = buildPrompt();
+    }
+
+    if (prompt.length > promptBudgetChars && trimmedAssistantContext) {
+      trimmedAssistantContext = "";
+      prompt = buildPrompt();
+    }
+
+    if (prompt.length > promptBudgetChars && trimmedActiveContext) {
+      trimmedActiveContext = this._trimPromptSection(
+        trimmedActiveContext,
+        Math.max(3_000, Math.min(6_000, Math.floor(activeContextChars * 0.6)))
+      );
+      prompt = buildPrompt();
+    }
+
+    return {
+      promptPrefix: buildPromptPrefix(),
+      prompt
+    };
+  }
+
+  _estimateModelSizeInBillions(modelId = "") {
+    const text = String(modelId || "").trim().toLowerCase();
+    if (!text) {
+      return null;
+    }
+
+    const mixtureMatch = text.match(/(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)b\b/i);
+    if (mixtureMatch) {
+      return Number(mixtureMatch[1]) * Number(mixtureMatch[2]);
+    }
+
+    const singleMatch = text.match(/(?:^|[/:._-])(\d+(?:\.\d+)?)b(?=$|[/:._-])/i);
+    if (singleMatch) {
+      return Number(singleMatch[1]);
+    }
+
+    return null;
+  }
+
+  _getModelPromptSizing(config = {}) {
+    const resolvedModel =
+      config?.provider === "nvidia"
+        ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
+        : String(config?.model || "").trim();
+    const sizeB = this._estimateModelSizeInBillions(resolvedModel);
+    let contextScale = 1;
+
+    if (Number.isFinite(sizeB)) {
+      if (sizeB >= 60) {
+        contextScale = 0.55;
+      } else if (sizeB >= 40) {
+        contextScale = 0.65;
+      } else if (sizeB >= 20) {
+        contextScale = 0.75;
+      } else if (sizeB >= 8) {
+        contextScale = 0.9;
+      } else if (sizeB > 0 && sizeB <= 3) {
+        contextScale = 1.15;
+      }
+    }
+
+    return {
+      sizeB,
+      contextScale,
+      activeFileContextChars: Math.max(
+        6_000,
+        Math.round(MAX_ACTIVE_FILE_CONTEXT_CHARS * contextScale)
+      ),
+      fastFocusedEditTargetSnippetChars: Math.max(
+        3_000,
+        Math.round(MAX_FAST_FOCUSED_EDIT_TARGET_SNIPPET_CHARS * contextScale)
+      ),
+      fastExecutionPromptChars: Math.max(
+        10_000,
+        Math.round(MAX_FAST_EXECUTION_PROMPT_CHARS * contextScale)
+      ),
+      fastExecutionActiveFileChars: Math.max(
+        5_000,
+        Math.round(MAX_FAST_EXECUTION_ACTIVE_FILE_CHARS * contextScale)
+      ),
+      fastExecutionRelevantContextChars: Math.max(
+        1_500,
+        Math.round(MAX_FAST_EXECUTION_RELEVANT_CONTEXT_CHARS * contextScale)
+      ),
+      fastExecutionAssistContextChars: Math.max(
+        700,
+        Math.round(MAX_FAST_EXECUTION_ASSIST_CONTEXT_CHARS * contextScale)
+      ),
+      fastExecutionHistoryChars: Math.max(
+        250,
+        Math.round(MAX_FAST_EXECUTION_HISTORY_CHARS * contextScale)
+      )
+    };
   }
 
   _buildHistorySafeAssistantEntry(text, options = {}) {
@@ -1221,6 +1554,10 @@ class AIAgent {
       config?.provider === "nvidia"
         ? this._sanitizeNvidiaModel(config.model || config.nvidiaModel)
         : String(config?.model || "").trim();
+    const promptSizing = this._getModelPromptSizing({
+      ...config,
+      model: resolvedModel
+    });
     const configuredMaxTokens = {
       fast: Math.max(512, Number(config?.maxTokens?.fast) || 2048),
       heavy: Math.max(1024, Number(config?.maxTokens?.heavy) || 4096),
@@ -1237,7 +1574,18 @@ class AIAgent {
       relevantFileCount: MAX_RELEVANT_FILES,
       fileSnippetChars: MAX_FILE_SNIPPET,
       contextChars: MAX_CONTEXT_CHARS,
-      repoContextPolicy: "normal"
+      repoContextPolicy: "normal",
+      activeFileContextChars: promptSizing.activeFileContextChars,
+      fastFocusedEditTargetSnippetChars:
+        promptSizing.fastFocusedEditTargetSnippetChars,
+      fastExecutionPromptChars: promptSizing.fastExecutionPromptChars,
+      fastExecutionActiveFileChars:
+        promptSizing.fastExecutionActiveFileChars,
+      fastExecutionRelevantContextChars:
+        promptSizing.fastExecutionRelevantContextChars,
+      fastExecutionAssistContextChars:
+        promptSizing.fastExecutionAssistContextChars,
+      fastExecutionHistoryChars: promptSizing.fastExecutionHistoryChars
     };
 
     if ((mode === "heavy" || mode === "deep") && intent === "create") {
@@ -1322,6 +1670,24 @@ class AIAgent {
       profile.maxTokens = Math.min(
         profile.maxTokens,
         mode === "fast" ? 1536 : 3072
+      );
+    }
+
+    if (promptSizing.contextScale !== 1) {
+      profile.relevantFileCount = Math.max(
+        1,
+        Math.min(
+          MAX_RELEVANT_FILES,
+          Math.round(profile.relevantFileCount * promptSizing.contextScale)
+        )
+      );
+      profile.fileSnippetChars = Math.max(
+        450,
+        Math.round(profile.fileSnippetChars * promptSizing.contextScale)
+      );
+      profile.contextChars = Math.max(
+        2_200,
+        Math.round(profile.contextChars * promptSizing.contextScale)
       );
     }
 
@@ -1436,6 +1802,42 @@ class AIAgent {
       })
       .filter(Boolean)
       .join("\n");
+  }
+
+  _extractTextFromRawProviderBody(bodyText) {
+    const trimmed = String(bodyText || "").trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      const firstChoice = Array.isArray(parsed?.choices)
+        ? parsed.choices[0] || null
+        : null;
+      const messageContent = this._extractTextFromStructuredContent(
+        firstChoice?.message?.content
+      );
+      const deltaContent = this._extractTextFromStructuredContent(
+        firstChoice?.delta?.content
+      );
+      const directText = this._extractTextFromStructuredContent(
+        parsed?.message?.content || parsed?.content || parsed?.text
+      );
+      const choiceText =
+        this._extractTextFromStructuredContent(firstChoice?.text) ||
+        this._extractTextFromStructuredContent(firstChoice?.content);
+
+      return (
+        messageContent ||
+        deltaContent ||
+        choiceText ||
+        directText ||
+        ""
+      );
+    } catch {
+      return trimmed;
+    }
   }
 
   _extractOpenAiCompatibleImages(images) {
@@ -2069,12 +2471,13 @@ class AIAgent {
         }
       }
 
-      return parsedText || text;
+      return parsedText || this._extractTextFromRawProviderBody(text);
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullResponse = "";
+    let rawResponse = "";
     let pending = "";
     let streamDone = false;
 
@@ -2091,9 +2494,13 @@ class AIAgent {
       const { done, value } = await reader.read();
       if (done) {
         streamDone = true;
-        pending += decoder.decode();
+        const decoded = decoder.decode();
+        rawResponse += decoded;
+        pending += decoded;
       } else {
-        pending += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        rawResponse += decoded;
+        pending += decoded;
       }
 
       const lines = pending.split(/\r?\n/);
@@ -2133,7 +2540,7 @@ class AIAgent {
       }
     }
 
-    return fullResponse;
+    return fullResponse || this._extractTextFromRawProviderBody(rawResponse);
   }
 
   async scanCodebase(workspaceFolder) {
@@ -2602,47 +3009,116 @@ class AIAgent {
         : "";
     const skipHistory = options.skipHistory === true;
     const earlyIntent = forcedIntent || this._detectIntent(userMessage);
+    const pipelineState = this._createChatPipelineState({ mode, earlyIntent });
+    const finalizePipelineResponse = (response, extra = {}) =>
+      this._finalizeChatPipelineResponse(pipelineState, response, extra);
 
-    const runtimeConfig =
-      options.runtimeConfig && typeof options.runtimeConfig === "object"
-        ? {
-            ...this.getConfig(),
-            ...options.runtimeConfig
+    let runtimeConfig;
+    let config;
+    let imageAttachments;
+    let trimmedUserMessage = "";
+    let lowerMsg = "";
+    let isTabQuestion = false;
+    let latencyProfile;
+
+    const prepareStage = await this._runChatPipelineStage(
+      pipelineState,
+      "prepare_request",
+      async () => {
+        runtimeConfig =
+          options.runtimeConfig && typeof options.runtimeConfig === "object"
+            ? {
+                ...this.getConfig(),
+                ...options.runtimeConfig
+              }
+            : this.getConfig();
+
+        config = await this._prepareRuntimeConfig(
+          runtimeConfig,
+          reportStatus,
+          earlyIntent
+        );
+        if (!config.enabled) {
+          pipelineState.flags.shortCircuitReason = "disabled";
+          return {
+            terminalResponse: {
+              error: "AI is disabled in Code Janitor settings."
+            }
+          };
+        }
+
+        imageAttachments = this._sanitizeImageAttachments(options.images);
+        if (
+          imageAttachments.length > 0 &&
+          !this._modelSupportsImageInput(config, config.model)
+        ) {
+          const modelLabel = config.model ? ` (${config.model})` : "";
+          pipelineState.flags.shortCircuitReason = "image_input_unsupported";
+          return {
+            terminalResponse: {
+              error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
+            }
+          };
+        }
+        if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
+          userMessage = "Please analyze the attached image(s).";
+        }
+
+        if (!skipHistory) {
+          this._appendConversationEntry(
+            "user",
+            [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
+              .filter(Boolean)
+              .join("\n\n")
+          );
+        }
+
+        trimmedUserMessage = String(userMessage || "").trim();
+        lowerMsg = trimmedUserMessage.toLowerCase();
+
+        if (
+          /\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(
+            lowerMsg
+          )
+        ) {
+          const reply = `Today is ${new Date().toDateString()}.`;
+          pipelineState.flags.shortCircuitReason = "date_lookup";
+          if (streamCallback) streamCallback(reply);
+          if (!skipHistory) {
+            this._appendConversationEntry("assistant", reply);
           }
-        : this.getConfig();
+          return {
+            terminalResponse: { text: reply, actions: [] }
+          };
+        }
+        if (
+          /\b(what (time|day) is it|current time|what'?s the time)\b/i.test(
+            lowerMsg
+          )
+        ) {
+          const reply = `Current date and time: ${new Date().toString()}.`;
+          pipelineState.flags.shortCircuitReason = "time_lookup";
+          if (streamCallback) streamCallback(reply);
+          if (!skipHistory) {
+            this._appendConversationEntry("assistant", reply);
+          }
+          return {
+            terminalResponse: { text: reply, actions: [] }
+          };
+        }
 
-    const config = await this._prepareRuntimeConfig(
-      runtimeConfig,
-      reportStatus,
-      earlyIntent
+        isTabQuestion = this._isTabQuestion(userMessage);
+        latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
+        return {
+          hasImages: imageAttachments.length > 0,
+          maxTokens: latencyProfile.maxTokens
+        };
+      }
     );
-    if (!config.enabled) {
-      return { error: "AI is disabled in Code Janitor settings." };
-    }
-    const imageAttachments = this._sanitizeImageAttachments(options.images);
-    if (
-      imageAttachments.length > 0 &&
-      !this._modelSupportsImageInput(config, config.model)
-    ) {
-      const modelLabel = config.model ? ` (${config.model})` : "";
-      return {
-        error: `The selected model${modelLabel} does not support image input. Remove attached images or switch to a vision-capable model.`
-      };
-    }
-    if (!String(userMessage || "").trim() && imageAttachments.length > 0) {
-      userMessage = "Please analyze the attached image(s).";
-    }
 
-    if (!skipHistory) {
-      this._appendConversationEntry(
-        "user",
-        [userMessage, this._buildImageAttachmentHistoryNote(imageAttachments)]
-          .filter(Boolean)
-          .join("\n\n")
-      );
+    if (prepareStage?.terminalResponse) {
+      return finalizePipelineResponse(prepareStage.terminalResponse);
     }
-    const isTabQuestion = this._isTabQuestion(userMessage);
-    const latencyProfile = this._getLatencyProfile(config, mode, earlyIntent);
 
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
@@ -2664,26 +3140,29 @@ class AIAgent {
       }
     }
 
-    // Check for knowledge graph only for code-related intents
-    const knowledgeGraphContext = await this._loadKnowledgeGraph(
-      effectiveWorkspace,
-      userMessage,
-      earlyIntent
-    );
-    const workspaceMemoryContext = await this._loadWorkspaceMemory(
-      effectiveWorkspace,
-      userMessage,
-      earlyIntent
-    );
-    const assistantWorkspaceContext = [
-      knowledgeGraphContext,
-      workspaceMemoryContext
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    // Only intercept factual questions the model cannot answer
-    const lowerMsg = userMessage.trim().toLowerCase();
+    const contextAssemblyStartedAt = Date.now();
+    const shouldLoadWorkspaceAssistContext =
+      this._shouldLoadWorkspaceAssistContext(
+        userMessage,
+        earlyIntent,
+        mode,
+        config.provider
+      );
+    let assistantWorkspaceContext = "";
+    if (shouldLoadWorkspaceAssistContext) {
+      const [knowledgeGraphContext, workspaceMemoryContext] = await Promise.all([
+        this._loadKnowledgeGraph(effectiveWorkspace, userMessage, earlyIntent),
+        this._loadWorkspaceMemory(effectiveWorkspace, userMessage, earlyIntent)
+      ]);
+      pipelineState.flags.loadedKnowledgeGraph = Boolean(knowledgeGraphContext);
+      pipelineState.flags.loadedWorkspaceMemory = Boolean(workspaceMemoryContext);
+      assistantWorkspaceContext = [
+        knowledgeGraphContext,
+        workspaceMemoryContext
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     
     // Inject active file path so the model never needs to ask for it
     let resolvedMessage = userMessage;
@@ -2707,32 +3186,8 @@ class AIAgent {
       reportStatus
     );
     if (fetchedWebContext) {
+      pipelineState.flags.loadedFetchedWebContext = true;
       resolvedMessage = `${resolvedMessage}\n\n${fetchedWebContext}`;
-    }
-    
-    if (
-      /\b(what('?s| is)\s+(today'?s?|the|current)\s+date|what date is it|today'?s date)\b/i.test(
-        lowerMsg
-      )
-    ) {
-      const reply = `Today is ${new Date().toDateString()}.`;
-      if (streamCallback) streamCallback(reply);
-      if (!skipHistory) {
-        this._appendConversationEntry("assistant", reply);
-      }
-      return { text: reply, actions: [] };
-    }
-    if (
-      /\b(what (time|day) is it|current time|what'?s the time)\b/i.test(
-        lowerMsg
-      )
-    ) {
-      const reply = `Current date and time: ${new Date().toString()}.`;
-      if (streamCallback) streamCallback(reply);
-      if (!skipHistory) {
-        this._appendConversationEntry("assistant", reply);
-      }
-      return { text: reply, actions: [] };
     }
 
     if (activeEditor && effectiveWorkspace) {
@@ -2748,7 +3203,20 @@ class AIAgent {
         );
       }
     }
+    pipelineState.stageTimings.push({
+      name: "context_assembly",
+      startedAt: contextAssemblyStartedAt,
+      status: "completed",
+      durationMs: Date.now() - contextAssemblyStartedAt,
+      details: {
+        hasEffectiveWorkspace: Boolean(effectiveWorkspace),
+        loadedKnowledgeGraph: pipelineState.flags.loadedKnowledgeGraph,
+        loadedWorkspaceMemory: pipelineState.flags.loadedWorkspaceMemory,
+        loadedFetchedWebContext: pipelineState.flags.loadedFetchedWebContext
+      }
+    });
 
+    const promptConstructionStartedAt = Date.now();
     let prompt;
     let retryBasePrompt = "";
     // Audit/bugfix use the same minimal prompt construction as fast: just
@@ -2775,6 +3243,7 @@ class AIAgent {
         effectiveWorkspace &&
         this._shouldUseRepoContextInFastMode(userMessage, config.provider)
       ) {
+        pipelineState.flags.usedRepoContext = true;
         reportStatus?.("Scanning relevant files for fast mode...");
         await this.ensureCodebaseScanned(effectiveWorkspace);
         const relevantFiles = this._findRelevantFiles(
@@ -2801,17 +3270,21 @@ class AIAgent {
       );
       const isEditIntent =
         intent === "edit" || intent === "debug" || intent === "refactor";
+      const focusedEditTargetSnippetChars =
+        mode === "fast"
+          ? latencyProfile.fastFocusedEditTargetSnippetChars
+          : MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS;
       const focusedEditableTargetContext = isEditIntent
         ? this._getFocusedEditableTargetContext(
             editableTargets,
             effectiveWorkspace,
-            MAX_FOCUSED_EDIT_TARGET_SNIPPET_CHARS
+            focusedEditTargetSnippetChars
           )
         : "";
       const activeFileContext = focusedEditableTargetContext ||
         this._getActiveFileContext(
           effectiveWorkspace,
-          isEditIntent ? MAX_ACTIVE_FILE_CONTEXT_CHARS : 1_200
+          isEditIntent ? latencyProfile.activeFileContextChars : 1_200
         );
       this.currentEditableTargets =
         intent !== "create" && editableTargets.paths.length
@@ -2847,8 +3320,36 @@ class AIAgent {
             : "\nPrefer PATCH for targeted edits. Copy SEARCH exactly from the provided file context, make it the smallest unique anchor that matches only once, and prefer source files over generated copies. Use FILE only when the change spans broad sections or PATCH would be brittle."
           : "";
       const fastKnowledgeGraph = assistantWorkspaceContext;
-      const promptPrefix = `${effectiveSystemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${editableTargetsContext ? `\n\n${editableTargetsContext}` : ""}${focusedEditLanguageHint ? `\n\n${focusedEditLanguageHint}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}`;
-      prompt = `${promptPrefix}${history ? `\n\n${history}` : ""}
+      const isExecutionIntent = this._isExecutionLikeIntent(intent);
+      const fastPrompt = isExecutionIntent
+        ? this._buildFastExecutionPrompt({
+            effectiveSystemInstruction,
+            editHint,
+            assistantWorkspaceContext: fastKnowledgeGraph,
+            editableTargetsContext,
+            focusedEditLanguageHint,
+            activeCtx,
+            contextToUse,
+            history,
+            resolvedMessage,
+            budgets: {
+              promptChars: latencyProfile.fastExecutionPromptChars,
+              assistantContextChars:
+                latencyProfile.fastExecutionAssistContextChars,
+              activeContextChars:
+                latencyProfile.fastExecutionActiveFileChars,
+              relevantContextChars:
+                latencyProfile.fastExecutionRelevantContextChars,
+              historyChars: latencyProfile.fastExecutionHistoryChars
+            }
+          })
+        : null;
+      const promptPrefix = fastPrompt
+        ? fastPrompt.promptPrefix
+        : `${effectiveSystemInstruction}${editHint}${fastKnowledgeGraph ? `\n\n${fastKnowledgeGraph}` : ""}${editableTargetsContext ? `\n\n${editableTargetsContext}` : ""}${focusedEditLanguageHint ? `\n\n${focusedEditLanguageHint}` : ""}${activeCtx ? `\n\n${activeCtx}` : ""}${contextToUse ? `\n\n${contextToUse}` : ""}`;
+      prompt = fastPrompt
+        ? fastPrompt.prompt
+        : `${promptPrefix}${history ? `\n\n${history}` : ""}
 
 ### USER_MESSAGE ###
 ${resolvedMessage}`;
@@ -2906,7 +3407,10 @@ ${resolvedMessage}`;
             snippetChars: latencyProfile.fileSnippetChars
           });
       const activeFileContext = focusedEditableTargetContext ||
-        this._getActiveFileContext(effectiveWorkspace);
+        this._getActiveFileContext(
+          effectiveWorkspace,
+          latencyProfile.activeFileContextChars
+        );
       const editorStateContext = this._buildEditorStateContext(editorState);
       const openTabSnippetContext = focusedEditableTargetContext
         ? ""
@@ -2963,149 +3467,216 @@ ${resolvedMessage}`;
         );
       }
     }
+    pipelineState.stageTimings.push({
+      name: "prompt_construction",
+      startedAt: promptConstructionStartedAt,
+      status: "completed",
+      durationMs: Date.now() - promptConstructionStartedAt,
+      details: {
+        promptChars: typeof prompt === "string" ? prompt.length : 0,
+        retryBasePromptChars:
+          typeof retryBasePrompt === "string" ? retryBasePrompt.length : 0,
+        usedRepoContext: pipelineState.flags.usedRepoContext
+      }
+    });
 
     try {
       reportStatus?.(`Contacting ${config.provider}...`);
-      const reqIntent = forcedIntent || earlyIntent;
-      const shouldCheckRepetition = !(
-        forceStructuredEdits ||
-        this._shouldForceStructuredEdit(reqIntent, userMessage)
-      );
-      let requestConfig = config;
-      let reqOpts = this._buildRequestOptions(
-        requestConfig,
-        prompt,
-        mode,
-        reqIntent,
-        imageAttachments
-      );
-      const extendedTimeout =
-        reqIntent === "create" ||
-        reqIntent === "edit" ||
-        reqIntent === "debug" ||
-        reqIntent === "refactor"
-          ? this._withMinimumTimeoutMs(config.timeout, 360_000)
-          : this._normalizeTimeoutMs(config.timeout, 0);
-      let response = await fetch(reqOpts.url, {
-        method: "POST",
-        headers: reqOpts.headers,
-        signal: this._createRequestSignal(abortSignal, extendedTimeout),
-        body: reqOpts.body
-      });
+      let reqIntent;
+      let shouldCheckRepetition;
+      let requestConfig;
+      let reqOpts;
+      let extendedTimeout;
 
-      if (!response.ok) {
-        const errorDetails = await this._buildHttpError(
-          response,
-          "AI request failed with status"
-        );
-
-        if (
-          requestConfig.provider === "nvidia" &&
-          this._isRetryableNvidiaHttpError(response.status, errorDetails)
-        ) {
-          const fallbackModel = await this._resolveAlternateNvidiaModel(
-            requestConfig.nvidiaApiKey,
-            requestConfig.model || requestConfig.nvidiaModel
+      await this._runChatPipelineStage(
+        pipelineState,
+        "token_budget_and_routing",
+        async () => {
+          reqIntent = forcedIntent || earlyIntent;
+          shouldCheckRepetition = !(
+            forceStructuredEdits ||
+            this._shouldForceStructuredEdit(reqIntent, userMessage)
           );
-
-          if (fallbackModel && fallbackModel !== requestConfig.model) {
-            reportStatus?.(
-              `NVIDIA returned ${response.status} for ${requestConfig.model}. Retrying once with ${fallbackModel}...`
-            );
-            requestConfig = {
-              ...requestConfig,
-              model: fallbackModel,
-              nvidiaModel: fallbackModel
-            };
-            reqOpts = this._buildRequestOptions(
-              requestConfig,
-              prompt,
-              mode,
-              reqIntent,
-              imageAttachments
-            );
-            response = await fetch(reqOpts.url, {
-              method: "POST",
-              headers: reqOpts.headers,
-              signal: this._createRequestSignal(abortSignal, extendedTimeout),
-              body: reqOpts.body
-            });
-          }
-        }
-
-        if (!response.ok) {
-          const retryErrorDetails = await this._buildHttpError(
-            response,
-            "AI request failed with status"
+          requestConfig = config;
+          reqOpts = this._buildRequestOptions(
+            requestConfig,
+            prompt,
+            mode,
+            reqIntent,
+            imageAttachments
           );
-
-          // Special handling for NVIDIA token limit errors
-          if (requestConfig.provider === "nvidia" && response.status === 400) {
-            if (
-              /max.*token|token.*limit|context.*length|too.*long/i.test(
-                retryErrorDetails
-              )
-            ) {
-              throw new Error(
-                "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
-                "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
-                "Solutions:\n" +
-                "1. Break the request into smaller parts\n" +
-                "2. Use Heavy mode (/heavy) for larger token limits\n" +
-                "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
-                "4. Simplify the request to generate less code\n\n" +
-                `Original error: ${retryErrorDetails}`
-              );
-            }
-          }
-
-          throw new Error(retryErrorDetails);
+          extendedTimeout =
+            reqIntent === "create" ||
+            reqIntent === "edit" ||
+            reqIntent === "debug" ||
+            reqIntent === "refactor"
+              ? this._withMinimumTimeoutMs(config.timeout, 360_000)
+              : this._normalizeTimeoutMs(config.timeout, 0);
+          return {
+            provider: config.provider,
+            model: config.model,
+            maxTokens: latencyProfile.maxTokens,
+            extendedTimeoutMs: extendedTimeout,
+            requiresFileActions:
+              forceStructuredEdits ||
+              this._shouldForceStructuredEdit(reqIntent, userMessage)
+          };
         }
-      }
+      );
 
+      let response;
       let fullResponse = "";
       let responseImages = [];
       let repetitionDetected = false;
-      const initialResponse = await this._readResponseOutput(reqOpts, response, {
-        parseChunk: (line) => {
-          const token = reqOpts.parseChunk(line);
-          if (token === null) return null;
-          const nextResponse = fullResponse + token;
-          if (
-            shouldCheckRepetition &&
-            this._isRepeatingResponse(nextResponse, mode)
-          ) {
-            repetitionDetected = true;
-            return null;
-          }
-          fullResponse = nextResponse;
-          return token;
-        },
-        streamCallback,
-        abortSignal,
-        shouldStop: () => repetitionDetected
-      });
-      fullResponse = initialResponse.text || fullResponse;
-      responseImages = initialResponse.images || [];
+      let finalText = "";
+      let cleanedText = "";
 
-      const finalText = repetitionDetected
-        ? `${fullResponse}\n\nStopped because the response started repeating.`
-        : fullResponse || this._getEmptyResponseFallback(mode);
-      
-      // Remove <think> tags and their content (some models output reasoning)
-      const cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-      
-      let parsedResponse = this._parseResponse(cleanedText);
+      await this._runChatPipelineStage(
+        pipelineState,
+        "llm_inference",
+        async () => {
+          response = await fetch(reqOpts.url, {
+            method: "POST",
+            headers: reqOpts.headers,
+            signal: this._createRequestSignal(abortSignal, extendedTimeout),
+            body: reqOpts.body
+          });
+
+          if (!response.ok) {
+            const errorDetails = await this._buildHttpError(
+              response,
+              "AI request failed with status"
+            );
+
+            if (
+              requestConfig.provider === "nvidia" &&
+              this._isRetryableNvidiaHttpError(response.status, errorDetails)
+            ) {
+              const fallbackModel = await this._resolveAlternateNvidiaModel(
+                requestConfig.nvidiaApiKey,
+                requestConfig.model || requestConfig.nvidiaModel
+              );
+
+              if (fallbackModel && fallbackModel !== requestConfig.model) {
+                pipelineState.flags.usedNvidiaFallback = true;
+                reportStatus?.(
+                  `NVIDIA returned ${response.status} for ${requestConfig.model}. Retrying once with ${fallbackModel}...`
+                );
+                requestConfig = {
+                  ...requestConfig,
+                  model: fallbackModel,
+                  nvidiaModel: fallbackModel
+                };
+                reqOpts = this._buildRequestOptions(
+                  requestConfig,
+                  prompt,
+                  mode,
+                  reqIntent,
+                  imageAttachments
+                );
+                response = await fetch(reqOpts.url, {
+                  method: "POST",
+                  headers: reqOpts.headers,
+                  signal: this._createRequestSignal(abortSignal, extendedTimeout),
+                  body: reqOpts.body
+                });
+              }
+            }
+
+            if (!response.ok) {
+              const retryErrorDetails = await this._buildHttpError(
+                response,
+                "AI request failed with status"
+              );
+
+              if (requestConfig.provider === "nvidia" && response.status === 400) {
+                if (
+                  /max.*token|token.*limit|context.*length|too.*long/i.test(
+                    retryErrorDetails
+                  )
+                ) {
+                  throw new Error(
+                    "NVIDIA NIM: Response was truncated due to token limit.\n\n" +
+                    "The model hit its maximum token limit while generating code. This means the file was too large to generate completely.\n\n" +
+                    "Solutions:\n" +
+                    "1. Break the request into smaller parts\n" +
+                    "2. Use Heavy mode (/heavy) for larger token limits\n" +
+                    "3. Try a different model like meta/llama-3.1-70b-instruct\n" +
+                    "4. Simplify the request to generate less code\n\n" +
+                    `Original error: ${retryErrorDetails}`
+                  );
+                }
+              }
+
+              throw new Error(retryErrorDetails);
+            }
+          }
+          const initialResponse = await this._readResponseOutput(reqOpts, response, {
+            parseChunk: (line) => {
+              const token = reqOpts.parseChunk(line);
+              if (token === null) return null;
+              const nextResponse = fullResponse + token;
+              if (
+                shouldCheckRepetition &&
+                this._isRepeatingResponse(nextResponse, mode)
+              ) {
+                repetitionDetected = true;
+                return null;
+              }
+              fullResponse = nextResponse;
+              return token;
+            },
+            streamCallback,
+            abortSignal,
+            shouldStop: () => repetitionDetected
+          });
+          fullResponse = initialResponse.text || fullResponse;
+          responseImages = initialResponse.images || [];
+
+          finalText = repetitionDetected
+            ? `${fullResponse}\n\nStopped because the response started repeating.`
+            : fullResponse || this._getEmptyResponseFallback(mode);
+          cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+          return {
+            responseChars: cleanedText.length,
+            imageCount: responseImages.length,
+            repetitionDetected,
+            usedNvidiaFallback: pipelineState.flags.usedNvidiaFallback
+          };
+        }
+      );
+
+      let parsedResponse;
       const finalIntent = forcedIntent || this._detectIntent(userMessage);
       const requiresFileActions =
         forceStructuredEdits ||
         this._shouldForceStructuredEdit(finalIntent, userMessage);
-      let assistantText =
-        cleanedText ||
-        (responseImages.length > 0
-          ? this._buildGeneratedImageSummary(responseImages)
-          : finalText);
+      let assistantText;
       let firstRetryText = "";
+
+      await this._runChatPipelineStage(
+        pipelineState,
+        "output_parser",
+        async () => {
+          parsedResponse = this._parseResponse(cleanedText);
+          assistantText =
+            cleanedText ||
+            (responseImages.length > 0
+              ? this._buildGeneratedImageSummary(responseImages)
+              : finalText);
+          return {
+            actionCount: Array.isArray(parsedResponse.actions)
+              ? parsedResponse.actions.length
+              : 0,
+            warningCount: Array.isArray(parsedResponse.warnings)
+              ? parsedResponse.warnings.length
+              : 0,
+            requiresFileActions
+          };
+        }
+      );
+
       const shouldAllowClarification = this._isClarificationResponse(
         assistantText,
         finalIntent,
@@ -3127,43 +3698,60 @@ ${resolvedMessage}`;
         ) &&
         !abortSignal?.aborted
       ) {
+        pipelineState.flags.usedStructuredRetry = true;
         reportStatus?.(
           firstPassHadIncompleteStructuredEdits
             ? "Model output looked incomplete. Retrying with strict edit format..."
             : "Model replied with prose. Retrying with strict edit format..."
         );
         const retryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildStructuredRetryPrompt(finalText)}`;
-        const retryOpts = this._buildRequestOptions(
-          requestConfig,
-          retryPrompt,
-          mode,
-          "edit"
+        await this._runChatPipelineStage(
+          pipelineState,
+          "structured_retry_inference",
+          async () => {
+            const retryOpts = this._buildRequestOptions(
+              requestConfig,
+              retryPrompt,
+              mode,
+              "edit",
+              imageAttachments
+            );
+            const retryResponse = await fetch(retryOpts.url, {
+              method: "POST",
+              headers: retryOpts.headers,
+              signal: this._createRequestSignal(abortSignal, extendedTimeout),
+              body: retryOpts.body
+            });
+
+            if (!retryResponse.ok) {
+              throw new Error(
+                await this._buildHttpError(
+                  retryResponse,
+                  "AI retry failed with status"
+                )
+              );
+            }
+
+            const retryText = (
+              await this._readResponseOutput(retryOpts, retryResponse, {
+                abortSignal
+              })
+            ).text;
+
+            firstRetryText = retryText || finalText;
+            parsedResponse = this._parseResponse(firstRetryText);
+            assistantText = firstRetryText;
+            return {
+              responseChars: assistantText.length,
+              actionCount: Array.isArray(parsedResponse.actions)
+                ? parsedResponse.actions.length
+                : 0,
+              warningCount: Array.isArray(parsedResponse.warnings)
+                ? parsedResponse.warnings.length
+                : 0
+            };
+          }
         );
-        const retryResponse = await fetch(retryOpts.url, {
-          method: "POST",
-          headers: retryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, config.timeout),
-          body: retryOpts.body
-        });
-
-        if (!retryResponse.ok) {
-          throw new Error(
-            await this._buildHttpError(
-              retryResponse,
-              "AI retry failed with status"
-            )
-          );
-        }
-
-        const retryText = (
-          await this._readResponseOutput(retryOpts, retryResponse, {
-            abortSignal
-          })
-        ).text;
-
-        firstRetryText = retryText || finalText;
-        parsedResponse = this._parseResponse(firstRetryText);
-        assistantText = firstRetryText;
       }
       const retryHadIncompleteStructuredEdits =
         this._hasIncompleteStructuredEditWarning(parsedResponse.warnings);
@@ -3185,6 +3773,7 @@ ${resolvedMessage}`;
           retryHadIncompleteStructuredEdits) &&
         !abortSignal?.aborted
       ) {
+        pipelineState.flags.usedFileOnlyRetry = true;
         reportStatus?.(
           retryHadIncompleteStructuredEdits
             ? "Structured edits still looked incomplete. Retrying with FILE-only format..."
@@ -3193,37 +3782,68 @@ ${resolvedMessage}`;
         const fileOnlyRetryPrompt = `${retryBasePrompt || prompt}\n\n${this._buildFileOnlyRetryPrompt(
           assistantText
         )}`;
-        const fileOnlyRetryOpts = this._buildRequestOptions(
-          requestConfig,
-          fileOnlyRetryPrompt,
-          mode,
-          "edit"
+        await this._runChatPipelineStage(
+          pipelineState,
+          "file_only_retry_inference",
+          async () => {
+            const fileOnlyRetryOpts = this._buildRequestOptions(
+              requestConfig,
+              fileOnlyRetryPrompt,
+              mode,
+              "edit",
+              imageAttachments
+            );
+            const fileOnlyRetryResponse = await fetch(fileOnlyRetryOpts.url, {
+              method: "POST",
+              headers: fileOnlyRetryOpts.headers,
+              signal: this._createRequestSignal(abortSignal, extendedTimeout),
+              body: fileOnlyRetryOpts.body
+            });
+
+            if (!fileOnlyRetryResponse.ok) {
+              throw new Error(
+                await this._buildHttpError(
+                  fileOnlyRetryResponse,
+                  "AI file-only retry failed with status"
+                )
+              );
+            }
+
+            const fileOnlyRetryText = (
+              await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
+                abortSignal
+              })
+            ).text;
+
+            assistantText = fileOnlyRetryText || assistantText;
+            parsedResponse = this._parseResponse(assistantText);
+            return {
+              responseChars: assistantText.length,
+              actionCount: Array.isArray(parsedResponse.actions)
+                ? parsedResponse.actions.length
+                : 0,
+              warningCount: Array.isArray(parsedResponse.warnings)
+                ? parsedResponse.warnings.length
+                : 0
+            };
+          }
         );
-        const fileOnlyRetryResponse = await fetch(fileOnlyRetryOpts.url, {
-          method: "POST",
-          headers: fileOnlyRetryOpts.headers,
-          signal: this._createRequestSignal(abortSignal, config.timeout),
-          body: fileOnlyRetryOpts.body
-        });
-
-        if (!fileOnlyRetryResponse.ok) {
-          throw new Error(
-            await this._buildHttpError(
-              fileOnlyRetryResponse,
-              "AI file-only retry failed with status"
-            )
-          );
-        }
-
-        const fileOnlyRetryText = (
-          await this._readResponseOutput(fileOnlyRetryOpts, fileOnlyRetryResponse, {
-            abortSignal
-          })
-        ).text;
-
-        assistantText = fileOnlyRetryText || assistantText;
-        parsedResponse = this._parseResponse(assistantText);
       }
+
+      await this._runChatPipelineStage(
+        pipelineState,
+        "output_validation",
+        async () => ({
+          actionCount: Array.isArray(parsedResponse.actions)
+            ? parsedResponse.actions.length
+            : 0,
+          warningCount: Array.isArray(parsedResponse.warnings)
+            ? parsedResponse.warnings.length
+            : 0,
+          usedStructuredRetry: pipelineState.flags.usedStructuredRetry,
+          usedFileOnlyRetry: pipelineState.flags.usedFileOnlyRetry
+        })
+      );
 
       if (
         requiresFileActions &&
@@ -3237,11 +3857,28 @@ ${resolvedMessage}`;
         if (!skipHistory) {
           this._appendConversationEntry("assistant", incompleteMessage);
         }
-        return {
+        const blockedResponse = {
           text: incompleteMessage,
           actions: [],
           warnings: [...(parsedResponse.warnings || []), incompleteMessage]
         };
+        pipelineState.stageTimings.push({
+          name: "memory_update",
+          startedAt: Date.now(),
+          status: "completed",
+          durationMs: 0,
+          details: {
+            persisted: !skipHistory,
+            reason: "blocked_incomplete_structured_edit"
+          }
+        });
+        return finalizePipelineResponse(blockedResponse, {
+          finalIntent,
+          prompt,
+          retryBasePrompt,
+          assistantWorkspaceContext,
+          effectiveWorkspace
+        });
       }
 
       if (
@@ -3254,32 +3891,59 @@ ${resolvedMessage}`;
         if (!skipHistory) {
           this._appendConversationEntry("assistant", noEditsMessage);
         }
-        return {
+        const noEditResponse = {
           text: noEditsMessage,
           actions: [],
           warnings: [noEditsMessage]
         };
+        pipelineState.stageTimings.push({
+          name: "memory_update",
+          startedAt: Date.now(),
+          status: "completed",
+          durationMs: 0,
+          details: {
+            persisted: !skipHistory,
+            reason: "missing_edit_actions"
+          }
+        });
+        return finalizePipelineResponse(noEditResponse, {
+          finalIntent,
+          prompt,
+          retryBasePrompt,
+          assistantWorkspaceContext,
+          effectiveWorkspace
+        });
       }
 
-      if (!skipHistory) {
-        this._appendConversationEntry(
-          "assistant",
-          this._buildHistorySafeAssistantEntry(
-            [
-              assistantText ||
-                (repetitionDetected
-                  ? `${fullResponse}\n\n[stopped repetitive output]`
-                  : fullResponse || this._getEmptyResponseFallback(mode)),
-              responseImages.length > 0
-                ? this._buildGeneratedImageSummary(responseImages)
-                : ""
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-            { repetitionDetected }
-          )
-        );
-      }
+      await this._runChatPipelineStage(
+        pipelineState,
+        "memory_update",
+        async () => {
+          if (!skipHistory) {
+            this._appendConversationEntry(
+              "assistant",
+              this._buildHistorySafeAssistantEntry(
+                [
+                  assistantText ||
+                    (repetitionDetected
+                      ? `${fullResponse}\n\n[stopped repetitive output]`
+                      : fullResponse || this._getEmptyResponseFallback(mode)),
+                  responseImages.length > 0
+                    ? this._buildGeneratedImageSummary(responseImages)
+                    : ""
+                ]
+                  .filter(Boolean)
+                  .join("\n\n"),
+                { repetitionDetected }
+              )
+            );
+          }
+          return {
+            persisted: !skipHistory,
+            repetitionDetected
+          };
+        }
+      );
 
       if (responseImages.length > 0) {
         parsedResponse = {
@@ -3289,18 +3953,51 @@ ${resolvedMessage}`;
         };
       }
 
-      return parsedResponse;
+      return finalizePipelineResponse(parsedResponse, {
+        finalIntent,
+        prompt,
+        retryBasePrompt,
+        assistantWorkspaceContext,
+        effectiveWorkspace
+      });
     } catch (error) {
       if (error.name === "AbortError") {
         if (abortSignal?.aborted) {
-          return { text: "Generation stopped", actions: [] };
+          return finalizePipelineResponse(
+            { text: "Generation stopped", actions: [] },
+            {
+              finalIntent: earlyIntent,
+              prompt,
+              retryBasePrompt,
+              assistantWorkspaceContext,
+              effectiveWorkspace
+            }
+          );
         }
-        return {
-          error: this._normalizeAiError(error, config)
-        };
+        return finalizePipelineResponse(
+          {
+            error: this._normalizeAiError(error, config)
+          },
+          {
+            finalIntent: earlyIntent,
+            prompt,
+            retryBasePrompt,
+            assistantWorkspaceContext,
+            effectiveWorkspace
+          }
+        );
       }
 
-      return { error: `AI error: ${this._normalizeAiError(error, config)}` };
+      return finalizePipelineResponse(
+        { error: `AI error: ${this._normalizeAiError(error, config)}` },
+        {
+          finalIntent: earlyIntent,
+          prompt,
+          retryBasePrompt,
+          assistantWorkspaceContext,
+          effectiveWorkspace
+        }
+      );
     } finally {
       this.currentEditableTargets = null;
     }
@@ -3309,17 +4006,22 @@ ${resolvedMessage}`;
   async _loadKnowledgeGraph(workspaceFolder, userMessage, intent) {
     if (!workspaceFolder) return "";
 
-    // Only load graph for code-related intents where location matters
+    const wantsRepoContext = this._shouldUseRepoContextInFastMode(userMessage);
+    const explicitArchitectureRequest =
+      this._isExplicitRepoContextRequest(userMessage) ||
+      /\b(module|modules|codebase)\b/i.test(userMessage);
+    const isRepoWideEditLikeIntent =
+      (intent === "debug" || intent === "refactor" || intent === "edit") &&
+      wantsRepoContext;
+
+    // Only load graph when the request needs cross-file or architecture-level
+    // routing. Localized fast-mode edits should avoid this extra prompt weight.
     const shouldLoadGraph =
       intent === "scan" ||
-      intent === "debug" ||
-      intent === "refactor" ||
-      intent === "edit" ||
       intent === "show_graph" ||
-      this._extractPathHints(userMessage).length > 0 ||
-      /\b(where is|where's|locate|find|location|which file|what file|architecture|structure|dependency|dependencies|module|modules|codebase|project overview|workspace overview|how does .* fit)\b/i.test(
-        userMessage
-      );
+      isRepoWideEditLikeIntent ||
+      this._shouldLoadPathHintRepoAssist(userMessage, intent) ||
+      explicitArchitectureRequest;
     
     if (!shouldLoadGraph) return "";
 
@@ -3401,63 +4103,457 @@ ${resolvedMessage}`;
   async _loadWorkspaceMemory(workspaceFolder, userMessage, intent) {
     if (!workspaceFolder) return "";
 
-    const shouldLoadMemory =
-      intent === "scan" ||
-      intent === "debug" ||
-      intent === "refactor" ||
-      intent === "edit" ||
-      intent === "show_graph" ||
-      this._shouldUseRepoContextInFastMode(userMessage) ||
+    const explicitHistoryRequest =
       /\b(workspace memory|handoff|recent changes|what changed|change log|git status|hot files|activity|tracking)\b/i.test(
         userMessage
       );
+    const explicitRepoContextRequest =
+      this._isExplicitRepoContextRequest(userMessage);
+    const explicitAgentInstructionsRequest =
+      /\b(agents\.md|agent instructions|repo instructions)\b/i.test(
+        userMessage
+      );
+    const wantsRepoContext = this._shouldUseRepoContextInFastMode(userMessage);
+    const isEditLikeIntent =
+      intent === "debug" || intent === "refactor" || intent === "edit";
+    const shouldLoadAgentInstructions =
+      intent === "scan" ||
+      intent === "show_graph" ||
+      explicitAgentInstructionsRequest ||
+      wantsRepoContext ||
+      explicitRepoContextRequest;
+    const shouldLoadMemory =
+      intent === "scan" ||
+      intent === "show_graph" ||
+      explicitHistoryRequest ||
+      (isEditLikeIntent && wantsRepoContext);
 
-    if (!shouldLoadMemory) {
+    if (!shouldLoadMemory && !shouldLoadAgentInstructions) {
       return "";
     }
 
+    const sectionPatterns = explicitHistoryRequest
+      ? [
+          /## Repository Blueprint[\s\S]*?(?=## |$)/,
+          /## Workspace Focus[\s\S]*?(?=## |$)/,
+          /## Current Workspace[\s\S]*?(?=## |$)/,
+          /## Current Stack[\s\S]*?(?=## |$)/,
+          /## Tracked Snapshots[\s\S]*?(?=## |$)/,
+          /## Recent Changes[\s\S]*?(?=## |$)/,
+          /## Hot Files[\s\S]*?(?=## |$)/,
+          /## Git Snapshot[\s\S]*?(?=## |$)/
+        ]
+      : isEditLikeIntent
+        ? [
+            /## Repository Blueprint[\s\S]*?(?=## |$)/,
+            /## Workspace Focus[\s\S]*?(?=## |$)/,
+            /## Current Workspace[\s\S]*?(?=## |$)/,
+            /## Hot Files[\s\S]*?(?=## |$)/,
+            /## Git Snapshot[\s\S]*?(?=## |$)/
+          ]
+        : [
+            /## Repository Blueprint[\s\S]*?(?=## |$)/,
+            /## Workspace Focus[\s\S]*?(?=## |$)/,
+            /## Current Workspace[\s\S]*?(?=## |$)/,
+            /## Package Snapshot[\s\S]*?(?=## |$)/,
+            /## Current Stack[\s\S]*?(?=## |$)/,
+            /## Tracked Snapshots[\s\S]*?(?=## |$)/,
+            /## Recent Changes[\s\S]*?(?=## |$)/,
+            /## Hot Files[\s\S]*?(?=## |$)/,
+            /## Git Snapshot[\s\S]*?(?=## |$)/,
+            /## GitHub Snapshot[\s\S]*?(?=## |$)/,
+            /## Graphify Snapshot[\s\S]*?(?=## |$)/
+          ];
+    const maxChars =
+      explicitHistoryRequest || !isEditLikeIntent
+        ? MAX_WORKSPACE_MEMORY_CONTEXT_CHARS
+        : MAX_COMPACT_WORKSPACE_MEMORY_CONTEXT_CHARS;
+    const agentsMaxChars =
+      explicitAgentInstructionsRequest || !isEditLikeIntent
+        ? MAX_AGENTS_INSTRUCTIONS_CONTEXT_CHARS
+        : MAX_COMPACT_AGENTS_INSTRUCTIONS_CONTEXT_CHARS;
+
     try {
+      const workspaceMemoryConfig =
+        typeof vscode.workspace?.getConfiguration === "function"
+          ? vscode.workspace.getConfiguration(
+              "codeJanitor.assistant.workspaceMemory"
+            )
+          : null;
       const configuredOutputPath = sanitizeOutputRelativePath(
-        vscode.workspace
-          .getConfiguration("codeJanitor.assistant.workspaceMemory")
-          .get("outputPath", DEFAULT_OUTPUT_RELATIVE_PATH)
+        workspaceMemoryConfig?.get?.(
+          "outputPath",
+          DEFAULT_OUTPUT_RELATIVE_PATH
+        ) || DEFAULT_OUTPUT_RELATIVE_PATH
       );
-      const candidates = [
-        resolveWorkspaceMemoryPaths(workspaceFolder, configuredOutputPath)
-          .outputAbsolutePath,
-        resolveWorkspaceMemoryPaths(workspaceFolder, configuredOutputPath)
-          .sharedMirrorAbsolutePath
-      ];
-      const workspaceMemoryPath = candidates.find((candidate) =>
-        fsSync.existsSync(candidate)
+      const resolvedPaths = resolveWorkspaceMemoryPaths(
+        workspaceFolder,
+        configuredOutputPath
       );
-      if (!workspaceMemoryPath) {
+      const agentsInstructionsPath = path.join(workspaceFolder, "AGENTS.md");
+      const candidates = Array.from(
+        new Set(
+          [
+            resolvedPaths.outputAbsolutePath,
+            resolvedPaths.sharedMirrorAbsolutePath,
+            resolvedPaths.structuredManifestAbsolutePath,
+            path.join(workspaceFolder, DEFAULT_OUTPUT_RELATIVE_PATH),
+            path.join(workspaceFolder, SHARED_WORKSPACE_JSON_FILENAME),
+            path.join(workspaceFolder, SHARED_WORKSPACE_MEMORY_FILENAME),
+            path.join(workspaceFolder, "WORKSPACE_MEMORY.md")
+          ].filter(Boolean)
+        )
+      );
+      const newestMemoryFile = candidates
+        .map((candidate) => {
+          if (!fsSync.existsSync(candidate)) {
+            return null;
+          }
+
+          try {
+            return {
+              path: candidate,
+              mtimeMs: fsSync.statSync(candidate).mtimeMs || 0
+            };
+          } catch {
+            return {
+              path: candidate,
+              mtimeMs: 0
+            };
+          }
+        })
+        .filter(Boolean)
+        .sort((left, right) => right.mtimeMs - left.mtimeMs)[0];
+      let agentsInstructionsFile = null;
+      if (fsSync.existsSync(agentsInstructionsPath)) {
+        try {
+          agentsInstructionsFile = {
+            path: agentsInstructionsPath,
+            mtimeMs: fsSync.statSync(agentsInstructionsPath).mtimeMs || 0
+          };
+        } catch {
+          agentsInstructionsFile = {
+            path: agentsInstructionsPath,
+            mtimeMs: 0
+          };
+        }
+      }
+
+      if (!newestMemoryFile?.path && !agentsInstructionsFile?.path) {
+        this._workspaceMemoryCache.delete(workspaceFolder);
         return "";
       }
 
-      const memoryText = await fs.readFile(workspaceMemoryPath, "utf8");
-      const sections = [
-        memoryText.match(/## Repository Blueprint[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Current Workspace[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Current Stack[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Recent Changes[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Hot Files[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Git Snapshot[\s\S]*?(?=## |$)/),
-        memoryText.match(/## GitHub Snapshot[\s\S]*?(?=## |$)/),
-        memoryText.match(/## Graphify Snapshot[\s\S]*?(?=## |$)/)
-      ]
-        .map((match) => (match ? match[0].trim() : ""))
-        .filter(Boolean)
-        .join("\n\n");
+      const cacheKey = [
+        newestMemoryFile?.path
+          ? `memory:${newestMemoryFile.path}:${newestMemoryFile.mtimeMs}`
+          : "memory:none",
+        agentsInstructionsFile?.path
+          ? `agents:${agentsInstructionsFile.path}:${agentsInstructionsFile.mtimeMs}`
+          : "agents:none"
+      ].join("|");
+      let cached = this._workspaceMemoryCache.get(workspaceFolder);
+      if (!cached || cached.cacheKey !== cacheKey) {
+        const rawText = newestMemoryFile?.path
+          ? await fs.readFile(newestMemoryFile.path, "utf8")
+          : "";
+        const agentsText = agentsInstructionsFile?.path
+          ? await fs.readFile(agentsInstructionsFile.path, "utf8")
+          : "";
+        cached = {
+          cacheKey,
+          memoryText: newestMemoryFile?.path?.toLowerCase().endsWith(".json")
+            ? this._renderWorkspaceManifestAsMemory(rawText)
+            : rawText,
+          agentsText
+        };
+        this._workspaceMemoryCache.set(workspaceFolder, cached);
+      }
+
+      const sections = shouldLoadMemory
+        ? sectionPatterns
+            .map((pattern) => cached.memoryText.match(pattern))
+            .map((match) => (match ? match[0].trim() : ""))
+            .filter(Boolean)
+            .join("\n\n")
+        : "";
 
       if (!sections) {
-        return "";
+        const agentInstructionsContext = shouldLoadAgentInstructions
+          ? this._renderAgentsInstructionsContext(
+              cached.agentsText,
+              agentsMaxChars
+            )
+          : "";
+        return agentInstructionsContext || "";
       }
 
-      return `\n**Workspace Memory Context**\nA tracked assistant memory file is available in the configured ledger path plus the shared workspace-root \`workspacememory.md\` mirror. Use it for the repo blueprint, change ledger, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, MAX_WORKSPACE_MEMORY_CONTEXT_CHARS)}\n`;
+      const workspaceMemoryContext = `\n**Workspace Memory Context**\nA tracked assistant memory set is available in the configured ledger path, the shared workspace-root \`workspacememory.md\` mirror, and the machine-readable \`workspace.json\` manifest. Use it for the repo blueprint, change ledger, hotspots, Git-aware workspace status, and AI handoff context before broad rescans.\n${sections.slice(0, maxChars)}\n`;
+      const agentInstructionsContext = shouldLoadAgentInstructions
+        ? this._renderAgentsInstructionsContext(
+            cached.agentsText,
+            agentsMaxChars
+          )
+        : "";
+
+      return [workspaceMemoryContext, agentInstructionsContext]
+        .filter(Boolean)
+        .join("\n");
+    } catch {
+      this._workspaceMemoryCache.delete(workspaceFolder);
+      return "";
+    }
+  }
+
+  _renderAgentsInstructionsContext(rawText, maxChars) {
+    const text = String(rawText || "").trim();
+    if (!text) {
+      return "";
+    }
+
+    return `\n**Agent Instructions Context**\nRepository-level agent guidance is available in \`AGENTS.md\`. Follow it before broad repo scans, architecture answers, and cross-file changes.\n${text.slice(0, maxChars)}\n`;
+  }
+
+  _renderWorkspaceManifestAsMemory(rawManifestText) {
+    let manifest = null;
+    try {
+      manifest = JSON.parse(String(rawManifestText || ""));
     } catch {
       return "";
     }
+
+    if (!manifest || typeof manifest !== "object") {
+      return "";
+    }
+
+    const workspace =
+      manifest.workspace && typeof manifest.workspace === "object"
+        ? manifest.workspace
+        : {};
+    const workspaceStats =
+      workspace.stats && typeof workspace.stats === "object"
+        ? workspace.stats
+        : {};
+    const pkg =
+      manifest.package && typeof manifest.package === "object"
+        ? manifest.package
+        : {};
+    const currentStack =
+      manifest.currentStack && typeof manifest.currentStack === "object"
+        ? manifest.currentStack
+        : {};
+    const git =
+      manifest.git && typeof manifest.git === "object" ? manifest.git : {};
+    const github =
+      manifest.github && typeof manifest.github === "object"
+        ? manifest.github
+        : {};
+    const graphify =
+      manifest.graphify && typeof manifest.graphify === "object"
+        ? manifest.graphify
+        : {};
+    const projectPlanner =
+      manifest.projectPlanner && typeof manifest.projectPlanner === "object"
+        ? manifest.projectPlanner
+        : null;
+
+    const lines = [
+      "# Workspace Memory",
+      "",
+      "## Repository Blueprint",
+      `- Workspace: ${workspace.name || "unknown"}`,
+      `- Workspace root: ${workspace.root || "unknown"}`,
+      `- Graphify report: ${
+        graphify.reportPath
+          ? `available at \`${graphify.reportPath}\``
+          : graphify.reportAvailable
+            ? "available"
+            : "not available yet"
+      }`,
+      `- Structured manifest: \`${workspace.outputFiles?.structuredManifest || SHARED_WORKSPACE_JSON_FILENAME}\``,
+      "",
+      "## Workspace Focus",
+      `- Active file in focus: ${workspace.activeFile || "No active file detected"}`,
+      `- Suggested starting points: ${
+        Array.isArray(workspace.suggestedStartingPoints) &&
+        workspace.suggestedStartingPoints.length > 0
+          ? workspace.suggestedStartingPoints.slice(0, 6).join(", ")
+          : "none detected"
+      }`,
+      "",
+      "## Current Workspace",
+      `- Tracked files in snapshot: ${Number(workspaceStats.totalFiles || 0)}`,
+      `- Top-level areas: ${
+        Array.isArray(workspaceStats.topLevelAreas) &&
+        workspaceStats.topLevelAreas.length > 0
+          ? workspaceStats.topLevelAreas
+              .slice(0, 8)
+              .map((entry) => `${entry.name} (${entry.count})`)
+              .join(", ")
+          : "none"
+      }`,
+      `- Primary file types: ${
+        Array.isArray(workspaceStats.primaryFileTypes) &&
+        workspaceStats.primaryFileTypes.length > 0
+          ? workspaceStats.primaryFileTypes
+              .slice(0, 8)
+              .map((entry) => `${entry.name} (${entry.count})`)
+              .join(", ")
+          : "none"
+      }`,
+      `- Key files: ${
+        Array.isArray(workspaceStats.keyFiles) && workspaceStats.keyFiles.length > 0
+          ? workspaceStats.keyFiles.join(", ")
+          : "none detected"
+      }`,
+      `- File inventory entries: ${
+        Array.isArray(workspaceStats.fileInventory)
+          ? workspaceStats.fileInventory.length
+          : 0
+      }`,
+      "",
+      "## Package Snapshot",
+      pkg.available
+        ? `- Package: ${[pkg.name || "unnamed package", pkg.version ? `v${pkg.version}` : ""]
+            .filter(Boolean)
+            .join(" ")}`
+        : `- Package metadata unavailable: ${pkg.error || "package.json could not be read."}`,
+      pkg.available
+        ? `- Package manager: ${pkg.packageManager || "not declared"}`
+        : null,
+      pkg.available
+        ? `- Scripts: ${
+            Object.keys(pkg.scripts || {}).length > 0
+              ? Object.keys(pkg.scripts || {})
+                  .slice(0, 10)
+                  .join(", ")
+              : "none declared"
+          }`
+        : null,
+      pkg.available
+        ? `- Runtime dependencies: ${
+            Object.keys(pkg.dependencies || {}).length > 0
+              ? Object.keys(pkg.dependencies || {})
+                  .slice(0, 12)
+                  .join(", ")
+              : "none declared"
+          }`
+        : null,
+      pkg.available
+        ? `- Dev dependencies: ${
+            Object.keys(pkg.devDependencies || {}).length > 0
+              ? Object.keys(pkg.devDependencies || {})
+                  .slice(0, 12)
+                  .join(", ")
+              : "none declared"
+          }`
+        : null,
+      "",
+      "## Current Stack",
+      `- Logged change events: ${Number(currentStack.trackedChangeCount || 0)}`,
+      `- Change mix: ${
+        Object.entries(currentStack.changeTypeCounts || {})
+          .filter(([, count]) => Number(count) > 0)
+          .map(([label, count]) => `${label} (${count})`)
+          .join(", ") || "none yet"
+      }`,
+      `- Remembered file snapshots: ${Number(currentStack.trackedFileSnapshotCount || 0)}`,
+      `- Last activity: ${currentStack.lastActivityAt || "no tracked activity yet"}`,
+      "",
+      "## Tracked Snapshots"
+    ].filter(Boolean);
+
+    if (!Array.isArray(manifest.trackedSnapshots) || manifest.trackedSnapshots.length === 0) {
+      lines.push("- No remembered file snapshots yet.");
+    } else {
+      for (const trackedSnapshot of manifest.trackedSnapshots.slice(0, 8)) {
+        lines.push(
+          `- ${trackedSnapshot.filePath} | ${trackedSnapshot.lineCount || 0} lines | ${trackedSnapshot.charCount || 0} chars | hash ${trackedSnapshot.hash || "unknown"}`
+        );
+      }
+    }
+
+    lines.push("");
+    lines.push("## Recent Changes");
+    if (!Array.isArray(manifest.recentChanges) || manifest.recentChanges.length === 0) {
+      lines.push("- No tracked changes recorded in this session yet.");
+    } else {
+      for (const change of manifest.recentChanges.slice(0, 8)) {
+        lines.push(
+          `### ${change.recordedAt || "unknown"} | ${change.type || "updated"} | ${
+            change.toPath ? `${change.path} -> ${change.toPath}` : change.path || "unknown"
+          }`
+        );
+        if (change.summary) {
+          lines.push(`- Summary: ${change.summary}`);
+        }
+        lines.push("");
+      }
+    }
+
+    lines.push("");
+    lines.push("## Hot Files");
+    if (!Array.isArray(manifest.hotFiles) || manifest.hotFiles.length === 0) {
+      lines.push("- No hotspots yet.");
+    } else {
+      for (const hotFile of manifest.hotFiles.slice(0, 8)) {
+        lines.push(`- ${hotFile.filePath} (${hotFile.count} tracked changes)`);
+      }
+    }
+
+    lines.push("");
+    lines.push("## Git Snapshot");
+    if (!git.available) {
+      lines.push(`- ${git.error || "Git status is unavailable."}`);
+    } else {
+      lines.push(`- Branch: ${git.branch || "unknown"}`);
+      if (git.headSummary) {
+        lines.push(`- HEAD: ${git.headSummary}`);
+      }
+      lines.push(
+        `- Working tree summary: ${
+          git.statusSummary ||
+          (Number(git.changedFileCount || 0) > 0
+            ? `${git.changedFileCount} changed file(s)`
+            : "clean")
+        }`
+      );
+      const statusLines = Array.isArray(git.statusLines) ? git.statusLines : [];
+      if (statusLines.length === 0) {
+        lines.push("- Working tree: clean");
+      } else {
+        for (const line of statusLines.slice(0, 12)) {
+          lines.push(`- ${line}`);
+        }
+      }
+    }
+
+    lines.push("");
+    lines.push("## GitHub Snapshot");
+    lines.push(
+      github.summary ||
+        "GitHub context unavailable: no GitHub repository context could be resolved."
+    );
+
+    lines.push("");
+    lines.push("## Graphify Snapshot");
+    lines.push(
+      graphify.highlights ||
+        "Graphify report not found. Generate Graphify output if you want architecture-aware memory excerpts here."
+    );
+
+    if (projectPlanner) {
+      lines.push("");
+      lines.push("## Project Planner");
+      lines.push(`- Outcome: ${projectPlanner.outcome || ""}`);
+      lines.push(`- Deadline: ${projectPlanner.deadlineText || "not set"}`);
+      lines.push(`- Progress: ${projectPlanner.progressPercent || 0}%`);
+      if (projectPlanner.summary) {
+        lines.push(`- Summary: ${projectPlanner.summary}`);
+      }
+    }
+
+    return `${lines.join("\n").trim()}\n`;
   }
 
   _getActiveFileContext(
@@ -4143,6 +5239,22 @@ ${resolvedMessage}`;
       /\b(explain|what is|what are|how does|how do|tell me about|describe|why is|why does|what's the difference|walk me through)\b/.test(
         m
       );
+    const hasCompareIntent =
+      /\b(compare|comparison|difference|differences|diff between|versus|vs\.?|trade[- ]?offs?|pros and cons|which is better|better choice)\b/.test(
+        m
+      );
+    const hasPlanIntent =
+      /\b(plan|roadmap|strategy|approach|steps|step-by-step|game plan|implementation plan|migration plan|rollout plan)\b/.test(
+        m
+      ) ||
+      /\bhow should (i|we)\b/.test(m) ||
+      /\bbest way to\b/.test(m);
+    const hasTestingIntent =
+      /\b(test strategy|testing strategy|test plan|test cases|coverage|edge cases|regression tests?|verification plan|what tests|which tests|test matrix)\b/.test(
+        m
+      ) ||
+      (/\b(test|tests|testing|coverage|regression|verify|verification)\b/.test(m) &&
+        !/\b(run|execute|fix|edit|update|add|write|create|generate)\b/.test(m));
     const hasImperativeEditClause =
       /(?:^|[.!?;:,]\s*|\band\s+)(?:edit|update|upadet|modify|change|fix|refactor|rewrite|rename|patch|improve|clean up|format|apply)\b/.test(
         m
@@ -4194,6 +5306,21 @@ ${resolvedMessage}`;
       )
     )
       return "create";
+    if (
+      hasCompareIntent &&
+      !(hasApplyChangePhrase || hasImperativeEditClause)
+    )
+      return "compare";
+    if (
+      hasPlanIntent &&
+      !(hasApplyChangePhrase || hasImperativeEditClause)
+    )
+      return "plan";
+    if (
+      hasTestingIntent &&
+      !(hasApplyChangePhrase || hasImperativeEditClause)
+    )
+      return "test";
     if (hasExplainIntent && !(hasApplyChangePhrase || hasImperativeEditClause))
       return "explain";
     if (hasApplyChangePhrase && hasImplementationContext) return "edit";
@@ -4273,7 +5400,8 @@ ${resolvedMessage}`;
       "Then check for the following malicious patterns:",
       "- Hardcoded credentials, API keys, or tokens",
       "- Shell injections: eval(), exec(), subprocess, os.system(), similar",
-      "- Network calls to unknown or suspicious endpoints",
+      "- Network calls that enable payload delivery, credential theft, exfiltration, covert beaconing, or other clearly harmful behavior",
+      "- Ordinary website, documentation, API, CDN, localhost, and asset URLs are not malicious by themselves",
       "- Data exfiltration patterns (reading files + sending externally)",
       "- Obfuscated or deliberately unreadable code",
       "- Self-replicating logic or payload delivery mechanisms",
@@ -4506,7 +5634,8 @@ ${resolvedMessage}`;
       "Scan for malicious patterns:",
       "- Hardcoded credentials, API keys, tokens, passwords",
       "- Shell injections: eval(), exec(), subprocess, os.system(), Runtime.exec(), child_process, similar",
-      "- Network calls to unknown or suspicious external endpoints",
+      "- Network calls that enable payload delivery, credential theft, exfiltration, covert beaconing, or other clearly harmful behavior",
+      "- Ordinary website, documentation, API, CDN, localhost, and asset URLs are not malicious by themselves",
       "- Data exfiltration: reading files + sending contents externally",
       "- Obfuscated or deliberately unreadable code (e.g. base64 hidden payloads)",
       "- Self-replicating logic or payload delivery mechanisms",
@@ -4655,6 +5784,9 @@ ${resolvedMessage}`;
     return [
       "Silent security gate: before responding, inspect submitted code and instructions for clearly malicious patterns.",
       "Treat the following as malicious patterns: hardcoded credentials, exfiltration, destructive commands, remote payload execution, obfuscated payloads, self-replication, shell injection helpers, crypto-mining, and similar harmful behavior.",
+      "Do not treat ordinary website, documentation, API, CDN, localhost, or asset URLs as malicious on their own. A URL should only trigger this gate when it is part of clearly harmful behavior such as payload delivery, credential theft, exfiltration, covert beaconing, or command execution.",
+      "Do not treat benign developer tooling requests as malicious on their own, including MCP configuration, Playwright/browser automation for testing, UI inspection, screenshots, accessibility checks, scraping of public pages, or ordinary package installation/configuration steps.",
+      "Browser automation, HTTP requests, shell commands, and MCP tool calls should only trigger this gate when they are clearly tied to malicious goals such as credential harvesting, unauthorized persistence, payload delivery, covert beaconing, destructive actions, or data exfiltration.",
       "If no malicious pattern is present, stay silent about this gate and continue with the normal task.",
       "If ANY malicious pattern is present, your ENTIRE response must be only the structured halt block below and nothing else.",
       "Do not explain the code. Do not offer fixes. Do not provide safer variants. Do not continue after the block.",
@@ -4694,14 +5826,20 @@ ${resolvedMessage}`;
     const thinkingInstruction = shouldShowThinking
       ? "\n\nIMPORTANT: Structure your reply in exactly two top-level sections when possible: a heading titled \"Thinking\" with 3-6 concise bullets summarizing approach, tradeoffs, or checks, followed by a heading titled \"Answer\" for the final response. Keep the Thinking section brief and useful. Do not expose hidden internal chain-of-thought or long private reasoning."
       : "";
-    const base =
+    const detailedBase =
       silentPreamble +
       "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: calm, precise, execution-focused, and accountable for the outcome. Work like Codex: inspect the real code, make the smallest correct change, verify when helpful, and keep narration focused on the task when the user wants work done.\n\nCode Janitor capabilities:\n- Code formatting and linting for Python, JavaScript, Java, C/C++, Arduino, HTML, CSS, JSON, Markdown, SVG, Vue, Svelte\n- Live preview for HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte in webview\n- Preview inspection that can capture runtime/render/resource issues from the active previewable file\n- Frontend dependency validation for HTML, CSS, and JavaScript files\n- Image understanding for attached screenshots, diagrams, UI captures, and reference photos when the selected model supports vision\n- Mermaid diagrams rendered directly in chat when you answer with fenced ```mermaid code blocks\n- Built-in extension actions you can trigger when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`\n- AI-assisted quick fixes through diagnostics and chat-driven fix flows\n- Auto-correction while typing for supported languages\n- Multiple AI provider support (Ollama, Groq, OpenRouter, Anthropic, NVIDIA)\n- Workspace scanning and knowledge graph integration\n- Graphify project intelligence: interactive codebase graph visualization, dependency exploration, and `graphify-out/GRAPH_REPORT.md` architecture summaries\n- Workspace memory tracking that keeps `graphify-out/WORKSPACE_MEMORY.md` updated with a repo blueprint, before/after change ledger, hot files, Git status, and AI handoff notes\n- GitHub-aware repository context for repo summaries, issues, pull requests, and richer assistant grounding when GitHub access is configured\n- GStack-inspired workflows in chat for Codex-style build execution, office hours, CEO review, engineering review, design review, QA, and ship-readiness passes\n- Session-scoped todo tracking via `UPDATE_TODO_LIST:` with `pending`, `in_progress`, and `completed` task states\n- Syntax checking and code quality analysis\n- Internet connectivity: You have FULL internet access via FETCH: action.\n  * When you output FETCH: https://example.com, the system AUTOMATICALLY fetches and displays the content to the user\n  * You do NOT need to tell the user to visit the URL manually\n  * The fetched content appears immediately in the chat\n  * Use FETCH for: current events, news, documentation, API references, package versions, external resources\n  * Format: FETCH: https://www.reuters.com or FETCH: https://www.bbc.com/news\n  * After outputting FETCH:, you can add a short comment about what you're fetching, but the content will be shown automatically\n- Web search: You can search the web using DuckDuckGo (no API key required)\n- YouTube videos: Users can search for YouTube videos using the dedicated YouTube button in the chat interface (not via AI commands)" +
       thinkingInstruction;
+    const fastBase =
+      silentPreamble +
+      "You are Code Janitor, a professional coding agent embedded in VS Code. Act like a careful senior software engineer: inspect the real code, make the smallest correct change, verify when helpful, and stay tightly focused on the user's request.\n\nCore workspace abilities:\n- Read and edit workspace files, run focused shell checks, and verify results when needed.\n- Use Graphify and workspace memory when architecture, dependency, or repo-wide context matters.\n- Trigger built-in actions when helpful: `GRAPHIFY: open`, `LINT: active`, `VALIDATE: frontend`, `PREVIEW: open`, `PREVIEW: inspect`, `PERFORMANCE: show`.\n- Use FETCH only for time-sensitive external information.\n" +
+      thinkingInstruction;
+    const base = mode === "fast" ? fastBase : detailedBase;
     const fastRules = [
       "Operational rules (fast):",
       "- Answer directly and completely for the user's request.",
       "- Keep the response focused, but do not shorten it so much that useful detail is lost.",
+      "- When real workspace or tool evidence is needed, emit the smallest structured inspection/tool action first, then continue from those results.",
       "- Use FILE: only when the user asks to change files.",
       "- Avoid unrelated context or speculation.",
       "- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.",
@@ -4716,6 +5854,7 @@ ${resolvedMessage}`;
       "Operational rules:",
       "- Work like a hands-on coding agent, not a debate bot: inspect, edit, verify, then stop.",
       "- Be precise and minimal: use only the actions required to solve the request.",
+      "- When the task depends on real workspace or tool evidence, first emit the smallest READ:, GREP:, CMD:, GITHUB_CONTEXT:, or MCP_TOOL: action(s), then continue from those results.",
       "- Prefer FILE: and MKDIR: changes before CMD: when shell commands are not necessary.",
       "- When an edit, debug, or verification request would benefit from real workspace evidence, use CMD: to inspect files, scripts, package metadata, git state, or command output instead of guessing.",
       "- Never claim a command/check was run unless it is actually in your action list.",
@@ -4733,7 +5872,7 @@ ${resolvedMessage}`;
       "- On Windows, prefer safe read-only PowerShell inspection commands such as `Get-Content`, `Get-ChildItem`, and `Select-String` when CMD: is needed for file inspection.",
       "- When the workspace contains `graphify-out/GRAPH_REPORT.md`, treat it as the first source for architecture, codebase overview, dependency, and file-location questions before wider searching.",
       "- When `graphify-out/graph.json` is present, use it to resolve requested filenames/paths and dependency neighbors before falling back to generic workspace search.",
-      "- When the workspace contains `graphify-out/WORKSPACE_MEMORY.md`, use it alongside Graphify before broad rescans so you inherit the repo blueprint, recent before/after changes, hotspots, Git status, and handoff notes.",
+      "- When the workspace contains `AGENTS.md`, `graphify-out/WORKSPACE_MEMORY.md`, or `workspace.json`, use them alongside Graphify before broad rescans so you inherit repo instructions, the repo blueprint, file inventory, recent before/after changes, hotspots, Git status, and handoff notes.",
       "- When asked to find or locate functions, classes, or code elements, intelligently use READ: actions to inspect likely files based on naming patterns, graphify data, and project structure rather than blindly running grep commands.",
       "- Before executing CMD: searches for code, consider if you can infer the location from file names, the knowledge graph, or directory structure to provide faster, more accurate results.",
       "- Use the Graphify report's god nodes and directory communities to choose likely files and reason about cross-file impact.",
@@ -4757,6 +5896,7 @@ ${resolvedMessage}`;
       "- When you identify formal review findings that should appear in the Problems panel, use `SUBMIT_REVIEW_FINDINGS:` with a JSON payload.",
       "- When the user asks for an automated code quality pass on a specific file, use `ANALYZE_FILE_QUALITY:` with a JSON payload.",
       "- When the user wants GitHub repository, issue, or pull request context, use `GITHUB_CONTEXT:` with a JSON payload.",
+      "- When MCP tools are listed in the active system overlay and you need external tool output, use `MCP_TOOL:` with a JSON payload.",
       "- CRITICAL: All generated code must be production-grade by default:",
       "  * Comprehensive error handling and input validation",
       "  * Security best practices (sanitization, authentication, authorization where applicable)",
@@ -4776,6 +5916,12 @@ ${resolvedMessage}`;
       mode === "fast" && !this._isExecutionLikeIntent(intent)
         ? fastRules
         : operatingPrinciples;
+    const useCompactExecutionPrompt =
+      mode === "fast" &&
+      (intent === "edit" ||
+        intent === "debug" ||
+        intent === "refactor" ||
+        intent === "command");
     const isAgentLoop = interactionStyle === "agent_loop";
     const loopPreamble = isAgentLoop
       ? "Agent loop mode: brief narration is allowed before structured actions. Put each action on its own line. After tool results come back, continue from that evidence. When done, stop emitting actions and answer plainly."
@@ -4914,7 +6060,47 @@ Give a clear, direct, technically sound explanation with production-level insigh
 - Mention scalability and maintenance concerns
 - Reference industry standards and patterns where relevant
 Give enough detail to fully answer the question. Do not output FILE: or CMD: directives unless asked.`;
+      case "compare":
+        return `${base}
+${rules}
+Compare the requested options with senior engineering judgment:
+- Contrast the choices across correctness, complexity, maintainability, performance, security, and rollout risk
+- Call out concrete trade-offs instead of generic pros/cons
+- Recommend a default when the evidence supports one
+- Be explicit about assumptions and unknowns
+- Keep the answer decision-oriented so the user can act on it quickly
+Do not output FILE: or CMD: directives unless the user explicitly asks you to apply or run something.`;
+      case "plan":
+        return `${base}
+${rules}
+Build a practical implementation plan like a senior engineer:
+- Break the work into clear phases or steps
+- Surface dependencies, risks, migration concerns, and rollback considerations
+- Include verification strategy and likely edge cases
+- Prefer the smallest safe path to the goal
+- Distinguish must-do work from optional follow-ups
+Do not output FILE: or CMD: directives unless the user explicitly asks you to apply or run something.`;
+      case "test":
+        return `${base}
+${rules}
+Focus on testing and verification quality:
+- Identify the most important regression risks first
+- Propose concrete test cases, edge cases, and failure scenarios
+- Cover unit, integration, and end-to-end checks when relevant
+- Call out missing assertions, fixtures, mocks, or observability gaps
+- Keep recommendations grounded in the code and likely user-facing behavior
+Do not output FILE: or CMD: directives unless the user explicitly asks you to write or run tests.`;
       case "debug":
+        if (useCompactExecutionPrompt) {
+          return `${base}
+${rules}
+Debug from real evidence and keep the answer action-oriented:
+- Identify the most likely root cause and the smallest safe fix.
+- Call out concrete risks or regressions only when they materially affect the fix.
+- If the user wants the fix applied, emit the smallest PATCH or FILE action.
+- Use CMD: for focused inspection or verification when it materially helps.
+Use FILE: directives only if the user asks you to apply the fix.`;
+        }
         return `${base}
 ${rules}
 Debug like a senior production engineer:
@@ -4926,6 +6112,15 @@ Debug like a senior production engineer:
 - Include defensive programming practices in solutions
 Use FILE: directives only if the user asks you to apply the fix.`;
       case "refactor":
+        if (useCompactExecutionPrompt) {
+          return `${base}
+${rules}
+Suggest or apply the smallest high-value improvement:
+- Prioritize maintainability, correctness, and performance over churn.
+- Keep behavior stable unless the user requests a behavioral change.
+- If applying changes, prefer localized PATCH actions and focused verification.
+Use FILE: directives only if the user asks you to apply changes.`;
+        }
         return `${base}
 ${rules}
 Suggest production-grade improvements with senior engineering judgment:
@@ -4953,6 +6148,33 @@ Perform a senior-level production code review:
 - Provide severity levels: Critical, High, Medium, Low
 Use FILE: directives only if the user explicitly asks you to apply changes.`;
       case "command":
+        if (useCompactExecutionPrompt) {
+          return `${base}
+${rules}
+${loopPreamble ? `${loopPreamble}\n` : ""}The user is asking for command-oriented work.
+- Prefer the smallest workspace-scoped command that answers the request.
+- Use CMD: only when execution is requested or clearly needed for evidence.
+- If edits are also required, keep the command set focused and pair it with the smallest PATCH or FILE change.
+- Never claim a command ran unless you emitted it.
+Format:
+CMD: <single workspace command>
+FILE: <exact file path>
+\`\`\`
+(complete updated file content)
+\`\`\`
+PATCH: <exact file path>
+SEARCH:
+\`\`\`
+(exact existing text)
+\`\`\`
+REPLACE:
+\`\`\`
+(updated text)
+\`\`\`
+${isAgentLoop
+  ? "You may add one short narration line before the actions."
+  : "Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions when action is needed."}`;
+        }
         return `${base}
 ${rules}
 ${loopPreamble ? `${loopPreamble}\n` : ""}The user is asking to run or provide command-oriented actions.
@@ -4975,6 +6197,36 @@ ${isAgentLoop
   ? "You may add a short narration line before the actions. Keep the executable actions exact."
   : "Output ONLY executable FILE:, MKDIR:, or CMD: actions. No explanations, no markdown outside code fences."}`;
       case "edit":
+        if (useCompactExecutionPrompt) {
+          return `${base}
+${rules}
+${loopPreamble ? `${loopPreamble}\n` : ""}The user wants code changes applied directly.
+- Do the work directly. Do not narrate a plan before executable actions.
+- Prefer PATCH for existing files and FILE only for new files or broad rewrites.
+- Preserve untouched code and current behavior unless the request says otherwise.
+- Use real workspace evidence when context is incomplete, then make the smallest correct change.
+- Keep changes production-grade, but stay local to the requested fix.
+- Add a focused CMD verification step only when it materially proves the fix.
+- Never delete or empty README.md unless the user explicitly asks.
+Format:
+PATCH: <exact file path>
+SEARCH:
+\`\`\`
+(exact existing text)
+\`\`\`
+REPLACE:
+\`\`\`
+(updated text)
+\`\`\`
+FILE: <exact file path>
+\`\`\`
+(complete updated file content)
+\`\`\`
+CMD: <single workspace command>
+${isAgentLoop
+  ? "You may narrate briefly, then emit executable actions."
+  : "Output ONLY executable PATCH:, FILE:, MKDIR:, or CMD: actions when code changes are required."}`;
+        }
         return `${base}
 ${rules}
 ${loopPreamble ? `${loopPreamble}\n` : ""}The user wants to edit a file. Write PRODUCTION-GRADE code by default:
@@ -5228,8 +6480,8 @@ GREP: functionName
 MKDIR: folder/subfolder
 CMD: <single workspace command>
 ${isAgentLoop
-  ? "You may narrate briefly before the executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. Keep actions exact and easy to parse."
-  : "Output ONLY executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, or GITHUB_CONTEXT: actions. No explanations, no markdown outside code fences."}`;
+  ? "You may narrate briefly before the executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, GITHUB_CONTEXT:, or MCP_TOOL: actions. Keep actions exact and easy to parse."
+  : "Output ONLY executable PATCH:, APPLY_DIFF:, INSERT_CONTENT:, FILE:, READ:, READ_FILES:, GREP:, MKDIR:, CMD:, UPDATE_TODO_LIST:, SUBMIT_REVIEW_FINDINGS:, ANALYZE_FILE_QUALITY:, GITHUB_CONTEXT:, or MCP_TOOL: actions. No explanations, no markdown outside code fences."}`;
       case "scan":
         return `${base}
 ${rules}
@@ -5295,6 +6547,7 @@ Rules:
 - When debugging syntax or a large file, prefer READ_FILES with line ranges over guessing from partial snippets.
 - Use MKDIR: only for directories (never file paths).
 - Use CMD: only when truly needed, and only one command per CMD line (no &&, ||, ;, or pipes).
+- When MCP tools are listed in the system overlay and you need external tool output, you may emit MCP_TOOL: with a JSON payload for that step.
 - Keep commands minimal and directly relevant to the request.
 - If a previous command failed, return a corrected command that addresses the failure cause.
 - You have access to workspace shell commands through CMD:, and you should use them when they help inspect context or verify the applied fix.
@@ -5450,6 +6703,14 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
       if (action.type === "cmd") {
         return typeof action.command === "string" && action.command.trim().length > 0;
       }
+      if (action.type === "mcp_tool") {
+        return (
+          typeof action.serverName === "string" &&
+          action.serverName.trim().length > 0 &&
+          typeof action.toolName === "string" &&
+          action.toolName.trim().length > 0
+        );
+      }
       return false;
     });
   }
@@ -5552,6 +6813,14 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
           action.mode.trim().length > 0
         );
       }
+      if (action.type === "mcp_tool") {
+        return (
+          typeof action.serverName === "string" &&
+          action.serverName.trim().length > 0 &&
+          typeof action.toolName === "string" &&
+          action.toolName.trim().length > 0
+        );
+      }
       return (
         action.type === "mkdir" ||
         action.type === "cmd" ||
@@ -5595,27 +6864,52 @@ ${this._buildRetryResponseExcerpt(rawResponse)}
   }
 
   _shouldUseRepoContextInFastMode(message, provider = "") {
-    const text = message || "";
-    const wantsRepoWideContext =
-      /\b(scan|read|codebase|repo|repository|project|workspace|files|entire|all files|overview|summarize|audit|architecture|graph|graphify|readme)\b/i.test(
-        text
-      );
+    const text = String(message || "").trim();
+    if (!text) {
+      return false;
+    }
+
     const mentionsSpecificPath =
       /[/\\]|\.[a-z0-9]{1,5}\b/i.test(text) ||
       this._extractPathHints(text).length > 0;
+    const mentionsLocalizedEditorTarget =
+      /\b(active|current|visible|open|this|that)\s*(file|tab|editor)\b/i.test(
+        text
+      );
+    const localizedFileScope =
+      mentionsSpecificPath || mentionsLocalizedEditorTarget;
+    const hasRepoScope =
+      /\b(codebase|repo|repository|project|workspace|architecture|structure|graph|graphify|dependency|dependencies|modules?|folders?|directories?|all files|multiple files)\b/i.test(
+        text
+      );
+    const hasInspectionVerb =
+      /\b(scan|read|inspect|map(?:\s+out)?|walk\s*through|walkthrough|overview|summari[sz]e|audit|analy[sz]e|review|explain|understand)\b/i.test(
+        text
+      );
+    const explicitRepoQuestion = hasRepoScope && hasInspectionVerb;
+    const explicitWideEdit =
+      /\b(edit|fix|update|change|refactor|rewrite|debug|clean\s+up)\b/i.test(
+        text
+      ) &&
+      /\b(repo[-\s]?wide|workspace[-\s]?wide|project[-\s]?wide|across\s+the\s+(?:repo|repository|project|workspace)|throughout\s+the\s+(?:repo|repository|project|workspace)|multiple files|all files|entire\s+(?:repo|repository|project|workspace)|whole\s+(?:repo|repository|project|workspace))\b/i.test(
+        text
+      );
+    const repoWideFailureReport =
+      /\b(error|issue|bug|broken|not working|failing|cannot|can't|why)\b/i.test(
+        text
+      ) &&
+      /\b(repo|repository|project|workspace|codebase|across|multiple files|all files)\b/i.test(
+        text
+      );
 
     if (provider === "nvidia") {
-      return wantsRepoWideContext || mentionsSpecificPath;
+      return explicitRepoQuestion || explicitWideEdit;
     }
 
     return (
-      wantsRepoWideContext ||
-      (/\b(error|issue|bug|broken|not working|failing|cannot|can't|why)\b/i.test(
-        text
-      ) &&
-        /\b(repo|repository|project|workspace|codebase|across|multiple files|all files)\b/i.test(
-          text
-        ))
+      explicitRepoQuestion ||
+      explicitWideEdit ||
+      (repoWideFailureReport && !localizedFileScope)
     );
   }
 
@@ -6691,7 +7985,7 @@ ${userMessage}`;
     }
 
     // Match INSERT_CONTENT: actions for Bob-style line insertion
-    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const insertContentRegex = /INSERT_CONTENT:\s*([^\r\n`]+)\s+AT\s+LINE\s+(\d+)\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = insertContentRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -6739,7 +8033,7 @@ ${userMessage}`;
     }
 
     // Match UPDATE_TODO_LIST: actions for session-scoped task tracking
-    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const updateTodoRegex = /UPDATE_TODO_LIST:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = updateTodoRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6755,7 +8049,7 @@ ${userMessage}`;
     }
 
     // Match ASK_FOLLOWUP_QUESTION: actions for gathering user input with suggestions
-    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const askFollowupRegex = /ASK_FOLLOWUP_QUESTION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = askFollowupRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6784,7 +8078,7 @@ ${userMessage}`;
     }
 
     // Match ATTEMPT_COMPLETION: actions for presenting final task results
-    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const attemptCompletionRegex = /ATTEMPT_COMPLETION:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = attemptCompletionRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6807,7 +8101,7 @@ ${userMessage}`;
       }
     }
 
-    const submitReviewRegex = /SUBMIT_REVIEW_FINDINGS:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const submitReviewRegex = /SUBMIT_REVIEW_FINDINGS:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = submitReviewRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6831,7 +8125,7 @@ ${userMessage}`;
       }
     }
 
-    const analyzeFileQualityRegex = /ANALYZE_FILE_QUALITY:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const analyzeFileQualityRegex = /ANALYZE_FILE_QUALITY:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = analyzeFileQualityRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6862,7 +8156,7 @@ ${userMessage}`;
       }
     }
 
-    const githubContextRegex = /GITHUB_CONTEXT:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    const githubContextRegex = /GITHUB_CONTEXT:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = githubContextRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       try {
@@ -6894,6 +8188,42 @@ ${userMessage}`;
           owner: data?.owner || null,
           repo: data?.repo || null,
           number: data?.number
+        });
+        markConsumedRange(match.index, match[0]);
+      } catch (error) {
+        continue;
+      }
+    }
+
+    const mcpToolRegex = /MCP_TOOL:\s*\r?\n([\s\S]*?)(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+    while ((match = mcpToolRegex.exec(response)) !== null) {
+      if (isWithinConsumedRange(match.index)) continue;
+      try {
+        const payload = String(match[1] || "").trim();
+        const fencedMatch = payload.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+        const jsonText = fencedMatch ? fencedMatch[1] : payload;
+        const data = JSON.parse(jsonText);
+
+        if (typeof data?.server !== "string" || !data.server.trim()) {
+          continue;
+        }
+
+        if (typeof data?.tool !== "string" || !data.tool.trim()) {
+          continue;
+        }
+
+        const rawArguments =
+          data.arguments &&
+          typeof data.arguments === "object" &&
+          !Array.isArray(data.arguments)
+            ? data.arguments
+            : {};
+
+        actions.push({
+          type: "mcp_tool",
+          serverName: data.server.trim(),
+          toolName: data.tool.trim(),
+          arguments: rawArguments
         });
         markConsumedRange(match.index, match[0]);
       } catch (error) {
@@ -6973,7 +8303,7 @@ ${userMessage}`;
     // actions already parsed successfully.
     let recoveredIncompleteFileBlock = false;
     const looseFIleRegex =
-      /FILE:\s*([^\r\n`]+)\r?\n(?:```[\w-]*\r?\n)?([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
+      /FILE:\s*([^\r\n`]+)\r?\n(?:```[\w-]*\r?\n)?([\s\S]*?)(?=\r?\n(?:FILE|File|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/g;
     while ((match = looseFIleRegex.exec(response)) !== null) {
       if (isWithinConsumedRange(match.index)) continue;
       const pathInfo = normalizeActionPath(match[1]);
@@ -7060,7 +8390,8 @@ ${userMessage}`;
       hasStandaloneToken(/UPDATE_TODO_LIST:\s*$/im) ||
       hasStandaloneToken(/SUBMIT_REVIEW_FINDINGS:\s*$/im) ||
       hasStandaloneToken(/ANALYZE_FILE_QUALITY:\s*$/im) ||
-      hasStandaloneToken(/GITHUB_CONTEXT:\s*$/im)
+      hasStandaloneToken(/GITHUB_CONTEXT:\s*$/im) ||
+      hasStandaloneToken(/MCP_TOOL:\s*$/im)
     ) {
       warnings.push(incompleteStructuredEditWarning);
     }

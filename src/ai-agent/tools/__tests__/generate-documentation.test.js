@@ -10,9 +10,12 @@ const {
   analyzeRepository,
   generateReadme,
   generateApiDocs,
-  generateContributingGuide
+  generateContributingGuide,
+  buildDocumentationFiles
 } = require("../generate-documentation");
 const fs = require("fs").promises;
+const path = require("path");
+const { runProviderPrompt } = require("../../provider-utils");
 
 // Mock dependencies
 jest.mock("fs", () => ({
@@ -25,11 +28,16 @@ jest.mock("fs", () => ({
   }
 }));
 
+jest.mock("../../provider-utils", () => ({
+  runProviderPrompt: jest.fn()
+}));
+
 describe("generate-documentation", () => {
   const mockWorkspaceRoot = "/test/workspace";
   
   beforeEach(() => {
     jest.clearAllMocks();
+    runProviderPrompt.mockReset();
   });
   
   describe("validateDocumentationRequest", () => {
@@ -116,6 +124,28 @@ describe("generate-documentation", () => {
       
       expect(analysis.languageStats).toHaveProperty("javascript");
       expect(analysis.languageStats).toHaveProperty("python");
+    });
+
+    it("falls back to the workspace root when the requested scan directory is missing", async () => {
+      fs.readFile.mockRejectedValue(new Error("No package.json"));
+      fs.readdir.mockImplementation(async (targetPath) => {
+        if (targetPath === path.join(mockWorkspaceRoot, "src")) {
+          const error = new Error("missing");
+          error.code = "ENOENT";
+          throw error;
+        }
+        if (targetPath === mockWorkspaceRoot) {
+          return [
+            { name: "index.js", isFile: () => true, isDirectory: () => false }
+          ];
+        }
+        return [];
+      });
+
+      const analysis = await analyzeRepository(mockWorkspaceRoot, "src");
+
+      expect(analysis.scanDirectory).toBe(".");
+      expect(analysis.files).toContain("index.js");
     });
   });
   
@@ -343,6 +373,12 @@ describe("generate-documentation", () => {
       expect(result.documentation.additional).toBeDefined();
       expect(result.documentation.additional.api).toBeDefined();
       expect(result.documentation.additional.contributing).toBeDefined();
+      expect(result.generatedFiles).toEqual([
+        { type: "readme", outputPath: "README.md" },
+        { type: "api", outputPath: "docs/API.md" },
+        { type: "contributing", outputPath: "CONTRIBUTING.md" }
+      ]);
+      expect(fs.writeFile).toHaveBeenCalledTimes(3);
     });
     
     it("should handle errors gracefully", async () => {
@@ -365,6 +401,132 @@ describe("generate-documentation", () => {
       
       expect(result.success).toBe(false);
       expect(result.error).toContain("Unknown documentation type");
+    });
+
+    it("uses AI-generated documentation when an agent is available", async () => {
+      fs.readFile.mockResolvedValue(
+        JSON.stringify({
+          name: "project",
+          version: "1.0.0",
+          scripts: { test: "jest" }
+        })
+      );
+      fs.readdir.mockResolvedValue([]);
+      fs.mkdir.mockResolvedValue(undefined);
+      fs.writeFile.mockResolvedValue(undefined);
+      runProviderPrompt.mockResolvedValue({
+        provider: "ollama",
+        providerDisplayName: "Ollama",
+        text: JSON.stringify({
+          content: "# AI README\n\nProject docs written by AI."
+        })
+      });
+
+      const result = await generateDocumentation(
+        { type: "readme" },
+        mockWorkspaceRoot,
+        {
+          context: {},
+          agent: {}
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.aiGenerated).toBe(true);
+      expect(result.aiProviderDisplayName).toBe("Ollama");
+      expect(result.documentation.content).toContain("AI README");
+    });
+
+    it("falls back to template documentation when AI generation fails", async () => {
+      fs.readFile.mockResolvedValue(
+        JSON.stringify({
+          name: "project",
+          version: "1.0.0"
+        })
+      );
+      fs.readdir.mockResolvedValue([]);
+      fs.mkdir.mockResolvedValue(undefined);
+      fs.writeFile.mockResolvedValue(undefined);
+      runProviderPrompt.mockRejectedValue(new Error("provider unavailable"));
+
+      const result = await generateDocumentation(
+        { type: "readme" },
+        mockWorkspaceRoot,
+        {
+          context: {},
+          agent: {}
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.aiGenerated).toBe(false);
+      expect(result.documentation.content).toContain("# project");
+    });
+
+    it("falls back to the workspace root when the requested scan directory is missing", async () => {
+      fs.readFile.mockResolvedValue(JSON.stringify({ name: "project" }));
+      fs.readdir.mockImplementation(async (targetPath) => {
+        if (targetPath === path.join(mockWorkspaceRoot, "src")) {
+          const error = new Error("missing");
+          error.code = "ENOENT";
+          throw error;
+        }
+        if (targetPath === mockWorkspaceRoot) {
+          return [
+            { name: "index.js", isFile: () => true, isDirectory: () => false }
+          ];
+        }
+        return [];
+      });
+      fs.mkdir.mockResolvedValue(undefined);
+      fs.writeFile.mockResolvedValue(undefined);
+
+      const result = await generateDocumentation(
+        { type: "readme", scanDirectory: "src" },
+        mockWorkspaceRoot
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.scanDirectory).toBe("src");
+      expect(result.analysis.scanDirectory).toBe(".");
+      expect(result.analysis.files).toBeGreaterThan(0);
+    });
+  });
+
+  describe("buildDocumentationFiles", () => {
+    it("builds the full documentation suite output list", () => {
+      const files = buildDocumentationFiles(
+        "full",
+        mockWorkspaceRoot,
+        {
+          content: "# README",
+          additional: {
+            api: "# API",
+            contributing: "# CONTRIBUTING"
+          }
+        }
+      );
+
+      expect(files).toEqual([
+        {
+          type: "readme",
+          absolutePath: path.join(mockWorkspaceRoot, "README.md"),
+          relativePath: "README.md",
+          content: "# README"
+        },
+        {
+          type: "api",
+          absolutePath: path.join(mockWorkspaceRoot, "docs", "API.md"),
+          relativePath: "docs/API.md",
+          content: "# API"
+        },
+        {
+          type: "contributing",
+          absolutePath: path.join(mockWorkspaceRoot, "CONTRIBUTING.md"),
+          relativePath: "CONTRIBUTING.md",
+          content: "# CONTRIBUTING"
+        }
+      ]);
     });
   });
 });

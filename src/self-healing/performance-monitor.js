@@ -395,12 +395,13 @@ class PerformanceMonitor {
   /**
    * Record an AI response time
    */
-  recordResponse(provider, model, duration, success) {
+  recordResponse(provider, model, duration, success, metadata = null) {
     const record = {
       provider,
       model,
       duration,
       success,
+      metadata: metadata && typeof metadata === "object" ? metadata : null,
       timestamp: Date.now()
     };
 

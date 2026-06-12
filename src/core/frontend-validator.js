@@ -75,10 +75,12 @@ class FrontendValidator {
 
     if (HTML_EXTENSIONS.has(ext)) {
       this._validateHTML();
+      this._validateMessageEventListeners();
     } else if (STYLE_EXTENSIONS.includes(ext)) {
       this._validateCSS();
     } else if (SCRIPT_EXTENSIONS.includes(ext)) {
       this._validateJS();
+      this._validateMessageEventListeners();
     }
 
     return {
@@ -248,6 +250,40 @@ class FrontendValidator {
     );
   }
 
+  _validateMessageEventListeners() {
+    const listenerPatterns = [
+      /window\.addEventListener\(\s*["']message["']\s*,\s*function\s*\(([^)]*)\)\s*\{([\s\S]*?)\}\s*\)/gi,
+      /window\.addEventListener\(\s*["']message["']\s*,\s*\(([^)]*)\)\s*=>\s*\{([\s\S]*?)\}\s*\)/gi,
+      /window\.onmessage\s*=\s*function\s*\(([^)]*)\)\s*\{([\s\S]*?)\}\s*;?/gi,
+      /window\.onmessage\s*=\s*\(([^)]*)\)\s*=>\s*\{([\s\S]*?)\}\s*;?/gi
+    ];
+
+    for (const pattern of listenerPatterns) {
+      let match = pattern.exec(this.code);
+      while (match) {
+        const eventParam = String(match[1] || "event").trim() || "event";
+        const body = String(match[2] || "");
+        const validatesSender =
+          body.includes("getTrustedExtensionMessage(") ||
+          body.includes("isTrustedExtensionMessage(") ||
+          body.includes("__codeJanitorToken") ||
+          body.includes(`${eventParam}.origin`) ||
+          body.includes(`${eventParam}.source`);
+
+        if (!validatesSender) {
+          this._addSecurityIssue({
+            index: match.index,
+            message:
+              "Message event listener does not validate the sender before trusting event.data",
+            kind: "message-origin-validation"
+          });
+        }
+
+        match = pattern.exec(this.code);
+      }
+    }
+  }
+
   _scanAttributeReferences(regex, buildIssue) {
     let match = regex.exec(this.code);
     while (match) {
@@ -329,7 +365,8 @@ class FrontendValidator {
       length: location.length,
       kind,
       message: message.includes(reference) ? message : `${message}: ${reference}`,
-      creatable: this._isCreatableResource(resolution.resolvedPath, kind)
+      creatable: this._isCreatableResource(resolution.resolvedPath, kind),
+      severity: "warning"
     };
 
     const issueKey = `${issue.resolvedPath}|${issue.line}|${issue.column}|${issue.message}`;
@@ -370,10 +407,33 @@ class FrontendValidator {
         ? message
         : `${message}: ${packageName}`,
       creatable: false,
-      installable: true
+      installable: true,
+      severity: "warning"
     };
 
     const issueKey = `${issue.type}|${issue.packageName}|${issue.line}|${issue.column}`;
+    if (this.issueKeys.has(issueKey)) {
+      return;
+    }
+
+    this.issueKeys.add(issueKey);
+    this.issues.push(issue);
+  }
+
+  _addSecurityIssue({ index, message, kind }) {
+    const location = this._getLocation(index, 1);
+    const issue = {
+      type: "security",
+      kind: kind || "security",
+      line: location.line,
+      column: location.column,
+      length: location.length,
+      message,
+      creatable: false,
+      severity: "error"
+    };
+
+    const issueKey = `${issue.type}|${issue.kind}|${issue.line}|${issue.column}|${issue.message}`;
     if (this.issueKeys.has(issueKey)) {
       return;
     }

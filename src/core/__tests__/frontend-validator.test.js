@@ -210,4 +210,60 @@ describe("FrontendValidator", () => {
       fs.existsSync(path.join(workspace, "pages", "generated", "app.js"))
     ).toBe(true);
   });
+
+  test("flags message listeners that trust event.data without validating the sender", () => {
+    const workspace = createWorkspace();
+    workspaces.push(workspace);
+
+    const jsPath = path.join(workspace, "src", "panel.js");
+    const code = [
+      "window.addEventListener(\"message\", function(event) {",
+      "  var msg = event.data;",
+      "  if (msg.type === \"ready\") {",
+      "    console.log(msg.type);",
+      "  }",
+      "});"
+    ].join("\n");
+
+    ensureFile(jsPath, code);
+
+    const result = new FrontendValidator(jsPath, code).validate();
+
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "security",
+          kind: "message-origin-validation",
+          severity: "error"
+        })
+      ])
+    );
+  });
+
+  test("does not flag message listeners that gate messages through a trusted helper", () => {
+    const workspace = createWorkspace();
+    workspaces.push(workspace);
+
+    const htmlPath = path.join(workspace, "pages", "index.html");
+    const html = [
+      "<script>",
+      "function getTrustedExtensionMessage(event) {",
+      "  return event && event.data && event.data.__codeJanitorToken ? event.data : null;",
+      "}",
+      "window.addEventListener(\"message\", function(event) {",
+      "  var msg = getTrustedExtensionMessage(event);",
+      "  if (!msg) return;",
+      "  console.log(msg.type);",
+      "});",
+      "</script>"
+    ].join("\n");
+
+    ensureFile(htmlPath, html);
+
+    const result = new FrontendValidator(htmlPath, html).validate();
+
+    expect(
+      result.issues.filter((issue) => issue.kind === "message-origin-validation")
+    ).toEqual([]);
+  });
 });

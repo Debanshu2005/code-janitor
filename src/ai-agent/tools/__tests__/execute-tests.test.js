@@ -11,7 +11,8 @@ const {
   findTestFiles,
   parseTestResults,
   generateTestReport,
-  buildTestCommand
+  buildTestCommand,
+  resolveFrameworkCommand
 } = require("../execute-tests");
 const fs = require("fs").promises;
 const { exec } = require("child_process");
@@ -158,6 +159,36 @@ describe("execute-tests", () => {
       expect(results.passed).toBe(8);
       expect(results.failed).toBe(2);
     });
+
+    it("should parse Jest results when all tests pass and todos are present", () => {
+      const stdout = `
+        Test Suites: 1 passed, 1 total
+        Tests:       2 todo, 3 passed, 5 total
+        Snapshots:   0 total
+        Time:        1.234 s
+      `;
+
+      const results = parseTestResults(stdout, "", "jest");
+
+      expect(results.total).toBe(5);
+      expect(results.passed).toBe(3);
+      expect(results.failed).toBe(0);
+      expect(results.skipped).toBe(2);
+    });
+
+    it("should parse Jest summary when it is emitted to stderr", () => {
+      const stderr = `
+        PASS src/example.test.js
+        Tests:       1 todo, 3 passed, 4 total
+      `;
+
+      const results = parseTestResults("", stderr, "jest");
+
+      expect(results.total).toBe(4);
+      expect(results.passed).toBe(3);
+      expect(results.failed).toBe(0);
+      expect(results.skipped).toBe(1);
+    });
     
     it("should parse pytest test results", () => {
       const stdout = `
@@ -270,6 +301,33 @@ describe("execute-tests", () => {
       expect(command).toBe('npx jest --runTestsByPath "src/__tests__/cli.test.js"');
     });
   });
+
+  describe("resolveFrameworkCommand", () => {
+    it("should prefer the local Jest entrypoint when available", async () => {
+      fs.access.mockResolvedValue(undefined);
+
+      const command = await resolveFrameworkCommand(
+        { name: "jest", command: "npx jest" },
+        mockWorkspaceRoot
+      );
+
+      expect(command).toBe(`node "${path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")}"`);
+      expect(fs.access).toHaveBeenCalledWith(
+        path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")
+      );
+    });
+
+    it("should fall back to the configured command when no local binary is found", async () => {
+      fs.access.mockRejectedValue(new Error("missing"));
+
+      const command = await resolveFrameworkCommand(
+        { name: "jest", command: "npx jest" },
+        mockWorkspaceRoot
+      );
+
+      expect(command).toBe("npx jest");
+    });
+  });
   
   describe("executeTests", () => {
     it("should execute tests and return results", async () => {
@@ -278,6 +336,7 @@ describe("execute-tests", () => {
       };
       
       fs.readFile.mockResolvedValue(JSON.stringify(mockPackageJson));
+      fs.access.mockResolvedValue(undefined);
       fs.readdir.mockResolvedValue([
         { name: "app.test.js", isFile: () => true, isDirectory: () => false }
       ]);
@@ -297,6 +356,11 @@ describe("execute-tests", () => {
       expect(result.success).toBe(true);
       expect(result.framework).toBe("jest");
       expect(result.results).toBeDefined();
+      expect(exec).toHaveBeenCalledWith(
+        `node "${path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")}" --runTestsByPath "app.test.js"`,
+        expect.objectContaining({ cwd: mockWorkspaceRoot }),
+        expect.any(Function)
+      );
       expect(fs.unlink).toHaveBeenCalledWith(path.join(mockWorkspaceRoot, "app.test.js"));
     });
     
@@ -306,6 +370,7 @@ describe("execute-tests", () => {
       };
       
       fs.readFile.mockResolvedValue(JSON.stringify(mockPackageJson));
+      fs.access.mockResolvedValue(undefined);
       fs.readdir.mockResolvedValue([
         { name: "app.test.js", isFile: () => true, isDirectory: () => false }
       ]);

@@ -23,7 +23,7 @@ function validateAttemptCompletion(params) {
     };
   }
 
-  if (!params.result || typeof params.result !== "string") {
+  if (typeof params.result !== "string") {
     return {
       isValid: false,
       error: "Result parameter is required and must be a string"

@@ -47,29 +47,11 @@
 !formatters/python-formatters/venv/Lib/site-packages/pytokens/**
 !formatters/python-formatters/venv/Lib/site-packages/pytokens-*.dist-info/**
 
-# Include only the runtime node modules the extension loads.
-node_modules/**
-!node_modules/@babel/**
-!node_modules/eslint/**
-!node_modules/@eslint/**
-!node_modules/fs-extra/**
-!node_modules/parse5/**
-!node_modules/prettier/**
-!node_modules/universalify/**
-!node_modules/graceful-fs/**
-!node_modules/jsonfile/**
-!node_modules/entities/**
-!node_modules/espree/**
-!node_modules/esquery/**
-!node_modules/estraverse/**
-!node_modules/esutils/**
-!node_modules/acorn/**
-!node_modules/acorn-jsx/**
-!node_modules/parent-module/**
-!node_modules/import-fresh/**
-!node_modules/callsites/**
-!node_modules/globals/**
-!node_modules/glob-parent/**
+# Include runtime node modules.
+# A hand-maintained allowlist caused published builds to miss new runtime deps
+# such as @modelcontextprotocol/sdk, so we include the installed dependency tree
+# and prune obvious non-runtime content below.
+!node_modules/**
 
 # Exclude tests and docs from included modules.
 node_modules/**/test/**

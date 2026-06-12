@@ -9,6 +9,7 @@ const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const {
   DEFAULT_OUTPUT_RELATIVE_PATH,
   SHARED_WORKSPACE_MEMORY_FILENAME,
+  SHARED_WORKSPACE_JSON_FILENAME,
   sanitizeOutputRelativePath,
   resolveWorkspaceMemoryPaths
 } = require("./workspace-memory-config");
@@ -27,6 +28,12 @@ const MAX_RENDERED_TOP_LEVEL = 8;
 const MAX_RENDERED_FILE_TYPES = 8;
 const MAX_RENDERED_KEY_FILES = 8;
 const MAX_RENDERED_GIT_STATUS = 12;
+const MAX_RENDERED_DEPENDENCIES = 12;
+const MAX_RENDERED_SCRIPTS = 10;
+const MAX_RENDERED_TRACKED_SNAPSHOTS = 8;
+const MAX_STANDBY_TARGET_FILES = 8;
+const MAX_STANDBY_SUMMARY_CHAR_LIMIT = 280;
+const MAX_STANDBY_PATCH_CHAR_LIMIT = 8000;
 const GRAPH_SECTION_CHAR_LIMIT = 1200;
 const GITHUB_SUMMARY_CHAR_LIMIT = 1400;
 const CHANGE_FRAGMENT_CHAR_LIMIT = 180;
@@ -34,6 +41,7 @@ const SNAPSHOT_PREVIEW_CHAR_LIMIT = 220;
 const MAX_CHANGE_SUMMARY_CHAR_LIMIT = 220;
 const MAX_TRACKED_FILE_SNAPSHOTS = 200;
 const MAX_TEXT_SNAPSHOT_BYTES = 256 * 1024;
+const WORKSPACE_MANIFEST_SCHEMA_VERSION = 1;
 const IGNORED_DIRS = new Set([
   ".git",
   ".vscode",
@@ -91,12 +99,14 @@ function createDefaultProjectPlannerState() {
     todoList: [],
     summary: "",
     rescueSummary: "",
+    standbyProposal: null,
     progressPercent: 0,
     lastActivityAt: 0,
     lastProgressAt: 0,
     lastPlanGeneratedAt: 0,
     lastEvaluationAt: 0,
-    lastRescueAt: 0
+    lastRescueAt: 0,
+    lastStandbyAt: 0
   };
 }
 
@@ -196,6 +206,50 @@ function extractJsonPayload(text) {
   } catch {
     return null;
   }
+}
+
+function sanitizeStandbyProposal(proposal = null) {
+  if (!proposal || typeof proposal !== "object") {
+    return null;
+  }
+
+  const rawFiles = Array.isArray(proposal.targetFiles)
+    ? proposal.targetFiles
+    : Array.isArray(proposal.files)
+      ? proposal.files
+      : [];
+  const targetFiles = [...new Set(
+    rawFiles
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+  )].slice(0, MAX_STANDBY_TARGET_FILES);
+  const summary = truncateText(
+    String(proposal.summary || proposal.title || proposal.rationale || "").trim(),
+    MAX_STANDBY_SUMMARY_CHAR_LIMIT
+  );
+  const patch = truncateText(
+    String(
+      proposal.patch ||
+        proposal.diff ||
+        proposal.proposedDiff ||
+        proposal.code ||
+        proposal.draft ||
+        ""
+    ).trim(),
+    MAX_STANDBY_PATCH_CHAR_LIMIT
+  );
+  const generatedAt = Math.max(0, Number(proposal.generatedAt || 0));
+
+  if (!summary && !patch && targetFiles.length === 0) {
+    return null;
+  }
+
+  return {
+    summary,
+    targetFiles,
+    patch,
+    generatedAt
+  };
 }
 
 function truncateText(value, maxLength) {
@@ -652,9 +706,11 @@ class WorkspaceMemoryService {
           : computePlannerProgressPercent(todoList),
       summary: planner.summary || "",
       rescueSummary: planner.rescueSummary || "",
+      standbyProposal: sanitizeStandbyProposal(planner.standbyProposal),
       lastActivityAt: planner.lastActivityAt || 0,
       lastProgressAt: planner.lastProgressAt || 0,
       lastPlanGeneratedAt: planner.lastPlanGeneratedAt || 0,
+      lastStandbyAt: planner.lastStandbyAt || 0,
       isStale: this._isPlannerStale(planner)
     };
   }
@@ -721,10 +777,15 @@ class WorkspaceMemoryService {
 
       if (!enabled) {
         planner.rescueSummary = "";
+        planner.standbyProposal = null;
+        planner.lastStandbyAt = 0;
       } else if (shouldRegenerate) {
         planner.todoList = [];
         planner.summary = "";
         planner.progressPercent = 0;
+        planner.rescueSummary = "";
+        planner.standbyProposal = null;
+        planner.lastStandbyAt = 0;
         await this._refreshProjectPlanner(targetWorkspace, null, "settings-save");
       }
     }
@@ -778,10 +839,15 @@ class WorkspaceMemoryService {
       workspaceRoot,
       this.getOutputRelativePath()
     );
+    const workspaceManifest = this._buildWorkspaceManifest(snapshot);
 
     await fs.mkdir(path.dirname(resolvedPaths.outputAbsolutePath), { recursive: true });
     await fs.writeFile(resolvedPaths.outputAbsolutePath, markdown, "utf8");
     await this._writeWorkspaceMemoryMirror(workspaceRoot, markdown);
+    await this._writeWorkspaceManifest(
+      resolvedPaths.structuredManifestAbsolutePath,
+      workspaceManifest
+    );
 
     workspaceState.lastGeneratedAt = Date.now();
     workspaceState.lastGenerationReason = reason;
@@ -793,8 +859,60 @@ class WorkspaceMemoryService {
       workspaceRoot,
       outputPath: resolvedPaths.outputAbsolutePath,
       relativePath: resolvedPaths.outputRelativePath,
-      sharedMirrorPath: resolvedPaths.sharedMirrorAbsolutePath
+      sharedMirrorPath: resolvedPaths.sharedMirrorAbsolutePath,
+      structuredManifestPath: resolvedPaths.structuredManifestAbsolutePath
     };
+  }
+
+  async generateProjectPlannerStandbyDraft(workspaceRoot = null) {
+    const targetWorkspace = workspaceRoot || this._getPreferredWorkspaceRoot();
+    if (!targetWorkspace) {
+      return null;
+    }
+
+    const workspaceState = this._getWorkspaceState(targetWorkspace);
+    const planner = this._ensureProjectPlannerState(workspaceState);
+    if (!this.isProjectPlannerEnabled() || !planner.outcome) {
+      return this.getProjectPlannerState(targetWorkspace);
+    }
+
+    const snapshot = await this._buildWorkspaceSnapshot(
+      targetWorkspace,
+      workspaceState,
+      "manual-standby"
+    );
+    await this._refreshProjectPlanner(targetWorkspace, snapshot, "manual-standby");
+    await this._runPlannerStandbyProposal(
+      targetWorkspace,
+      snapshot,
+      planner,
+      { force: true }
+    );
+    snapshot.projectPlanner = await this.getProjectPlannerState(targetWorkspace);
+
+    const defaultMarkdown = this._renderWorkspaceMemory(snapshot);
+    const markdown = await this._renderWorkspaceMemoryWithPreferredMode(
+      targetWorkspace,
+      snapshot,
+      defaultMarkdown
+    );
+    const resolvedPaths = resolveWorkspaceMemoryPaths(
+      targetWorkspace,
+      this.getOutputRelativePath()
+    );
+    const workspaceManifest = this._buildWorkspaceManifest(snapshot);
+
+    await fs.mkdir(path.dirname(resolvedPaths.outputAbsolutePath), { recursive: true });
+    await fs.writeFile(resolvedPaths.outputAbsolutePath, markdown, "utf8");
+    await this._writeWorkspaceMemoryMirror(targetWorkspace, markdown);
+    await this._writeWorkspaceManifest(
+      resolvedPaths.structuredManifestAbsolutePath,
+      workspaceManifest
+    );
+
+    this._persistState();
+    await this._emitProjectPlannerState(targetWorkspace);
+    return this.getProjectPlannerState(targetWorkspace);
   }
 
   async openWorkspaceMemory(workspaceRoot = null) {
@@ -1024,6 +1142,15 @@ class WorkspaceMemoryService {
         topLevelAreas: snapshot.workspaceStats?.topLevel || [],
         primaryFileTypes: snapshot.workspaceStats?.fileTypes || []
       },
+      package: {
+        available: !!snapshot.packageSnapshot?.available,
+        name: snapshot.packageSnapshot?.name || "",
+        version: snapshot.packageSnapshot?.version || "",
+        packageManager: snapshot.packageSnapshot?.packageManager || "",
+        scripts: snapshot.packageSnapshot?.scripts || [],
+        dependencies: snapshot.packageSnapshot?.dependencies || [],
+        devDependencies: snapshot.packageSnapshot?.devDependencies || []
+      },
       git: {
         branch: snapshot.gitSnapshot?.branch || "",
         summary: snapshot.gitSnapshot?.statusSummary || "",
@@ -1045,6 +1172,7 @@ class WorkspaceMemoryService {
         summary: change.summary || "",
         recordedAt: change.recordedAt
       })),
+      trackedSnapshots: snapshot.trackedSnapshots || [],
       hotFiles: snapshot.hotFiles || [],
       projectPlanner: plannerState
         ? {
@@ -1104,6 +1232,58 @@ class WorkspaceMemoryService {
     };
   }
 
+  async _generatePlannerStandbyProposalWithAi(workspaceRoot, snapshot, planner) {
+    const agent = await this._resolveAiAgent();
+    if (!agent) {
+      return null;
+    }
+
+    const aiResult = await runProviderPrompt({
+      context: this.context,
+      agent,
+      workspaceRoot,
+      preferredProvider:
+        planner.preferredProvider ||
+        this.getProjectPlannerPreferredProvider() ||
+        this.getPreferredAiProvider(),
+      mode: "fast",
+      intent: "code",
+      systemOverlay:
+        "Return only compact JSON. Do not include prose outside the JSON payload.",
+      prompt:
+        "Project progress is stale and delivery may be at risk. Create a review-only standby implementation draft for the current repository.\n" +
+        "Return JSON with this shape only:\n" +
+        "{\n" +
+        '  "summary": "short summary of what the standby draft tries to finish",\n' +
+        '  "targetFiles": ["relative/path.js"],\n' +
+        '  "proposedDiff": "reviewable diff or concrete code draft"\n' +
+        "}\n\n" +
+        "Rules:\n" +
+        "- Keep scope minimal and realistic.\n" +
+        "- Prefer a patch or concrete code draft over abstract advice.\n" +
+        "- Do not claim the patch has been applied.\n" +
+        "- If exact file names are uncertain, use the most likely targets from the snapshot.\n\n" +
+        `Project outcome: ${planner.outcome}\n` +
+        `Deadline: ${planner.deadlineText || "Not provided"}\n` +
+        `Current todo list: ${JSON.stringify(planner.todoList || [], null, 2)}\n` +
+        `Workspace snapshot:\n${JSON.stringify(this._buildWorkspaceSummaryForAi(snapshot, planner), null, 2)}`
+    });
+
+    const payload = extractJsonPayload(aiResult.text);
+    if (payload) {
+      return sanitizeStandbyProposal({
+        ...payload,
+        generatedAt: Date.now()
+      });
+    }
+
+    return sanitizeStandbyProposal({
+      summary: "AI-generated standby draft",
+      patch: aiResult.text,
+      generatedAt: Date.now()
+    });
+  }
+
   async _runPlannerRescue(workspaceRoot, snapshot, planner) {
     const fallbackSummary =
       "Progress appears stalled. Re-focus on the current in-progress task, refresh the shared workspace memory, and validate the highest-risk path next.";
@@ -1149,6 +1329,46 @@ class WorkspaceMemoryService {
     }
   }
 
+  async _runPlannerStandbyProposal(
+    workspaceRoot,
+    snapshot,
+    planner
+  ) {
+    const fallbackProposal = sanitizeStandbyProposal({
+      summary:
+        "Standby draft is unavailable right now. Open chat with the current planner context to request a manual patch proposal.",
+      targetFiles: (
+        snapshot?.workspaceStats?.keyFiles?.slice(0, 3) ||
+        snapshot?.hotFiles?.slice(0, 3)?.map((entry) => entry.path) ||
+        []
+      ).filter(Boolean),
+      patch: "",
+      generatedAt: Date.now()
+    });
+
+    try {
+      const proposal = await this._generatePlannerStandbyProposalWithAi(
+        workspaceRoot,
+        snapshot,
+        planner
+      );
+      planner.standbyProposal = proposal || fallbackProposal;
+      planner.lastStandbyAt = Date.now();
+      return planner;
+    } catch (error) {
+      planner.standbyProposal = sanitizeStandbyProposal({
+        ...fallbackProposal,
+        summary: truncateText(
+          `${fallbackProposal?.summary || "Standby draft unavailable."} (${error.message})`,
+          MAX_STANDBY_SUMMARY_CHAR_LIMIT
+        ),
+        generatedAt: Date.now()
+      });
+      planner.lastStandbyAt = Date.now();
+      return planner;
+    }
+  }
+
   async _refreshProjectPlanner(workspaceRoot, snapshot = null, reason = "manual") {
     const workspaceState = this._getWorkspaceState(workspaceRoot);
     const planner = this._ensureProjectPlannerState(workspaceState);
@@ -1184,12 +1404,19 @@ class WorkspaceMemoryService {
     this._applyActivityProgressToPlanner(planner, resolvedSnapshot);
     planner.lastEvaluationAt = Date.now();
 
-    if (
-      this._isPlannerStale(planner) &&
-      Date.now() - Number(planner.lastRescueAt || 0) >=
-        this.getProjectPlannerStagnationMinutes() * 60 * 1000
-    ) {
-      await this._runPlannerRescue(workspaceRoot, resolvedSnapshot, planner);
+    if (this._isPlannerStale(planner)) {
+      const staleWindowMs =
+        this.getProjectPlannerStagnationMinutes() * 60 * 1000;
+      if (Date.now() - Number(planner.lastRescueAt || 0) >= staleWindowMs) {
+        await this._runPlannerRescue(workspaceRoot, resolvedSnapshot, planner);
+      }
+      if (Date.now() - Number(planner.lastStandbyAt || 0) >= staleWindowMs) {
+        await this._runPlannerStandbyProposal(
+          workspaceRoot,
+          resolvedSnapshot,
+          planner
+        );
+      }
     }
 
     planner.summary = planner.summary || this._summarizeProjectPlan(planner.todoList);
@@ -1718,6 +1945,7 @@ class WorkspaceMemoryService {
       workspaceName: path.basename(workspaceRoot),
       outputRelativePath: resolvedPaths.outputRelativePath,
       sharedMirrorRelativePath: resolvedPaths.sharedMirrorRelativePath,
+      structuredManifestRelativePath: resolvedPaths.structuredManifestRelativePath,
       activeFile,
       recentChanges,
       hotFiles,
@@ -1728,11 +1956,109 @@ class WorkspaceMemoryService {
           .length,
         changeTypeCounts
       },
+      packageSnapshot: await this._getPackageSnapshot(workspaceRoot),
+      trackedSnapshots: this._getTrackedSnapshots(workspaceState),
       workspaceStats,
       graphifySnapshot,
       gitSnapshot,
       githubSnapshot
     };
+  }
+
+  async _getPackageSnapshot(workspaceRoot) {
+    const packageJsonPath = path.join(workspaceRoot, "package.json");
+    if (!fsSync.existsSync(packageJsonPath)) {
+      return {
+        available: false,
+        error: "package.json was not found."
+      };
+    }
+
+    try {
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+      return {
+        available: true,
+        name: String(packageJson.name || "").trim(),
+        version: String(packageJson.version || "").trim(),
+        description: String(packageJson.description || "").trim(),
+        displayName: String(packageJson.displayName || "").trim(),
+        license: String(packageJson.license || "").trim(),
+        homepage: String(packageJson.homepage || "").trim(),
+        main: String(packageJson.main || "").trim(),
+        repository:
+          packageJson.repository && typeof packageJson.repository === "object"
+            ? {
+                type: String(packageJson.repository.type || "").trim(),
+                url: String(packageJson.repository.url || "").trim()
+              }
+            : {
+                type: "",
+                url: String(packageJson.repository || "").trim()
+              },
+        bugsUrl:
+          packageJson.bugs && typeof packageJson.bugs === "object"
+            ? String(packageJson.bugs.url || "").trim()
+            : String(packageJson.bugs || "").trim(),
+        engines:
+          packageJson.engines && typeof packageJson.engines === "object"
+            ? { ...packageJson.engines }
+            : {},
+        keywords: Array.isArray(packageJson.keywords)
+          ? packageJson.keywords
+              .map((entry) => String(entry || "").trim())
+              .filter(Boolean)
+          : [],
+        packageManager: String(packageJson.packageManager || "").trim(),
+        scripts: Object.keys(packageJson.scripts || {}).slice(
+          0,
+          MAX_RENDERED_SCRIPTS
+        ),
+        scriptMap:
+          packageJson.scripts && typeof packageJson.scripts === "object"
+            ? { ...packageJson.scripts }
+            : {},
+        dependencies: Object.keys(packageJson.dependencies || {}).slice(
+          0,
+          MAX_RENDERED_DEPENDENCIES
+        ),
+        dependencyMap:
+          packageJson.dependencies && typeof packageJson.dependencies === "object"
+            ? { ...packageJson.dependencies }
+            : {},
+        devDependencies: Object.keys(packageJson.devDependencies || {}).slice(
+          0,
+          MAX_RENDERED_DEPENDENCIES
+        ),
+        devDependencyMap:
+          packageJson.devDependencies &&
+          typeof packageJson.devDependencies === "object"
+            ? { ...packageJson.devDependencies }
+            : {}
+      };
+    } catch (error) {
+      return {
+        available: false,
+        error: error.message
+      };
+    }
+  }
+
+  _getTrackedSnapshots(workspaceState) {
+    return Object.entries(workspaceState?.trackedFiles || {})
+      .sort(
+        (left, right) =>
+          Number(right[1]?.updatedAt || 0) - Number(left[1]?.updatedAt || 0) ||
+          left[0].localeCompare(right[0])
+      )
+      .slice(0, MAX_RENDERED_TRACKED_SNAPSHOTS)
+      .map(([filePath, snapshot]) => ({
+        filePath,
+        updatedAt: snapshot?.updatedAt || null,
+        lineCount: snapshot?.lineCount || 0,
+        charCount: snapshot?.charCount || 0,
+        hash: snapshot?.hash || "",
+        preview: snapshot?.preview || ""
+      }));
   }
 
   _getActiveWorkspaceFile(workspaceRoot) {
@@ -1748,6 +2074,7 @@ class WorkspaceMemoryService {
     const topLevelCounts = new Map();
     const fileTypeCounts = new Map();
     const keyFiles = [];
+    const files = [];
     let totalFiles = 0;
 
     const visitDirectory = async (directoryPath) => {
@@ -1776,18 +2103,25 @@ class WorkspaceMemoryService {
           ? normalizedRelativePath.split("/")[0]
           : "[root]";
         const extension = path.extname(entry.name).toLowerCase() || "[no extension]";
+        const loweredRelativePath = normalizedRelativePath.toLowerCase();
+        const loweredName = entry.name.toLowerCase();
+        const isKeyFile =
+          KEY_FILE_NAMES.has(loweredRelativePath) ||
+          KEY_FILE_NAMES.has(loweredName);
 
         topLevelCounts.set(topLevel, (topLevelCounts.get(topLevel) || 0) + 1);
         fileTypeCounts.set(extension, (fileTypeCounts.get(extension) || 0) + 1);
 
-        const loweredRelativePath = normalizedRelativePath.toLowerCase();
-        const loweredName = entry.name.toLowerCase();
-        if (
-          KEY_FILE_NAMES.has(loweredRelativePath) ||
-          KEY_FILE_NAMES.has(loweredName)
-        ) {
+        if (isKeyFile) {
           keyFiles.push(normalizedRelativePath);
         }
+
+        files.push({
+          path: normalizedRelativePath,
+          topLevelArea: topLevel,
+          extension,
+          isKeyFile
+        });
       }
     };
 
@@ -1801,7 +2135,8 @@ class WorkspaceMemoryService {
       fileTypes: Array.from(fileTypeCounts.entries())
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .slice(0, MAX_RENDERED_FILE_TYPES),
-      keyFiles: keyFiles.sort().slice(0, MAX_RENDERED_KEY_FILES)
+      keyFiles: keyFiles.sort().slice(0, MAX_RENDERED_KEY_FILES),
+      files: files.sort((left, right) => left.path.localeCompare(right.path))
     };
   }
 
@@ -1894,6 +2229,7 @@ class WorkspaceMemoryService {
       branch: branchResult.success ? branchResult.output : "unknown",
       headSummary: headResult.success ? headResult.output : "",
       statusLines: allStatusLines.slice(0, MAX_RENDERED_GIT_STATUS),
+      allStatusLines,
       statusSummary: summarizeGitStatusLines(allStatusLines),
       changedFileCount: allStatusLines.length,
       statusTruncated:
@@ -1958,7 +2294,7 @@ class WorkspaceMemoryService {
         prompt:
           "Rewrite the following workspace memory draft into a compact, high-signal markdown handoff file for any AI agent. " +
           "Keep the same core facts, avoid inventing new repo details, and preserve these sections when data exists: " +
-          "Handoff Guidance, Repository Blueprint, Current Workspace, Current Stack, Recent Changes, Hot Files, Git Snapshot, GitHub Snapshot, Graphify Snapshot, Project Planner.\n\n" +
+          "Handoff Guidance, Repository Blueprint, Workspace Focus, Current Workspace, Package Snapshot, Current Stack, Tracked Snapshots, Recent Changes, Hot Files, Git Snapshot, GitHub Snapshot, Graphify Snapshot, Project Planner.\n\n" +
           `Structured snapshot:\n${JSON.stringify(this._buildWorkspaceSummaryForAi(snapshot, snapshot.projectPlanner), null, 2)}\n\n` +
           `Draft markdown:\n${fallbackMarkdown}`
       });
@@ -1983,6 +2319,172 @@ class WorkspaceMemoryService {
     await fs.writeFile(mirrorPath, markdown, "utf8");
   }
 
+  async _writeWorkspaceManifest(manifestPath, manifest) {
+    if (!manifestPath) {
+      return;
+    }
+
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8"
+    );
+  }
+
+  _buildWorkspaceManifest(snapshot) {
+    const suggestedStartingPoints = [
+      snapshot.activeFile,
+      ...(snapshot.hotFiles || []).map((item) => item.filePath),
+      ...(snapshot.workspaceStats?.keyFiles || [])
+    ]
+      .filter(Boolean)
+      .filter((value, index, all) => all.indexOf(value) === index)
+      .slice(0, 12);
+    const standbyProposal = sanitizeStandbyProposal(
+      snapshot.projectPlanner?.standbyProposal
+    );
+
+    return {
+      schemaVersion: WORKSPACE_MANIFEST_SCHEMA_VERSION,
+      generatedAt: formatIsoTimestamp(snapshot.generatedAt),
+      generatedAtEpochMs: Number(snapshot.generatedAt || 0),
+      generator: {
+        name: "Code Janitor",
+        feature: "workspace-memory"
+      },
+      handoffGuidance: [
+        "Read graphify-out/GRAPH_REPORT.md first for architecture and dependency questions.",
+        `Use ${snapshot.structuredManifestRelativePath || SHARED_WORKSPACE_JSON_FILENAME} for machine-readable repo context before scanning broad parts of the repository.`,
+        `Use ${snapshot.outputRelativePath} and ${snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME} for human-readable handoff notes, recent changes, and Git-aware status.`
+      ],
+      workspace: {
+        name: snapshot.workspaceName,
+        root: snapshot.workspaceRoot,
+        activeFile: snapshot.activeFile,
+        refreshReason: snapshot.reason,
+        outputFiles: {
+          markdown: snapshot.outputRelativePath,
+          markdownMirror:
+            snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME,
+          structuredManifest:
+            snapshot.structuredManifestRelativePath || SHARED_WORKSPACE_JSON_FILENAME
+        },
+        suggestedStartingPoints,
+        stats: {
+          totalFiles: snapshot.workspaceStats?.totalFiles || 0,
+          topLevelAreas: (snapshot.workspaceStats?.topLevel || []).map(
+            ([name, count]) => ({ name, count })
+          ),
+          primaryFileTypes: (snapshot.workspaceStats?.fileTypes || []).map(
+            ([name, count]) => ({ name, count })
+          ),
+          keyFiles: snapshot.workspaceStats?.keyFiles || [],
+          fileInventory: snapshot.workspaceStats?.files || []
+        }
+      },
+      package: snapshot.packageSnapshot?.available
+        ? {
+            available: true,
+            name: snapshot.packageSnapshot.name || "",
+            displayName: snapshot.packageSnapshot.displayName || "",
+            version: snapshot.packageSnapshot.version || "",
+            description: snapshot.packageSnapshot.description || "",
+            license: snapshot.packageSnapshot.license || "",
+            homepage: snapshot.packageSnapshot.homepage || "",
+            packageManager: snapshot.packageSnapshot.packageManager || "",
+            main: snapshot.packageSnapshot.main || "",
+            repository: snapshot.packageSnapshot.repository || {
+              type: "",
+              url: ""
+            },
+            bugsUrl: snapshot.packageSnapshot.bugsUrl || "",
+            engines: snapshot.packageSnapshot.engines || {},
+            keywords: snapshot.packageSnapshot.keywords || [],
+            scripts: snapshot.packageSnapshot.scriptMap || {},
+            dependencies: snapshot.packageSnapshot.dependencyMap || {},
+            devDependencies: snapshot.packageSnapshot.devDependencyMap || {}
+          }
+        : {
+            available: false,
+            error: snapshot.packageSnapshot?.error || "package.json could not be read."
+          },
+      currentStack: {
+        lastActivityAt: snapshot.currentStack?.lastActivityAt
+          ? formatIsoTimestamp(snapshot.currentStack.lastActivityAt)
+          : "",
+        trackedChangeCount: snapshot.currentStack?.trackedChangeCount || 0,
+        trackedFileSnapshotCount:
+          snapshot.currentStack?.trackedFileSnapshotCount || 0,
+        changeTypeCounts: snapshot.currentStack?.changeTypeCounts || {
+          save: 0,
+          create: 0,
+          delete: 0,
+          rename: 0
+        }
+      },
+      trackedSnapshots: snapshot.trackedSnapshots || [],
+      recentChanges: (snapshot.recentChanges || []).map((change) => ({
+        type: change.type,
+        path: change.path,
+        toPath: change.toPath || "",
+        summary: change.summary || "",
+        recordedAt: formatIsoTimestamp(change.recordedAt),
+        recordedAtEpochMs: Number(change.recordedAt || 0),
+        before: change.before || null,
+        after: change.after || null,
+        diff: change.diff || null
+      })),
+      hotFiles: snapshot.hotFiles || [],
+      git: {
+        available: !!snapshot.gitSnapshot?.available,
+        branch: snapshot.gitSnapshot?.branch || "",
+        headSummary: snapshot.gitSnapshot?.headSummary || "",
+        statusSummary: snapshot.gitSnapshot?.statusSummary || "",
+        changedFileCount: snapshot.gitSnapshot?.changedFileCount || 0,
+        statusLines:
+          snapshot.gitSnapshot?.allStatusLines ||
+          snapshot.gitSnapshot?.statusLines ||
+          [],
+        error: snapshot.gitSnapshot?.error || ""
+      },
+      github: {
+        available: !!snapshot.githubSnapshot?.available,
+        summary:
+          snapshot.githubSnapshot?.summary || snapshot.githubSnapshot?.error || ""
+      },
+      graphify: {
+        reportAvailable: !!snapshot.graphifySnapshot?.reportAvailable,
+        graphAvailable: !!snapshot.graphifySnapshot?.graphAvailable,
+        reportPath: snapshot.graphifySnapshot?.reportAvailable
+          ? "graphify-out/GRAPH_REPORT.md"
+          : "",
+        graphPath: snapshot.graphifySnapshot?.graphAvailable
+          ? "graphify-out/graph.json"
+          : "",
+        highlights: snapshot.graphifySnapshot?.highlights || ""
+      },
+      projectPlanner: snapshot.projectPlanner?.outcome
+        ? {
+            outcome: snapshot.projectPlanner.outcome,
+            deadlineText: snapshot.projectPlanner.deadlineText || "",
+            preferredProvider: snapshot.projectPlanner.preferredProvider || "",
+            summary: snapshot.projectPlanner.summary || "",
+            rescueSummary: snapshot.projectPlanner.rescueSummary || "",
+            progressPercent: snapshot.projectPlanner.progressPercent || 0,
+            todoList: sanitizePlannerTodoList(
+              snapshot.projectPlanner.todoList || []
+            ),
+            standbyProposal
+          }
+        : null,
+      agentNotes: [
+        "For recent repo changes, check recentChanges, trackedSnapshots, hotFiles, and git.",
+        "For architecture questions, combine graphify highlights with the Graphify report.",
+        "For machine-readable repo context, prefer this workspace.json manifest before broad repo scans."
+      ]
+    };
+  }
+
   _renderWorkspaceMemory(snapshot) {
     const lines = [
       "# Workspace Memory",
@@ -1995,10 +2497,12 @@ class WorkspaceMemoryService {
       `Refresh reason: ${snapshot.reason}`,
       `Output path: ${snapshot.outputRelativePath}`,
       `Shared mirror: ${snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME}`,
+      `Structured manifest: ${snapshot.structuredManifestRelativePath || SHARED_WORKSPACE_JSON_FILENAME}`,
       "",
       "## Handoff Guidance",
       "- Read `graphify-out/GRAPH_REPORT.md` first when the request is about architecture, dependencies, file ownership, or codebase navigation.",
       `- Use this memory file and the workspace-root \`${snapshot.sharedMirrorRelativePath || SHARED_WORKSPACE_MEMORY_FILENAME}\` mirror for recent activity, hot files, Git-aware status, and GitHub-enriched project context.`,
+      `- Use the workspace-root \`${snapshot.structuredManifestRelativePath || SHARED_WORKSPACE_JSON_FILENAME}\` file when an AI agent wants machine-readable repo metadata, file inventory, package details, and Git/Graphify summaries without rescanning the repository.`,
       "- Refresh this file with the `Code Janitor: Refresh Workspace Memory` command after significant edits or branch changes.",
       "",
       "## Repository Blueprint",
@@ -2017,6 +2521,28 @@ class WorkspaceMemoryService {
         snapshot.currentStack.lastActivityAt
           ? formatIsoTimestamp(snapshot.currentStack.lastActivityAt)
           : "no tracked activity yet"
+      }`,
+      "",
+      "## Workspace Focus",
+      `- Active file in focus: ${snapshot.activeFile || "No active file detected"}`,
+      `- Hottest files right now: ${
+        snapshot.hotFiles.length > 0
+          ? snapshot.hotFiles
+              .slice(0, 4)
+              .map((hotFile) => `${hotFile.filePath} (${hotFile.count})`)
+              .join(", ")
+          : "none yet"
+      }`,
+      `- Suggested starting points: ${
+        [
+          snapshot.activeFile,
+          ...(snapshot.hotFiles || []).map((item) => item.filePath),
+          ...(snapshot.workspaceStats?.keyFiles || [])
+        ]
+          .filter(Boolean)
+          .filter((value, index, all) => all.indexOf(value) === index)
+          .slice(0, 6)
+          .join(", ") || "none detected"
       }`,
       "",
       "## Current Workspace",
@@ -2042,6 +2568,46 @@ class WorkspaceMemoryService {
           : "none detected"
       }`,
       "",
+      "## Package Snapshot",
+      snapshot.packageSnapshot?.available
+        ? `- Package: ${
+            [
+              snapshot.packageSnapshot.name || "unnamed package",
+              snapshot.packageSnapshot.version
+                ? `v${snapshot.packageSnapshot.version}`
+                : ""
+            ]
+              .filter(Boolean)
+              .join(" ")
+          }`
+        : `- Package metadata unavailable: ${
+            snapshot.packageSnapshot?.error || "package.json could not be read."
+          }`,
+      snapshot.packageSnapshot?.available
+        ? `- Package manager: ${snapshot.packageSnapshot.packageManager || "not declared"}`
+        : null,
+      snapshot.packageSnapshot?.available
+        ? `- Scripts: ${
+            snapshot.packageSnapshot.scripts.length > 0
+              ? snapshot.packageSnapshot.scripts.join(", ")
+              : "none declared"
+          }`
+        : null,
+      snapshot.packageSnapshot?.available
+        ? `- Runtime dependencies: ${
+            snapshot.packageSnapshot.dependencies.length > 0
+              ? snapshot.packageSnapshot.dependencies.join(", ")
+              : "none declared"
+          }`
+        : null,
+      snapshot.packageSnapshot?.available
+        ? `- Dev dependencies: ${
+            snapshot.packageSnapshot.devDependencies.length > 0
+              ? snapshot.packageSnapshot.devDependencies.join(", ")
+              : "none declared"
+          }`
+        : null,
+      "",
       "## Current Stack",
       `- Logged change events: ${snapshot.currentStack.trackedChangeCount}`,
       `- Change mix: ${
@@ -2060,8 +2626,27 @@ class WorkspaceMemoryService {
           : snapshot.gitSnapshot.error || "git is unavailable"
       }`,
       "",
-      "## Recent Changes"
-    ];
+      "## Tracked Snapshots"
+    ].filter(Boolean);
+
+    if ((snapshot.trackedSnapshots || []).length === 0) {
+      lines.push("- No remembered file snapshots yet.");
+    } else {
+      for (const trackedSnapshot of snapshot.trackedSnapshots) {
+        lines.push(
+          `- ${trackedSnapshot.filePath} | ${trackedSnapshot.lineCount} lines | ${trackedSnapshot.charCount} chars | hash ${trackedSnapshot.hash || "unknown"}`
+        );
+        if (trackedSnapshot.updatedAt) {
+          lines.push(`  Last snapshot: ${formatIsoTimestamp(trackedSnapshot.updatedAt)}`);
+        }
+        if (trackedSnapshot.preview) {
+          lines.push(`  Preview: "${trackedSnapshot.preview}"`);
+        }
+      }
+    }
+
+    lines.push("");
+    lines.push("## Recent Changes");
 
     if (snapshot.recentChanges.length === 0) {
       lines.push("- No tracked changes recorded in this session yet.");
@@ -2172,6 +2757,15 @@ class WorkspaceMemoryService {
       if (snapshot.projectPlanner.rescueSummary) {
         lines.push(`- Rescue brief: ${snapshot.projectPlanner.rescueSummary}`);
       }
+      const standbyProposal = sanitizeStandbyProposal(
+        snapshot.projectPlanner.standbyProposal
+      );
+      if (standbyProposal?.summary) {
+        lines.push(`- Standby draft: ${standbyProposal.summary}`);
+      }
+      if (standbyProposal?.targetFiles?.length) {
+        lines.push(`- Standby files: ${standbyProposal.targetFiles.join(", ")}`);
+      }
       const plannerTodoList = sanitizePlannerTodoList(
         snapshot.projectPlanner.todoList || []
       );
@@ -2192,13 +2786,13 @@ class WorkspaceMemoryService {
     lines.push("");
     lines.push("## Agent Notes");
     lines.push(
-      "- If a future task asks what changed recently, start with `Recent Changes`, `Hot Files`, and `Git Snapshot`."
+      "- If a future task asks what changed recently, start with `Recent Changes`, `Tracked Snapshots`, `Hot Files`, and `Git Snapshot`."
     );
     lines.push(
       "- If a future task asks how the project is organized, combine this file with `graphify-out/GRAPH_REPORT.md`."
     );
     lines.push(
-      "- If a future task needs repository-level context, use the GitHub snapshot first, then fetch fresh GitHub data if the request is time-sensitive."
+      "- If a future task needs repository-level context, use `Package Snapshot`, the GitHub snapshot, and the Graphify snapshot before rescanning broad parts of the repo."
     );
 
     return `${lines.join("\n").trim()}\n`;

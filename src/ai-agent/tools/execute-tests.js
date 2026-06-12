@@ -10,6 +10,21 @@ const { exec } = require("child_process");
 const vscode = require("../../utils/vscode-shim");
 const { runProviderPrompt } = require("../provider-utils");
 
+const LOCAL_FRAMEWORK_BINARIES = {
+  jest: {
+    nodeEntrypoint: path.join("node_modules", "jest", "bin", "jest.js"),
+    binaryName: "jest"
+  },
+  mocha: {
+    nodeEntrypoint: path.join("node_modules", "mocha", "bin", "mocha.js"),
+    binaryName: "mocha"
+  },
+  vitest: {
+    nodeEntrypoint: path.join("node_modules", "vitest", "vitest.mjs"),
+    binaryName: "vitest"
+  }
+};
+
 function execAsync(command, options) {
   return new Promise((resolve, reject) => {
     exec(command, options, (error, stdout, stderr) => {
@@ -107,6 +122,39 @@ function getAiTestingProvider() {
 
 function quoteShellArg(value) {
   return `"${String(value || "").replace(/"/g, '\\"')}"`;
+}
+
+async function resolveFrameworkCommand(framework, workspaceRoot) {
+  if (!framework?.name || !workspaceRoot) {
+    return framework?.command || "";
+  }
+
+  const binaryConfig = LOCAL_FRAMEWORK_BINARIES[framework.name];
+  if (!binaryConfig) {
+    return framework.command;
+  }
+
+  const localEntrypoint = path.join(workspaceRoot, binaryConfig.nodeEntrypoint);
+  try {
+    await fs.access(localEntrypoint);
+    return `node ${quoteShellArg(localEntrypoint)}`;
+  } catch (error) {
+    const localBinary = path.join(
+      workspaceRoot,
+      "node_modules",
+      ".bin",
+      process.platform === "win32"
+        ? `${binaryConfig.binaryName}.cmd`
+        : binaryConfig.binaryName
+    );
+
+    try {
+      await fs.access(localBinary);
+      return quoteShellArg(localBinary);
+    } catch (binaryError) {
+      return framework.command;
+    }
+  }
 }
 
 function buildTestCommand(framework, testPath) {
@@ -309,8 +357,14 @@ async function executeTests(options, workspaceRoot, executionContext = {}) {
       };
     }
     
-    // Execute tests
-    const testCommand = buildTestCommand(detectedFramework, testPath);
+    // Resolve the most reliable local runner before executing tests.
+    const testCommand = buildTestCommand(
+      {
+        ...detectedFramework,
+        command: await resolveFrameworkCommand(detectedFramework, workspaceRoot)
+      },
+      testPath
+    );
     
     const startTime = Date.now();
     let testOutput;
@@ -447,11 +501,11 @@ function parseTestResults(stdout, stderr, framework) {
   
   // Parse based on framework
   if (framework === "jest") {
-    return parseJestResults(stdout, stderr);
+    return parseJestResultsPortable(stdout, stderr);
   } else if (framework === "pytest") {
-    return parsePytestResults(stdout, stderr);
+    return parsePytestResultsPortable(stdout, stderr);
   } else if (framework === "junit") {
-    return parseJUnitResults(stdout, stderr);
+    return parseJUnitResultsPortable(stdout, stderr);
   }
   
   // Generic parsing
@@ -487,12 +541,27 @@ function parseJestResults(stdout, stderr) {
     errors: []
   };
   
-  // Look for Jest summary
-  const summaryMatch = stdout.match(/Tests:\s+(\d+)\s+failed,\s+(\d+)\s+passed,\s+(\d+)\s+total/);
-  if (summaryMatch) {
-    results.failed = parseInt(summaryMatch[1]);
-    results.passed = parseInt(summaryMatch[2]);
-    results.total = parseInt(summaryMatch[3]);
+  // Look for the Jest "Tests:" summary line and parse counts regardless of order.
+  const summaryLine = String(stdout || "")
+    .split("\n")
+    .find((line) => /Tests:/i.test(line));
+
+  if (summaryLine) {
+    const counts = [...summaryLine.matchAll(/(\d+)\s+(failed|passed|skipped|todo|pending|total)/gi)];
+    counts.forEach((match) => {
+      const value = parseInt(match[1], 10) || 0;
+      const label = String(match[2] || "").toLowerCase();
+
+      if (label === "failed") {
+        results.failed = value;
+      } else if (label === "passed") {
+        results.passed = value;
+      } else if (label === "total") {
+        results.total = value;
+      } else if (label === "skipped" || label === "todo" || label === "pending") {
+        results.skipped += value;
+      }
+    });
   }
   
   // Extract failed test details
@@ -554,6 +623,54 @@ function parseJUnitResults(stdout, stderr) {
   }
   
   return results;
+}
+
+function parseJestResultsPortable(stdout, stderr) {
+  const results = {
+    total: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    tests: [],
+    errors: []
+  };
+  const combinedOutput = [stdout, stderr].filter(Boolean).join("\n");
+  const summaryLine = String(combinedOutput || "")
+    .split("\n")
+    .find((line) => /Tests:/i.test(line));
+
+  if (summaryLine) {
+    const counts = [...summaryLine.matchAll(/(\d+)\s+(failed|passed|skipped|todo|pending|total)/gi)];
+    counts.forEach((match) => {
+      const value = parseInt(match[1], 10) || 0;
+      const label = String(match[2] || "").toLowerCase();
+
+      if (label === "failed") {
+        results.failed = value;
+      } else if (label === "passed") {
+        results.passed = value;
+      } else if (label === "total") {
+        results.total = value;
+      } else if (label === "skipped" || label === "todo" || label === "pending") {
+        results.skipped += value;
+      }
+    });
+  }
+
+  const failedTests = combinedOutput.match(/(?:●|â—)\s+(.+?)(?=\n\n|\n(?:●|â—)|$)/gs);
+  if (failedTests) {
+    results.errors = failedTests.map((test) => test.trim());
+  }
+
+  return results;
+}
+
+function parsePytestResultsPortable(stdout, stderr) {
+  return parsePytestResults([stdout, stderr].filter(Boolean).join("\n"), "");
+}
+
+function parseJUnitResultsPortable(stdout, stderr) {
+  return parseJUnitResults([stdout, stderr].filter(Boolean).join("\n"), "");
 }
 
 /**
@@ -654,7 +771,8 @@ module.exports = {
   findTestFiles,
   parseTestResults,
   generateTestReport,
-  buildTestCommand
+  buildTestCommand,
+  resolveFrameworkCommand
 };
 
 // Made with Bob

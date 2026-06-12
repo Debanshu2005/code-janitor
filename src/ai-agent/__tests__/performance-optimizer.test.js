@@ -116,14 +116,18 @@ describe("ParallelActionExecutor", () => {
       { type: "patch", path: "file1.js" },
       { type: "patch", path: "file2.js" },
       { type: "file", path: "file1.js" },
+      { type: "apply_diff", path: "file2.js", diff: "<<<<<<< SEARCH\n:start_line: 1\n-------\na\n=======\nb\n>>>>>>> REPLACE" },
+      { type: "insert_content", path: "file3.js", line: 1, content: "const value = 1;" },
       { type: "mkdir", path: "newdir" },
       { type: "cmd", command: "npm test" }
     ];
 
     const graph = executor.buildDependencyGraph(actions);
 
-    expect(graph.fileWrites.size).toBe(2);
+    expect(graph.fileWrites.size).toBe(3);
     expect(graph.fileWrites.get("file1.js").length).toBe(2);
+    expect(graph.fileWrites.get("file2.js").length).toBe(2);
+    expect(graph.fileWrites.get("file3.js").length).toBe(1);
     expect(graph.mkdirs.length).toBe(1);
     expect(graph.commands.length).toBe(1);
   });
@@ -334,9 +338,17 @@ describe("SmartEditGate", () => {
   test("should assess risk correctly", () => {
     const lowRisk = [{ type: "patch", path: "utils.js", search: "x" }];
     const highRisk = [{ type: "patch", path: "package.json", search: "x" }];
+    const highRiskDiff = [
+      {
+        type: "apply_diff",
+        path: "src/app.js",
+        diff: Array(120).fill("line").join("\n")
+      }
+    ];
 
     expect(gate.assessRisk(lowRisk)).toBe("low");
     expect(gate.assessRisk(highRisk)).toBe("high");
+    expect(gate.assessRisk(highRiskDiff)).toBe("high");
   });
 
   test("should calculate confidence based on action complexity", () => {

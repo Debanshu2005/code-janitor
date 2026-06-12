@@ -70,6 +70,10 @@ const {
   generateApiDocs,
   generateContributingGuide
 } = require("./generate-documentation");
+const {
+  executeMcpTool,
+  validateMcpCall
+} = require("../../services/mcp/MCPToolExecutor");
 
 module.exports = {
   // Apply Diff
@@ -150,6 +154,10 @@ module.exports = {
   generateReadme,
   generateApiDocs,
   generateContributingGuide,
+
+  // MCP
+  executeMcpTool,
+  validateMcpCall,
   
   // Tool Registry
   registry,

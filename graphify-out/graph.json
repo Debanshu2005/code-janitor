@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-05-16T05:39:54.174Z",
-  "nodeCount": 136,
-  "edgeCount": 141,
+  "generatedAt": "2026-05-17T09:25:23.505Z",
+  "nodeCount": 152,
+  "edgeCount": 179,
   "communityCount": 2,
   "nodes": [
     {
@@ -100,6 +100,15 @@
       "name": "launch.json",
       "type": "json",
       "lines": 18,
+      "imports": [],
+      "exports": [],
+      "dependencies": []
+    },
+    {
+      "path": ".vscode/settings.json",
+      "name": "settings.json",
+      "type": "json",
+      "lines": 5,
       "imports": [],
       "exports": [],
       "dependencies": []
@@ -341,6 +350,15 @@
       "dependencies": []
     },
     {
+      "path": "jest.config.js",
+      "name": "jest.config.js",
+      "type": "javascript",
+      "lines": 29,
+      "imports": [],
+      "exports": [],
+      "dependencies": []
+    },
+    {
       "path": "js/app.js",
       "name": "app.js",
       "type": "javascript",
@@ -353,7 +371,7 @@
       "path": "package-lock.json",
       "name": "package-lock.json",
       "type": "json",
-      "lines": 7665,
+      "lines": 7672,
       "imports": [],
       "exports": [],
       "dependencies": []
@@ -362,7 +380,7 @@
       "path": "package.json",
       "name": "package.json",
       "type": "json",
-      "lines": 395,
+      "lines": 541,
       "imports": [],
       "exports": [],
       "dependencies": []
@@ -442,6 +460,19 @@
       "dependencies": []
     },
     {
+      "path": "setup-tests.js",
+      "name": "setup-tests.js",
+      "type": "javascript",
+      "lines": 95,
+      "imports": [
+        "child_process",
+        "fs",
+        "path"
+      ],
+      "exports": [],
+      "dependencies": []
+    },
+    {
       "path": "simple-test.html",
       "name": "simple-test.html",
       "type": "html",
@@ -478,7 +509,7 @@
       "path": "src/ai-agent/agent.js",
       "name": "agent.js",
       "type": "javascript",
-      "lines": 7592,
+      "lines": 7871,
       "imports": [
         "../utils/vscode-shim",
         "fs",
@@ -488,6 +519,7 @@
         "./web-content-utils",
         "./graph-context",
         "./optimizer-integration",
+        "./workspace-memory-config",
         "./tools/list-code-definition-names",
         "prettier",
         "parse5",
@@ -505,6 +537,7 @@
         "src/ai-agent/web-content-utils.js",
         "src/ai-agent/graph-context.js",
         "src/ai-agent/optimizer-integration.js",
+        "src/ai-agent/workspace-memory-config.js",
         "src/ai-agent/tools/list-code-definition-names.js"
       ]
     },
@@ -512,7 +545,7 @@
       "path": "src/ai-agent/chat-panel.html",
       "name": "chat-panel.html",
       "type": "html",
-      "lines": 5917,
+      "lines": 6857,
       "imports": [],
       "exports": [],
       "dependencies": []
@@ -521,7 +554,7 @@
       "path": "src/ai-agent/chat-panel.js",
       "name": "chat-panel.js",
       "type": "javascript",
-      "lines": 7281,
+      "lines": 8359,
       "imports": [
         "module",
         "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
@@ -541,7 +574,11 @@
         "../core/frontend-validator",
         "../utils/minimal-diff",
         "./optimizer-integration",
+        "./tools/apply-diff",
+        "./tools/insert-content",
+        "./workspace-memory-config",
         "module",
+        "./tools/tool-registry",
         "package1\" \"package2"
       ],
       "exports": [],
@@ -555,7 +592,11 @@
         "src/core/fix-insights.js",
         "src/core/frontend-validator.js",
         "src/utils/minimal-diff.js",
-        "src/ai-agent/optimizer-integration.js"
+        "src/ai-agent/optimizer-integration.js",
+        "src/ai-agent/tools/apply-diff.js",
+        "src/ai-agent/tools/insert-content.js",
+        "src/ai-agent/workspace-memory-config.js",
+        "src/ai-agent/tools/tool-registry.js"
       ]
     },
     {
@@ -600,7 +641,7 @@
       "path": "src/ai-agent/optimizer-integration.js",
       "name": "optimizer-integration.js",
       "type": "javascript",
-      "lines": 434,
+      "lines": 486,
       "imports": [
         "./performance-optimizer",
         "./feedback-loop-optimizer",
@@ -623,6 +664,19 @@
       "dependencies": []
     },
     {
+      "path": "src/ai-agent/provider-utils.js",
+      "name": "provider-utils.js",
+      "type": "javascript",
+      "lines": 249,
+      "imports": [
+        "../utils/vscode-shim"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/utils/vscode-shim.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/review-quality-analyzer.js",
       "name": "review-quality-analyzer.js",
       "type": "javascript",
@@ -638,10 +692,12 @@
       "path": "src/ai-agent/tools/apply-diff.js",
       "name": "apply-diff.js",
       "type": "javascript",
-      "lines": 223,
+      "lines": 418,
       "imports": [
         "fs",
-        "path"
+        "path",
+        "child_process",
+        "os"
       ],
       "exports": [],
       "dependencies": []
@@ -665,6 +721,24 @@
       "dependencies": []
     },
     {
+      "path": "src/ai-agent/tools/execute-tests.js",
+      "name": "execute-tests.js",
+      "type": "javascript",
+      "lines": 661,
+      "imports": [
+        "fs",
+        "path",
+        "child_process",
+        "../../utils/vscode-shim",
+        "../provider-utils"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/utils/vscode-shim.js",
+        "src/ai-agent/provider-utils.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/tools/fetch-github-context.js",
       "name": "fetch-github-context.js",
       "type": "javascript",
@@ -679,10 +753,48 @@
       ]
     },
     {
+      "path": "src/ai-agent/tools/generate-documentation.js",
+      "name": "generate-documentation.js",
+      "type": "javascript",
+      "lines": 511,
+      "imports": [
+        "fs",
+        "path",
+        "./list-code-definition-names",
+        "./${analysis.files[0] || \"index.js\"}"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/list-code-definition-names.js"
+      ]
+    },
+    {
+      "path": "src/ai-agent/tools/generate-edge-cases.js",
+      "name": "generate-edge-cases.js",
+      "type": "javascript",
+      "lines": 1002,
+      "imports": [
+        "fs",
+        "path",
+        "../../utils/vscode-shim",
+        "./list-code-definition-names",
+        "../provider-utils",
+        "fs",
+        "path",
+        "${requirePath}"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/utils/vscode-shim.js",
+        "src/ai-agent/tools/list-code-definition-names.js",
+        "src/ai-agent/provider-utils.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/tools/index.js",
       "name": "index.js",
       "type": "javascript",
-      "lines": 114,
+      "lines": 161,
       "imports": [
         "./apply-diff",
         "./insert-content",
@@ -693,7 +805,10 @@
         "./attempt-completion",
         "./tool-registry",
         "./submit-review-findings",
-        "./fetch-github-context"
+        "./fetch-github-context",
+        "./generate-edge-cases",
+        "./execute-tests",
+        "./generate-documentation"
       ],
       "exports": [],
       "dependencies": [
@@ -706,14 +821,17 @@
         "src/ai-agent/tools/attempt-completion.js",
         "src/ai-agent/tools/tool-registry.js",
         "src/ai-agent/tools/submit-review-findings.js",
-        "src/ai-agent/tools/fetch-github-context.js"
+        "src/ai-agent/tools/fetch-github-context.js",
+        "src/ai-agent/tools/generate-edge-cases.js",
+        "src/ai-agent/tools/execute-tests.js",
+        "src/ai-agent/tools/generate-documentation.js"
       ]
     },
     {
       "path": "src/ai-agent/tools/insert-content.js",
       "name": "insert-content.js",
       "type": "javascript",
-      "lines": 150,
+      "lines": 155,
       "imports": [
         "fs",
         "path"
@@ -725,7 +843,7 @@
       "path": "src/ai-agent/tools/list-code-definition-names.js",
       "name": "list-code-definition-names.js",
       "type": "javascript",
-      "lines": 602,
+      "lines": 778,
       "imports": [
         "fs",
         "path",
@@ -765,7 +883,7 @@
       "path": "src/ai-agent/tools/tool-registry.js",
       "name": "tool-registry.js",
       "type": "javascript",
-      "lines": 659,
+      "lines": 863,
       "imports": [
         "./apply-diff",
         "./insert-content",
@@ -775,7 +893,10 @@
         "./ask-followup-question",
         "./attempt-completion",
         "./submit-review-findings",
-        "./fetch-github-context"
+        "./fetch-github-context",
+        "./generate-edge-cases",
+        "./execute-tests",
+        "./generate-documentation"
       ],
       "exports": [],
       "dependencies": [
@@ -787,7 +908,10 @@
         "src/ai-agent/tools/ask-followup-question.js",
         "src/ai-agent/tools/attempt-completion.js",
         "src/ai-agent/tools/submit-review-findings.js",
-        "src/ai-agent/tools/fetch-github-context.js"
+        "src/ai-agent/tools/fetch-github-context.js",
+        "src/ai-agent/tools/generate-edge-cases.js",
+        "src/ai-agent/tools/execute-tests.js",
+        "src/ai-agent/tools/generate-documentation.js"
       ]
     },
     {
@@ -800,15 +924,32 @@
       "dependencies": []
     },
     {
-      "path": "src/ai-agent/tools/__tests__/apply-diff.test.js",
-      "name": "apply-diff.test.js",
+      "path": "src/ai-agent/tools/__tests__/apply-diff-recovery.test.js",
+      "name": "apply-diff-recovery.test.js",
       "type": "javascript",
-      "lines": 244,
+      "lines": 251,
       "imports": [
         "../apply-diff",
         "fs",
         "path",
         "os"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/apply-diff.js"
+      ]
+    },
+    {
+      "path": "src/ai-agent/tools/__tests__/apply-diff.test.js",
+      "name": "apply-diff.test.js",
+      "type": "javascript",
+      "lines": 452,
+      "imports": [
+        "../apply-diff",
+        "fs",
+        "path",
+        "os",
+        "child_process"
       ],
       "exports": [],
       "dependencies": [
@@ -842,6 +983,22 @@
       ]
     },
     {
+      "path": "src/ai-agent/tools/__tests__/execute-tests.test.js",
+      "name": "execute-tests.test.js",
+      "type": "javascript",
+      "lines": 332,
+      "imports": [
+        "../execute-tests",
+        "fs",
+        "child_process",
+        "path"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/execute-tests.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/tools/__tests__/fetch-github-context.test.js",
       "name": "fetch-github-context.test.js",
       "type": "javascript",
@@ -855,10 +1012,40 @@
       ]
     },
     {
+      "path": "src/ai-agent/tools/__tests__/generate-documentation.test.js",
+      "name": "generate-documentation.test.js",
+      "type": "javascript",
+      "lines": 373,
+      "imports": [
+        "../generate-documentation",
+        "fs"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/generate-documentation.js"
+      ]
+    },
+    {
+      "path": "src/ai-agent/tools/__tests__/generate-edge-cases.test.js",
+      "name": "generate-edge-cases.test.js",
+      "type": "javascript",
+      "lines": 248,
+      "imports": [
+        "../generate-edge-cases",
+        "fs",
+        "path",
+        "../calculator"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/generate-edge-cases.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/tools/__tests__/list-code-definition-names.test.js",
       "name": "list-code-definition-names.test.js",
       "type": "javascript",
-      "lines": 427,
+      "lines": 448,
       "imports": [
         "fs",
         "path",
@@ -873,13 +1060,29 @@
       "path": "src/ai-agent/tools/__tests__/submit-review-findings.test.js",
       "name": "submit-review-findings.test.js",
       "type": "javascript",
-      "lines": 401,
+      "lines": 403,
       "imports": [
         "../submit-review-findings"
       ],
       "exports": [],
       "dependencies": [
         "src/ai-agent/tools/submit-review-findings.js"
+      ]
+    },
+    {
+      "path": "src/ai-agent/tools/__tests__/tool-registry.test.js",
+      "name": "tool-registry.test.js",
+      "type": "javascript",
+      "lines": 82,
+      "imports": [
+        "fs",
+        "os",
+        "path",
+        "../tool-registry"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/tools/tool-registry.js"
       ]
     },
     {
@@ -892,11 +1095,50 @@
       "dependencies": []
     },
     {
+      "path": "src/ai-agent/workspace-memory-config.js",
+      "name": "workspace-memory-config.js",
+      "type": "javascript",
+      "lines": 44,
+      "imports": [
+        "path"
+      ],
+      "exports": [],
+      "dependencies": []
+    },
+    {
+      "path": "src/ai-agent/workspace-memory.js",
+      "name": "workspace-memory.js",
+      "type": "javascript",
+      "lines": 2215,
+      "imports": [
+        "fs",
+        "fs",
+        "path",
+        "crypto",
+        "child_process",
+        "../utils/vscode-shim",
+        "./tools/fetch-github-context",
+        "../utils/minimal-diff",
+        "./workspace-memory-config",
+        "./provider-utils"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/utils/vscode-shim.js",
+        "src/ai-agent/tools/fetch-github-context.js",
+        "src/utils/minimal-diff.js",
+        "src/ai-agent/workspace-memory-config.js",
+        "src/ai-agent/provider-utils.js"
+      ]
+    },
+    {
       "path": "src/ai-agent/__tests__/agent-structured-edits.test.js",
       "name": "agent-structured-edits.test.js",
       "type": "javascript",
-      "lines": 1626,
+      "lines": 1867,
       "imports": [
+        "path",
+        "path",
         "react",
         "./Button",
         "./Button",
@@ -915,7 +1157,7 @@
       "path": "src/ai-agent/__tests__/agent-syntax-check.test.js",
       "name": "agent-syntax-check.test.js",
       "type": "javascript",
-      "lines": 96,
+      "lines": 122,
       "imports": [
         "fs",
         "os",
@@ -931,8 +1173,11 @@
       "path": "src/ai-agent/__tests__/chat-panel-structured-edits.test.js",
       "name": "chat-panel-structured-edits.test.js",
       "type": "javascript",
-      "lines": 1454,
+      "lines": 1765,
       "imports": [
+        "x",
+        "path",
+        "path",
         "fs",
         "os",
         "path",
@@ -1007,6 +1252,25 @@
       "exports": [],
       "dependencies": [
         "src/ai-agent/web-content-utils.js"
+      ]
+    },
+    {
+      "path": "src/ai-agent/__tests__/workspace-memory.test.js",
+      "name": "workspace-memory.test.js",
+      "type": "javascript",
+      "lines": 184,
+      "imports": [
+        "fs",
+        "os",
+        "path",
+        "vscode",
+        "../workspace-memory",
+        "../tools/fetch-github-context"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/ai-agent/workspace-memory.js",
+        "src/ai-agent/tools/fetch-github-context.js"
       ]
     },
     {
@@ -1414,7 +1678,7 @@
       "path": "src/extension.js",
       "name": "extension.js",
       "type": "javascript",
-      "lines": 1356,
+      "lines": 1686,
       "imports": [
         "vscode",
         "./core/linter",
@@ -1423,6 +1687,8 @@
         "./live-preview",
         "./core/ai/ollama-client",
         "./ai-agent/chat-panel",
+        "./ai-agent/agent",
+        "./ai-agent/workspace-memory",
         "./graphify/graphify-panel",
         "./graphify/graph-loader",
         "./utils/minimal-diff",
@@ -1433,7 +1699,18 @@
         "./core/fixers/javascript-fixer",
         "./core/fixers/javascript-fixer",
         "./core/fixers/python-fixer",
-        "./core/fixers/html-fixer"
+        "./core/fixers/html-fixer",
+        "./ai-agent/tools/generate-edge-cases",
+        "path",
+        "fs",
+        "path",
+        "path",
+        "fs",
+        "./ai-agent/tools/list-code-definition-names",
+        "./ai-agent/tools/generate-edge-cases",
+        "./ai-agent/tools/execute-tests",
+        "./ai-agent/tools/generate-documentation",
+        "path"
       ],
       "exports": [],
       "dependencies": [
@@ -1443,6 +1720,8 @@
         "src/live-preview.js",
         "src/core/ai/ollama-client.js",
         "src/ai-agent/chat-panel.js",
+        "src/ai-agent/agent.js",
+        "src/ai-agent/workspace-memory.js",
         "src/graphify/graphify-panel.js",
         "src/graphify/graph-loader.js",
         "src/utils/minimal-diff.js",
@@ -1450,7 +1729,11 @@
         "src/core/fixers/JavaFixer.js",
         "src/core/fixers/javascript-fixer.js",
         "src/core/fixers/python-fixer.js",
-        "src/core/fixers/html-fixer.js"
+        "src/core/fixers/html-fixer.js",
+        "src/ai-agent/tools/generate-edge-cases.js",
+        "src/ai-agent/tools/list-code-definition-names.js",
+        "src/ai-agent/tools/execute-tests.js",
+        "src/ai-agent/tools/generate-documentation.js"
       ]
     },
     {
@@ -1574,7 +1857,7 @@
       "path": "src/self-healing/error-handler.js",
       "name": "error-handler.js",
       "type": "javascript",
-      "lines": 679,
+      "lines": 685,
       "imports": [
         "../utils/vscode-shim",
         "fs",
@@ -1599,6 +1882,19 @@
       ],
       "exports": [],
       "dependencies": []
+    },
+    {
+      "path": "src/self-healing/__tests__/error-handler.test.js",
+      "name": "error-handler.test.js",
+      "type": "javascript",
+      "lines": 44,
+      "imports": [
+        "../error-handler"
+      ],
+      "exports": [],
+      "dependencies": [
+        "src/self-healing/error-handler.js"
+      ]
     },
     {
       "path": "src/self-healing/__tests__/performance-monitor.test.js",
@@ -1651,7 +1947,7 @@
       "path": "src/utils/vscode-shim.js",
       "name": "vscode-shim.js",
       "type": "javascript",
-      "lines": 133,
+      "lines": 136,
       "imports": [
         "vscode"
       ],
@@ -2004,6 +2300,12 @@
     },
     {
       "from": "src/ai-agent/agent.js",
+      "to": "src/ai-agent/workspace-memory-config.js",
+      "type": "requires",
+      "specifier": "./workspace-memory-config"
+    },
+    {
+      "from": "src/ai-agent/agent.js",
       "to": "src/ai-agent/tools/list-code-definition-names.js",
       "type": "requires",
       "specifier": "./tools/list-code-definition-names"
@@ -2069,6 +2371,30 @@
       "specifier": "./optimizer-integration"
     },
     {
+      "from": "src/ai-agent/chat-panel.js",
+      "to": "src/ai-agent/tools/apply-diff.js",
+      "type": "requires",
+      "specifier": "./tools/apply-diff"
+    },
+    {
+      "from": "src/ai-agent/chat-panel.js",
+      "to": "src/ai-agent/tools/insert-content.js",
+      "type": "requires",
+      "specifier": "./tools/insert-content"
+    },
+    {
+      "from": "src/ai-agent/chat-panel.js",
+      "to": "src/ai-agent/workspace-memory-config.js",
+      "type": "requires",
+      "specifier": "./workspace-memory-config"
+    },
+    {
+      "from": "src/ai-agent/chat-panel.js",
+      "to": "src/ai-agent/tools/tool-registry.js",
+      "type": "requires",
+      "specifier": "./tools/tool-registry"
+    },
+    {
       "from": "src/ai-agent/optimizer-integration.js",
       "to": "src/ai-agent/performance-optimizer.js",
       "type": "requires",
@@ -2081,10 +2407,52 @@
       "specifier": "./feedback-loop-optimizer"
     },
     {
+      "from": "src/ai-agent/provider-utils.js",
+      "to": "src/utils/vscode-shim.js",
+      "type": "requires",
+      "specifier": "../utils/vscode-shim"
+    },
+    {
+      "from": "src/ai-agent/tools/execute-tests.js",
+      "to": "src/utils/vscode-shim.js",
+      "type": "requires",
+      "specifier": "../../utils/vscode-shim"
+    },
+    {
+      "from": "src/ai-agent/tools/execute-tests.js",
+      "to": "src/ai-agent/provider-utils.js",
+      "type": "requires",
+      "specifier": "../provider-utils"
+    },
+    {
       "from": "src/ai-agent/tools/fetch-github-context.js",
       "to": "src/utils/vscode-shim.js",
       "type": "requires",
       "specifier": "../../utils/vscode-shim"
+    },
+    {
+      "from": "src/ai-agent/tools/generate-documentation.js",
+      "to": "src/ai-agent/tools/list-code-definition-names.js",
+      "type": "requires",
+      "specifier": "./list-code-definition-names"
+    },
+    {
+      "from": "src/ai-agent/tools/generate-edge-cases.js",
+      "to": "src/utils/vscode-shim.js",
+      "type": "requires",
+      "specifier": "../../utils/vscode-shim"
+    },
+    {
+      "from": "src/ai-agent/tools/generate-edge-cases.js",
+      "to": "src/ai-agent/tools/list-code-definition-names.js",
+      "type": "requires",
+      "specifier": "./list-code-definition-names"
+    },
+    {
+      "from": "src/ai-agent/tools/generate-edge-cases.js",
+      "to": "src/ai-agent/provider-utils.js",
+      "type": "requires",
+      "specifier": "../provider-utils"
     },
     {
       "from": "src/ai-agent/tools/index.js",
@@ -2147,6 +2515,24 @@
       "specifier": "./fetch-github-context"
     },
     {
+      "from": "src/ai-agent/tools/index.js",
+      "to": "src/ai-agent/tools/generate-edge-cases.js",
+      "type": "requires",
+      "specifier": "./generate-edge-cases"
+    },
+    {
+      "from": "src/ai-agent/tools/index.js",
+      "to": "src/ai-agent/tools/execute-tests.js",
+      "type": "requires",
+      "specifier": "./execute-tests"
+    },
+    {
+      "from": "src/ai-agent/tools/index.js",
+      "to": "src/ai-agent/tools/generate-documentation.js",
+      "type": "requires",
+      "specifier": "./generate-documentation"
+    },
+    {
       "from": "src/ai-agent/tools/submit-review-findings.js",
       "to": "src/utils/vscode-shim.js",
       "type": "requires",
@@ -2207,6 +2593,30 @@
       "specifier": "./fetch-github-context"
     },
     {
+      "from": "src/ai-agent/tools/tool-registry.js",
+      "to": "src/ai-agent/tools/generate-edge-cases.js",
+      "type": "requires",
+      "specifier": "./generate-edge-cases"
+    },
+    {
+      "from": "src/ai-agent/tools/tool-registry.js",
+      "to": "src/ai-agent/tools/execute-tests.js",
+      "type": "requires",
+      "specifier": "./execute-tests"
+    },
+    {
+      "from": "src/ai-agent/tools/tool-registry.js",
+      "to": "src/ai-agent/tools/generate-documentation.js",
+      "type": "requires",
+      "specifier": "./generate-documentation"
+    },
+    {
+      "from": "src/ai-agent/tools/__tests__/apply-diff-recovery.test.js",
+      "to": "src/ai-agent/tools/apply-diff.js",
+      "type": "requires",
+      "specifier": "../apply-diff"
+    },
+    {
       "from": "src/ai-agent/tools/__tests__/apply-diff.test.js",
       "to": "src/ai-agent/tools/apply-diff.js",
       "type": "requires",
@@ -2225,10 +2635,28 @@
       "specifier": "../attempt-completion"
     },
     {
+      "from": "src/ai-agent/tools/__tests__/execute-tests.test.js",
+      "to": "src/ai-agent/tools/execute-tests.js",
+      "type": "requires",
+      "specifier": "../execute-tests"
+    },
+    {
       "from": "src/ai-agent/tools/__tests__/fetch-github-context.test.js",
       "to": "src/ai-agent/tools/fetch-github-context.js",
       "type": "requires",
       "specifier": "../fetch-github-context"
+    },
+    {
+      "from": "src/ai-agent/tools/__tests__/generate-documentation.test.js",
+      "to": "src/ai-agent/tools/generate-documentation.js",
+      "type": "requires",
+      "specifier": "../generate-documentation"
+    },
+    {
+      "from": "src/ai-agent/tools/__tests__/generate-edge-cases.test.js",
+      "to": "src/ai-agent/tools/generate-edge-cases.js",
+      "type": "requires",
+      "specifier": "../generate-edge-cases"
     },
     {
       "from": "src/ai-agent/tools/__tests__/list-code-definition-names.test.js",
@@ -2241,6 +2669,42 @@
       "to": "src/ai-agent/tools/submit-review-findings.js",
       "type": "requires",
       "specifier": "../submit-review-findings"
+    },
+    {
+      "from": "src/ai-agent/tools/__tests__/tool-registry.test.js",
+      "to": "src/ai-agent/tools/tool-registry.js",
+      "type": "requires",
+      "specifier": "../tool-registry"
+    },
+    {
+      "from": "src/ai-agent/workspace-memory.js",
+      "to": "src/utils/vscode-shim.js",
+      "type": "requires",
+      "specifier": "../utils/vscode-shim"
+    },
+    {
+      "from": "src/ai-agent/workspace-memory.js",
+      "to": "src/ai-agent/tools/fetch-github-context.js",
+      "type": "requires",
+      "specifier": "./tools/fetch-github-context"
+    },
+    {
+      "from": "src/ai-agent/workspace-memory.js",
+      "to": "src/utils/minimal-diff.js",
+      "type": "requires",
+      "specifier": "../utils/minimal-diff"
+    },
+    {
+      "from": "src/ai-agent/workspace-memory.js",
+      "to": "src/ai-agent/workspace-memory-config.js",
+      "type": "requires",
+      "specifier": "./workspace-memory-config"
+    },
+    {
+      "from": "src/ai-agent/workspace-memory.js",
+      "to": "src/ai-agent/provider-utils.js",
+      "type": "requires",
+      "specifier": "./provider-utils"
     },
     {
       "from": "src/ai-agent/__tests__/agent-structured-edits.test.js",
@@ -2289,6 +2753,18 @@
       "to": "src/ai-agent/web-content-utils.js",
       "type": "requires",
       "specifier": "../web-content-utils"
+    },
+    {
+      "from": "src/ai-agent/__tests__/workspace-memory.test.js",
+      "to": "src/ai-agent/workspace-memory.js",
+      "type": "requires",
+      "specifier": "../workspace-memory"
+    },
+    {
+      "from": "src/ai-agent/__tests__/workspace-memory.test.js",
+      "to": "src/ai-agent/tools/fetch-github-context.js",
+      "type": "requires",
+      "specifier": "../tools/fetch-github-context"
     },
     {
       "from": "src/cli-chat.js",
@@ -2562,6 +3038,18 @@
     },
     {
       "from": "src/extension.js",
+      "to": "src/ai-agent/agent.js",
+      "type": "requires",
+      "specifier": "./ai-agent/agent"
+    },
+    {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/workspace-memory.js",
+      "type": "requires",
+      "specifier": "./ai-agent/workspace-memory"
+    },
+    {
+      "from": "src/extension.js",
       "to": "src/graphify/graphify-panel.js",
       "type": "requires",
       "specifier": "./graphify/graphify-panel"
@@ -2627,6 +3115,36 @@
       "specifier": "./core/fixers/html-fixer"
     },
     {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/tools/generate-edge-cases.js",
+      "type": "requires",
+      "specifier": "./ai-agent/tools/generate-edge-cases"
+    },
+    {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/tools/list-code-definition-names.js",
+      "type": "requires",
+      "specifier": "./ai-agent/tools/list-code-definition-names"
+    },
+    {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/tools/generate-edge-cases.js",
+      "type": "requires",
+      "specifier": "./ai-agent/tools/generate-edge-cases"
+    },
+    {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/tools/execute-tests.js",
+      "type": "requires",
+      "specifier": "./ai-agent/tools/execute-tests"
+    },
+    {
+      "from": "src/extension.js",
+      "to": "src/ai-agent/tools/generate-documentation.js",
+      "type": "requires",
+      "specifier": "./ai-agent/tools/generate-documentation"
+    },
+    {
       "from": "src/graphify/graphify-panel.js",
       "to": "src/graphify/graphify-analyzer.js",
       "type": "requires",
@@ -2667,6 +3185,12 @@
       "to": "src/utils/vscode-shim.js",
       "type": "requires",
       "specifier": "../utils/vscode-shim"
+    },
+    {
+      "from": "src/self-healing/__tests__/error-handler.test.js",
+      "to": "src/self-healing/error-handler.js",
+      "type": "requires",
+      "specifier": "../error-handler"
     },
     {
       "from": "src/self-healing/__tests__/performance-monitor.test.js",
@@ -2729,46 +3253,82 @@
         "path": "src/extension.js",
         "name": "extension.js",
         "type": "javascript",
-        "lines": 1356,
+        "lines": 1686,
         "inDegree": 0,
-        "outDegree": 17,
-        "totalDegree": 17
-      },
-      {
-        "path": "src/ai-agent/tools/index.js",
-        "name": "index.js",
-        "type": "javascript",
-        "lines": 114,
-        "inDegree": 3,
-        "outDegree": 10,
-        "totalDegree": 13
+        "outDegree": 24,
+        "totalDegree": 24
       },
       {
         "path": "src/ai-agent/chat-panel.js",
         "name": "chat-panel.js",
         "type": "javascript",
-        "lines": 7281,
+        "lines": 8359,
         "inDegree": 2,
-        "outDegree": 10,
-        "totalDegree": 12
+        "outDegree": 14,
+        "totalDegree": 16
       },
       {
-        "path": "src/ai-agent/agent.js",
-        "name": "agent.js",
+        "path": "src/ai-agent/tools/index.js",
+        "name": "index.js",
         "type": "javascript",
-        "lines": 7592,
-        "inDegree": 5,
-        "outDegree": 6,
-        "totalDegree": 11
+        "lines": 161,
+        "inDegree": 3,
+        "outDegree": 13,
+        "totalDegree": 16
       },
       {
         "path": "src/ai-agent/tools/tool-registry.js",
         "name": "tool-registry.js",
         "type": "javascript",
-        "lines": 659,
-        "inDegree": 1,
-        "outDegree": 9,
-        "totalDegree": 10
+        "lines": 863,
+        "inDegree": 3,
+        "outDegree": 12,
+        "totalDegree": 15
+      },
+      {
+        "path": "src/ai-agent/agent.js",
+        "name": "agent.js",
+        "type": "javascript",
+        "lines": 7871,
+        "inDegree": 6,
+        "outDegree": 7,
+        "totalDegree": 13
+      },
+      {
+        "path": "src/ai-agent/tools/generate-edge-cases.js",
+        "name": "generate-edge-cases.js",
+        "type": "javascript",
+        "lines": 1002,
+        "inDegree": 5,
+        "outDegree": 3,
+        "totalDegree": 8
+      },
+      {
+        "path": "src/ai-agent/tools/list-code-definition-names.js",
+        "name": "list-code-definition-names.js",
+        "type": "javascript",
+        "lines": 778,
+        "inDegree": 8,
+        "outDegree": 0,
+        "totalDegree": 8
+      },
+      {
+        "path": "src/utils/vscode-shim.js",
+        "name": "vscode-shim.js",
+        "type": "javascript",
+        "lines": 136,
+        "inDegree": 8,
+        "outDegree": 0,
+        "totalDegree": 8
+      },
+      {
+        "path": "src/ai-agent/workspace-memory.js",
+        "name": "workspace-memory.js",
+        "type": "javascript",
+        "lines": 2215,
+        "inDegree": 2,
+        "outDegree": 5,
+        "totalDegree": 7
       },
       {
         "path": "src/cli.js",
@@ -2816,6 +3376,24 @@
         "totalDegree": 6
       },
       {
+        "path": "src/ai-agent/tools/execute-tests.js",
+        "name": "execute-tests.js",
+        "type": "javascript",
+        "lines": 661,
+        "inDegree": 4,
+        "outDegree": 2,
+        "totalDegree": 6
+      },
+      {
+        "path": "src/ai-agent/tools/fetch-github-context.js",
+        "name": "fetch-github-context.js",
+        "type": "javascript",
+        "lines": 391,
+        "inDegree": 5,
+        "outDegree": 1,
+        "totalDegree": 6
+      },
+      {
         "path": "src/core/ai/ollama-client.js",
         "name": "ollama-client.js",
         "type": "javascript",
@@ -2852,12 +3430,21 @@
         "totalDegree": 6
       },
       {
-        "path": "src/ai-agent/tools/list-code-definition-names.js",
-        "name": "list-code-definition-names.js",
+        "path": "src/ai-agent/tools/apply-diff.js",
+        "name": "apply-diff.js",
         "type": "javascript",
-        "lines": 602,
+        "lines": 418,
         "inDegree": 5,
         "outDegree": 0,
+        "totalDegree": 5
+      },
+      {
+        "path": "src/ai-agent/tools/generate-documentation.js",
+        "name": "generate-documentation.js",
+        "type": "javascript",
+        "lines": 511,
+        "inDegree": 4,
+        "outDegree": 1,
         "totalDegree": 5
       },
       {
@@ -2882,7 +3469,7 @@
     "directories": [
       {
         "path": ".",
-        "fileCount": 23,
+        "fileCount": 25,
         "types": [
           "javascript",
           "python",
@@ -2921,7 +3508,7 @@
       },
       {
         "path": ".vscode",
-        "fileCount": 2,
+        "fileCount": 3,
         "types": [
           "json"
         ]
@@ -3022,7 +3609,7 @@
       },
       {
         "path": "src/ai-agent",
-        "fileCount": 11,
+        "fileCount": 14,
         "types": [
           "javascript",
           "html",
@@ -3031,21 +3618,21 @@
       },
       {
         "path": "src/ai-agent/tools",
-        "fileCount": 11,
+        "fileCount": 14,
         "types": [
           "javascript"
         ]
       },
       {
         "path": "src/ai-agent/tools/__tests__",
-        "fileCount": 6,
+        "fileCount": 11,
         "types": [
           "javascript"
         ]
       },
       {
         "path": "src/ai-agent/__tests__",
-        "fileCount": 8,
+        "fileCount": 9,
         "types": [
           "javascript"
         ]
@@ -3117,7 +3704,7 @@
       },
       {
         "path": "src/self-healing/__tests__",
-        "fileCount": 1,
+        "fileCount": 2,
         "types": [
           "javascript"
         ]

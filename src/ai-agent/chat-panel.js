@@ -18,15 +18,25 @@ const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 const { createOptimizedChatPanel } = require("./optimizer-integration");
-const { applyDiffToContent } = require("./tools/apply-diff");
+const { applyDiffToContent, validateSyntax } = require("./tools/apply-diff");
 const { insertContentIntoText } = require("./tools/insert-content");
+const { loadGraphContextForFile } = require("../graphify/graph-loader");
+const {
+  setMcpClientManager,
+  buildMcpPromptContext,
+  buildToolTranscript,
+  assessToolRisk,
+  safeErrorMessage
+} = require("../services/mcp/MCPToolExecutor");
 const {
   sanitizeOutputRelativePath,
   DEFAULT_OUTPUT_RELATIVE_PATH,
   SHARED_WORKSPACE_MEMORY_FILENAME
 } = require("./workspace-memory-config");
 const GSTACK_GATE_MAX_FILE_REVIEW_CHARS = 2200;
+const MAX_AGENTIC_EVIDENCE_ROUNDS = 3;
 const MAX_AGENTIC_INSPECTION_ROUNDS = 2;
+const MAX_MCP_TOOL_ROUNDS = 3;
 const MAX_INSPECTION_RESULT_CHARS = 16000;
 const MAX_INSPECTION_MATCHES = 25;
 const MAX_BUG_SCAN_CONTEXT_CHARS = 24000;
@@ -49,9 +59,10 @@ const OLLAMA_FALLBACK_MODELS = [
 const BUILT_IN_PROVIDERS = new Set(["ollama", "groq", "openrouter", "anthropic", "nvidia"]);
 
 class ChatPanel {
-  constructor(context, workspaceMemoryService = null) {
+  constructor(context, workspaceMemoryService = null, mcpClientManager = null) {
     this.context = context;
     this.workspaceMemoryService = workspaceMemoryService || null;
+    this.mcpClientManager = mcpClientManager || null;
     this.panel = null;
     this.sidebarView = null;
     this.agent = new AIAgent(context);
@@ -66,9 +77,18 @@ class ChatPanel {
     this._confirmResolve = null;
     this._boundWebviews = new WeakSet();
     this._queuedModeOverride = null;
+    this._webviewMessageToken = crypto.randomBytes(24).toString("hex");
     this._userStoppedGeneration = false;
     this._undoStack = [];
     this._undoIdCounter = 0;
+    this._lastMcpInitializationError = "";
+    this._lastKnownProviderPresence = {
+      ollama: true,
+      groq: false,
+      openrouter: false,
+      anthropic: false,
+      nvidia: false
+    };
     
     // Initialize review diagnostic collection
     this.reviewDiagnosticCollection = vscode.languages.createDiagnosticCollection("codeJanitorReview");
@@ -80,6 +100,23 @@ class ChatPanel {
       this._postAutoHealState();
     };
     this.performanceMonitor.loadMetrics();
+
+    if (this.mcpClientManager) {
+      setMcpClientManager(this.mcpClientManager);
+      this._onMcpManagerChange = () => {
+        this._postMcpSettings().catch((error) => {
+          console.warn("[ChatPanel] Failed to post MCP settings:", error);
+        });
+      };
+      this.mcpClientManager.on("change", this._onMcpManagerChange);
+      context.subscriptions.push(
+        new vscode.Disposable(() => {
+          if (this.mcpClientManager?.off && this._onMcpManagerChange) {
+            this.mcpClientManager.off("change", this._onMcpManagerChange);
+          }
+        })
+      );
+    }
     
     // Expose performance monitor globally for agent to log issues
     global.performanceMonitor = this.performanceMonitor;
@@ -154,13 +191,47 @@ class ChatPanel {
     return queued;
   }
 
+  _normalizeFollowupIntentOverride(intent) {
+    const value = String(intent || "").trim().toLowerCase();
+    if (!value) return "";
+    if (value === "code") return "edit";
+    if (value === "ask" || value === "question") return "general";
+    if (
+      [
+        "general",
+        "edit",
+        "plan",
+        "review",
+        "debug",
+        "test",
+        "explain",
+        "compare",
+        "create",
+        "command",
+        "scan",
+        "refactor",
+        "show_graph"
+      ].includes(value)
+    ) {
+      return value;
+    }
+    return "";
+  }
+
   _getInteractionStyleForRequest(isEditLikeIntent) {
     return isEditLikeIntent ? "agent_loop" : undefined;
   }
 
+  _detectIntent(message) {
+    if (typeof this.agent?._detectIntent === "function") {
+      return this.agent._detectIntent(message);
+    }
+    return "general";
+  }
+
   _findStructuredActionStart(text) {
     const value = String(text || "");
-    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
+    const match = /(^|\n)(FILE|PATCH|READ|GREP|MKDIR|CMD|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH|YOUTUBE)\s*:/i.exec(
       value
     );
     if (!match) {
@@ -246,15 +317,16 @@ class ChatPanel {
 
     const blockPatterns = [
       /PATCH:\s*[^\r\n`]+\r?\nSEARCH:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```\s*\r?\nREPLACE:\s*\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
-      /APPLY_DIFF:\s*[^\r\n`]+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
-      /INSERT_CONTENT:\s*[^\r\n`]+\s+AT\s+LINE\s+\d+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
+      /APPLY_DIFF:\s*[^\r\n`]+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
+      /INSERT_CONTENT:\s*[^\r\n`]+\s+AT\s+LINE\s+\d+\r?\n[\s\S]*?(?=\r?\n(?:FILE|PATCH|APPLY_DIFF|INSERT_CONTENT|READ_FILES|UPDATE_TODO_LIST|ASK_FOLLOWUP_QUESTION|ATTEMPT_COMPLETION|SUBMIT_REVIEW_FINDINGS|ANALYZE_FILE_QUALITY|GITHUB_CONTEXT|MCP_TOOL|MKDIR|CMD|GRAPHIFY|LINT|VALIDATE|PREVIEW|PERFORMANCE|FETCH):|$)/gi,
       /FILE:\s*[^\r\n`]+\r?\n```[\w-]*\r?\n?[\s\S]*?```/gi,
       /UPDATE_TODO_LIST:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /ASK_FOLLOWUP_QUESTION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /ATTEMPT_COMPLETION:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /SUBMIT_REVIEW_FINDINGS:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
       /ANALYZE_FILE_QUALITY:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
-      /GITHUB_CONTEXT:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
+      /GITHUB_CONTEXT:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi,
+      /MCP_TOOL:\s*\r?\n```(?:json)?[\w-]*\r?\n?[\s\S]*?```/gi
     ];
 
     for (const pattern of blockPatterns) {
@@ -308,6 +380,7 @@ class ChatPanel {
       submit_review_findings: 0,
       analyze_file_quality: 0,
       github_context: 0,
+      mcp_tool: 0,
       other: 0
     };
 
@@ -389,6 +462,13 @@ class ChatPanel {
         }`
       );
     }
+    if (counts.mcp_tool) {
+      parts.push(
+        `${counts.mcp_tool} MCP tool call${
+          counts.mcp_tool === 1 ? "" : "s"
+        }`
+      );
+    }
     if (counts.other) {
       parts.push(`${counts.other} action${counts.other === 1 ? "" : "s"}`);
     }
@@ -431,6 +511,10 @@ class ChatPanel {
         lines.push(`- Analyze ${action.path || "the active file"} for quality`);
       } else if (action.type === "github_context") {
         lines.push(`- Fetch GitHub ${action.mode || "repository"} context`);
+      } else if (action.type === "mcp_tool") {
+        lines.push(
+          `- Run MCP tool ${action.serverName || "server"}.${action.toolName || "tool"}`
+        );
       } else {
         lines.push(`- ${action.type} action`);
       }
@@ -445,8 +529,98 @@ class ChatPanel {
     return lines.join("\n");
   }
 
-  _buildVisibleAssistantText(response) {
-    return String(response?.text || "");
+  _parseAuditHaltBlock(text = "") {
+    const source = String(text || "");
+    if (!/%%AUDIT_HALTED%%/.test(source)) {
+      return null;
+    }
+
+    const flaggedPattern =
+      source.match(/Flagged pattern:\s*(.+)/i)?.[1]?.trim() || "";
+    const location = source.match(/Location:\s*(.+)/i)?.[1]?.trim() || "";
+    const reason = source.match(/Reason:\s*(.+)/i)?.[1]?.trim() || "";
+
+    return {
+      flaggedPattern,
+      location,
+      reason
+    };
+  }
+
+  _looksLikeFalsePositiveAuditHalt(details = {}) {
+    const flaggedPattern = String(details.flaggedPattern || "").toLowerCase();
+    const location = String(details.location || "").toLowerCase();
+    const reason = String(details.reason || "").toLowerCase();
+    const combined = `${flaggedPattern}\n${location}\n${reason}`;
+
+    const packageMetadataMatch =
+      /\bpackage\.json\b/.test(combined) &&
+      /\b(urls?|homepage|repository|github|metadata|package metadata)\b/.test(
+        combined
+      );
+    const toolingMatch =
+      /\b(mcp|playwright|browser automation|testing|test automation|ui inspection)\b/.test(
+        combined
+      );
+    const harmlessUrlMatch =
+      /\b(documentation|api|cdn|localhost|asset urls?)\b/.test(combined);
+
+    return packageMetadataMatch || toolingMatch || harmlessUrlMatch;
+  }
+
+  _buildAuditHaltDisplayText(text = "") {
+    const details = this._parseAuditHaltBlock(text);
+    if (!details) {
+      return String(text || "");
+    }
+
+    const lines = [];
+    if (this._looksLikeFalsePositiveAuditHalt(details)) {
+      lines.push(
+        "Security gate paused this reply, but the flagged reason looks like a likely false positive."
+      );
+      lines.push(
+        "This usually happens when the model mistakes package metadata, repository URLs, MCP config, or Playwright/testing setup for malicious code."
+      );
+    } else {
+      lines.push("Security gate halted this request.");
+    }
+
+    if (details.flaggedPattern) {
+      lines.push("");
+      lines.push(`Flagged pattern: ${details.flaggedPattern}`);
+    }
+    if (details.location) {
+      lines.push(`Location: ${details.location}`);
+    }
+    if (details.reason) {
+      lines.push(`Model reason: ${details.reason}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  _buildVisibleAssistantText(response, options = {}) {
+    const preferStructuredSummary =
+      options.preferStructuredSummary === true;
+    const rawText = String(response?.text || "");
+    const normalizedAuditText = this._buildAuditHaltDisplayText(rawText);
+    const actions = Array.isArray(response?.actions) ? response.actions : [];
+
+    if (!preferStructuredSummary || actions.length === 0) {
+      return normalizedAuditText;
+    }
+
+    const proseText = this._stripStructuredActionsFromText(normalizedAuditText);
+    const actionSummary = this._buildStructuredActionDisplaySummary(actions);
+
+    if (proseText && actionSummary) {
+      return `${proseText}\n\n${actionSummary}`;
+    }
+    if (actionSummary) {
+      return actionSummary;
+    }
+    return normalizedAuditText;
   }
 
   _postAssistantImages(images = []) {
@@ -1402,7 +1576,7 @@ class ChatPanel {
   }
 
   async _fetchGitHubContext(params = {}, workspaceFolder = this._getEffectiveWorkspaceFolder()) {
-    if (!workspaceFolder) {
+    if (!workspaceFolder && !(params.owner && params.repo)) {
       throw new Error("Open a workspace folder inside a git repository first.");
     }
 
@@ -2330,6 +2504,7 @@ ${fileContent}
       const hydratedHtml = html
         .replace(/__CSP_SOURCE__/g, webview?.cspSource || "")
         .replace(/__CSP_NONCE__/g, nonce)
+        .replace(/__WEBVIEW_MESSAGE_TOKEN__/g, this._webviewMessageToken)
         .replace(/__LOGO_URI__/g, logoUri);
       console.log("[ChatPanel] HTML loaded, length:", html.length);
       return hydratedHtml;
@@ -2387,12 +2562,19 @@ ${fileContent}
   }
 
   _postMessage(message) {
+    const payload =
+      message && typeof message === "object" && !Array.isArray(message)
+        ? {
+            ...message,
+            __codeJanitorToken: this._webviewMessageToken
+          }
+        : message;
     const targets = [this.panel?.webview, this.sidebarView?.webview].filter(Boolean);
     const seen = new Set();
     for (const webview of targets) {
       if (seen.has(webview)) continue;
       seen.add(webview);
-      webview.postMessage(message);
+      webview.postMessage(payload);
     }
   }
 
@@ -2430,14 +2612,34 @@ ${fileContent}
     return crypto.randomBytes(16).toString("base64");
   }
 
-  _sanitizeExternalUrl(value, { allowHttp = true, allowHttps = true } = {}) {
+  _isLoopbackHost(hostname) {
+    const normalized = String(hostname || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "");
+    return (
+      normalized === "localhost" ||
+      normalized === "127.0.0.1" ||
+      normalized === "::1"
+    );
+  }
+
+  _sanitizeExternalUrl(
+    value,
+    { allowHttp = true, allowHttps = true, restrictHttpToLoopback = false } = {}
+  ) {
     const raw = String(value || "").trim();
     if (!raw) return "";
     if (!/^https?:\/\//i.test(raw)) return "";
 
     try {
       const parsed = new URL(raw);
-      if (parsed.protocol === "http:" && allowHttp) return parsed.toString();
+      if (parsed.protocol === "http:" && allowHttp) {
+        if (restrictHttpToLoopback && !this._isLoopbackHost(parsed.hostname)) {
+          return "";
+        }
+        return parsed.toString();
+      }
       if (parsed.protocol === "https:" && allowHttps) return parsed.toString();
     } catch (_) {
       return "";
@@ -2487,14 +2689,18 @@ ${fileContent}
     const baseUrl = this
       ._sanitizeExternalUrl(String(input?.baseUrl || "").trim(), {
         allowHttp: true,
-        allowHttps: true
+        allowHttps: true,
+        restrictHttpToLoopback: true
       })
       .replace(/\/+$/, "");
     const defaultModel = String(input?.defaultModel || input?.model || "").trim();
-    const apiKeyLink = this._sanitizeExternalUrl(String(input?.apiKeyLink || "").trim(), {
-      allowHttp: true,
-      allowHttps: true
-    });
+    const apiKeyLink = this._sanitizeExternalUrl(
+      String(input?.apiKeyLink || "").trim(),
+      {
+        allowHttp: false,
+        allowHttps: true
+      }
+    );
     const extraModels = Array.isArray(input?.models)
       ? input.models
       : String(input?.models || "")
@@ -2557,7 +2763,26 @@ ${fileContent}
       );
       customPresence[provider.id] = !!key;
     }
-    return { ...builtInPresence, ...customPresence };
+    return this._rememberProviderPresence({
+      ...builtInPresence,
+      ...customPresence
+    });
+  }
+
+  _getImmediateProviderPresence() {
+    return {
+      ollama: true,
+      ...(this._lastKnownProviderPresence || {})
+    };
+  }
+
+  _rememberProviderPresence(patch = {}) {
+    this._lastKnownProviderPresence = {
+      ...this._getImmediateProviderPresence(),
+      ...(patch || {}),
+      ollama: true
+    };
+    return this._getImmediateProviderPresence();
   }
 
   _buildProviderCatalog() {
@@ -2697,6 +2922,7 @@ ${fileContent}
   async _getEffectiveAiConfig() {
     const config = this.agent.getConfig();
     const selectedProvider = this._getSelectedProviderId() || config.provider;
+    let effectiveProvider = selectedProvider;
     const customProvider = this._isBuiltInProvider(selectedProvider)
       ? null
       : this._getCustomProviderById(selectedProvider);
@@ -2731,24 +2957,28 @@ ${fileContent}
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = this._getDefaultModelForProvider("ollama");
+      effectiveProvider = "ollama";
     } else if (selectedProvider === "openrouter" && !openrouterApiKey) {
       console.log("[ChatPanel] CRITICAL: OpenRouter selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = this._getDefaultModelForProvider("ollama");
+      effectiveProvider = "ollama";
     } else if (selectedProvider === "anthropic" && !anthropicApiKey) {
       console.log("[ChatPanel] CRITICAL: Anthropic selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = this._getDefaultModelForProvider("ollama");
+      effectiveProvider = "ollama";
     } else if (selectedProvider === "nvidia" && !nvidiaApiKey) {
       console.log("[ChatPanel] CRITICAL: NVIDIA selected but no API key! Forcing to ollama");
       await cfg.update("provider", "ollama", vscode.ConfigurationTarget.Global);
       await this._setSelectedProviderId("ollama");
       config.provider = "ollama";
       config.model = this._getDefaultModelForProvider("ollama");
+      effectiveProvider = "ollama";
     }
 
     if (customProvider) {
@@ -2768,7 +2998,7 @@ ${fileContent}
 
     const effectiveConfig = {
       ...config,
-      provider: selectedProvider,
+      provider: effectiveProvider,
       groqApiKey,
       openrouterApiKey,
       anthropicApiKey,
@@ -2796,6 +3026,7 @@ ${fileContent}
 
       console.log(`[ChatPanel] Persisting API key for ${provider} in SecretStorage`);
       await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
+      this._rememberProviderPresence({ [provider]: true });
       if (!configKey) {
         return;
       }
@@ -2964,6 +3195,335 @@ ${fileContent}
     await this._postProjectPlannerState();
   }
 
+  _getMcpWorkspaceRoot(workspaceFolder = "") {
+    return (
+      String(workspaceFolder || "").trim() ||
+      String(this._getEffectiveWorkspaceFolder() || "").trim()
+    );
+  }
+
+  async _ensureMcpReady(workspaceFolder = "") {
+    if (!this.mcpClientManager) {
+      return null;
+    }
+
+    const workspaceRoot = this._getMcpWorkspaceRoot(workspaceFolder);
+    if (!workspaceRoot) {
+      return null;
+    }
+
+    try {
+      await this.mcpClientManager.initialize(workspaceRoot);
+      this._lastMcpInitializationError = "";
+      return this.mcpClientManager;
+    } catch (error) {
+      this._lastMcpInitializationError = safeErrorMessage(error);
+      console.warn("[ChatPanel] MCP initialization failed:", error);
+      return null;
+    }
+  }
+
+  async _buildFallbackMcpSettings(workspaceFolder = "", initializationError = "") {
+    const workspaceRoot = this._getMcpWorkspaceRoot(workspaceFolder);
+    const configPath = workspaceRoot ? path.join(workspaceRoot, "mcp.config.json") : "";
+    let configText = "";
+
+    if (configPath) {
+      try {
+        configText = await fs.readFile(configPath, "utf8");
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          console.warn("[ChatPanel] Failed to read MCP config fallback:", error);
+        }
+      }
+    }
+
+    if (!configText) {
+      configText = '{\n  "mcpServers": {}\n}\n';
+    }
+
+    return {
+      workspaceRoot,
+      configPath,
+      configText,
+      servers: [],
+      tools: [],
+      initializationError: String(initializationError || "").trim()
+    };
+  }
+
+  async _getMcpSettings(workspaceFolder = "") {
+    const manager = await this._ensureMcpReady(workspaceFolder);
+    if (!manager) {
+      return this._buildFallbackMcpSettings(
+        workspaceFolder,
+        this._lastMcpInitializationError
+      );
+    }
+
+    return manager.getUiState();
+  }
+
+  async _postMcpSettings(workspaceFolder = "") {
+    const settings = await this._getMcpSettings(workspaceFolder);
+    this._postMessage({
+      type: "mcpSettings",
+      settings
+    });
+  }
+
+  async _saveMcpConfig(rawConfigText) {
+    const workspaceRoot = this._getMcpWorkspaceRoot();
+    if (!workspaceRoot || !this.mcpClientManager) {
+      throw new Error("Open a workspace folder before saving MCP config.");
+    }
+
+    const manager = await this._ensureMcpReady();
+    if (manager) {
+      await manager.saveConfig(String(rawConfigText || "").trim());
+      await this._postMcpSettings();
+      return;
+    }
+
+    await this.mcpClientManager.configLoader.save(
+      workspaceRoot,
+      String(rawConfigText || "").trim()
+    );
+    this._lastMcpInitializationError = "";
+    await this.mcpClientManager.initialize(workspaceRoot);
+    await this._postMcpSettings();
+  }
+
+  async _handleMcpSettingsAction(action, serverName = "") {
+    const workspaceRoot = this._getMcpWorkspaceRoot();
+
+    if (action === "openMcpConfig") {
+      if (!workspaceRoot) {
+        throw new Error("Open a workspace folder before using MCP settings.");
+      }
+
+      const configPath =
+        (this.mcpClientManager && this.mcpClientManager.getUiState().configPath) ||
+        path.join(workspaceRoot, "mcp.config.json");
+      await this._revealWorkspaceFile(configPath);
+      this._postMessage({
+        type: "status",
+        text: "Opened mcp.config.json."
+      });
+      return;
+    }
+
+    const manager = await this._ensureMcpReady();
+    if (!manager) {
+      const detail = String(this._lastMcpInitializationError || "").trim();
+      throw new Error(
+        detail
+          ? `MCP settings are unavailable: ${detail}`
+          : "Open a workspace folder before using MCP settings."
+      );
+    }
+
+    if (action === "reloadMcpSettings") {
+      await manager.reload();
+      await this._postMcpSettings();
+      this._postMessage({
+        type: "status",
+        text: "MCP settings reloaded."
+      });
+      return;
+    }
+
+    if (action === "restartMcpServer") {
+      if (!serverName) {
+        throw new Error("No MCP server name was provided for restart.");
+      }
+      await manager.restartServer(serverName);
+      await this._postMcpSettings();
+      this._postMessage({
+        type: "status",
+        text: `MCP server restarted: ${serverName}.`
+      });
+      return;
+    }
+
+    throw new Error(`Unknown MCP settings action: ${action}`);
+  }
+
+  async _buildMcpSystemOverlay(workspaceFolder = "") {
+    const manager = await this._ensureMcpReady(workspaceFolder);
+    if (!manager) {
+      return "";
+    }
+
+    return buildMcpPromptContext(this._getMcpWorkspaceRoot(workspaceFolder));
+  }
+
+  async _confirmMcpToolAction(action) {
+    const manager = await this._ensureMcpReady();
+    const tool = manager?.getTool(action.serverName, action.toolName) || null;
+    const risk = assessToolRisk(action.serverName, tool);
+
+    if (!risk.requiresConfirmation) {
+      return true;
+    }
+
+    const choice = await vscode.window.showWarningMessage(
+      `Run MCP tool ${action.serverName}.${action.toolName}? This may perform a state-changing GitHub or Docker action.`,
+      { modal: true },
+      "Run Tool"
+    );
+    return choice === "Run Tool";
+  }
+
+  async _runMcpToolAction(action, workspaceFolder) {
+    const allowed = await this._confirmMcpToolAction(action);
+    if (!allowed) {
+      return {
+        success: false,
+        error: `Denied MCP tool call ${action.serverName}.${action.toolName}.`,
+        transcript: buildToolTranscript({
+          serverName: action.serverName,
+          toolName: action.toolName,
+          success: false,
+          text: "User denied the MCP action."
+        })
+      };
+    }
+
+    const result = await toolRegistry.executeTool(
+      "mcp_call",
+      {
+        serverName: action.serverName,
+        toolName: action.toolName,
+        arguments: action.arguments || {}
+      },
+      workspaceFolder,
+      {
+        confirmDangerousMcpAction: true
+      }
+    );
+
+    return {
+      ...result,
+      transcript: buildToolTranscript(result)
+    };
+  }
+
+  _buildMcpFollowUpPrompt(originalRequest, toolResults = []) {
+    const transcript = toolResults
+      .map((result) => String(result?.transcript || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+    return `You are continuing a request after real MCP tool execution.
+Return executable structured actions only.
+
+Original user request:
+${originalRequest}
+
+MCP tool results:
+${transcript || "[no MCP tool output]"}
+
+Continue from the real MCP evidence above:
+- Use the MCP outputs as ground truth.
+- If you need another MCP step, emit only MCP_TOOL: actions for that step.
+- If you now have enough evidence, return the next structured action(s) needed for the task.
+- Do not repeat the same MCP_TOOL call unless the earlier result failed or was incomplete.
+- Do not output explanations.`;
+  }
+
+  async _runMcpToolLoop(
+    originalRequest,
+    response,
+    workspaceFolder,
+    runtimeConfig,
+    requestMode,
+    systemOverlay = ""
+  ) {
+    let currentResponse = response;
+    let rounds = 0;
+
+    while (
+      rounds < MAX_MCP_TOOL_ROUNDS &&
+      Array.isArray(currentResponse?.actions) &&
+      currentResponse.actions.some((action) => action?.type === "mcp_tool")
+    ) {
+      rounds += 1;
+      const mcpActions = currentResponse.actions.filter(
+        (action) => action?.type === "mcp_tool"
+      );
+      const results = [];
+
+      for (const action of mcpActions) {
+        this._postMessage({
+          type: "status",
+          text: `Running MCP tool ${action.serverName}.${action.toolName}...`
+        });
+
+        try {
+          const result = await this._runMcpToolAction(action, workspaceFolder);
+          results.push(result);
+          if (result.success) {
+            this._postMessage({
+              type: "stream",
+              text: result.text
+            });
+          } else {
+            this._postMessage({
+              type: "error",
+              text: result.error || "MCP tool failed."
+            });
+          }
+        } catch (error) {
+          const message = safeErrorMessage(error);
+          this._postMessage({
+            type: "error",
+            text: `MCP tool failed: ${message}`
+          });
+          results.push({
+            serverName: action.serverName,
+            toolName: action.toolName,
+            success: false,
+            error: message,
+            text: message,
+            transcript: buildToolTranscript({
+              serverName: action.serverName,
+              toolName: action.toolName,
+              success: false,
+              text: message
+            })
+          });
+        }
+      }
+
+      currentResponse = await this.agent.chat(
+        this._buildMcpFollowUpPrompt(originalRequest, results),
+        workspaceFolder,
+        null,
+        null,
+        {
+          mode: requestMode === "fast" ? "heavy" : requestMode,
+          intentOverride: this._detectIntent(originalRequest),
+          interactionStyle: this._getInteractionStyleForRequest(true),
+          runtimeConfig,
+          skipHistory: true,
+          systemOverlay,
+          onStatus: (text) => {
+            if (this._shouldSuppressInternalStatus(text)) {
+              return;
+            }
+            this._postMessage({
+              type: "status",
+              text: `MCP follow-up: ${text}`
+            });
+          }
+        }
+      );
+    }
+
+    return currentResponse;
+  }
+
   async _postProjectPlannerState() {
     if (!this.workspaceMemoryService?.getProjectPlannerState) {
       return;
@@ -3031,7 +3591,7 @@ ${fileContent}
     const outputPath = sanitizeOutputRelativePath(input.outputPath);
     const githubApiBaseUrl =
       this._sanitizeExternalUrl(String(input.githubApiBaseUrl || "").trim(), {
-        allowHttp: true,
+        allowHttp: false,
         allowHttps: true
       }) || "https://api.github.com";
     const workspaceRoot = this._getEffectiveWorkspaceFolder() || "";
@@ -3483,6 +4043,7 @@ ${document.getText()}
     const fileSummaries = [];
     let todoUpdateCount = 0;
     let completionAttempted = false;
+    let mcpActionCount = 0;
     for (const { action, result } of insideActions) {
       if (action.type === "patch") {
         fileSummaries.push(`patch ${action.path}`);
@@ -3502,6 +4063,10 @@ ${document.getText()}
       }
       if (action.type === "attempt_completion") {
         completionAttempted = true;
+        continue;
+      }
+      if (action.type === "mcp_tool") {
+        mcpActionCount += 1;
         continue;
       }
       if (action.type !== "file" || !result?.success) continue;
@@ -3526,6 +4091,9 @@ ${document.getText()}
     }
     if (todoUpdateCount > 0) {
       parts.push(`Todo updates: ${todoUpdateCount}`);
+    }
+    if (mcpActionCount > 0) {
+      parts.push(`MCP calls: ${mcpActionCount}`);
     }
     return parts.length > 0 ? `Plan ready. ${parts.join(" | ")}` : null;
   }
@@ -4215,10 +4783,22 @@ ${this._buildRecoveryFileContext(action.path, currentContent)}`;
     return false;
   }
 
+  _isEvidenceGatheringAction(action) {
+    return this._isInspectionAction(action) ||
+      action?.type === "mcp_tool" ||
+      action?.type === "github_context";
+  }
+
   _hasOnlyInspectionActions(actions = []) {
     return Array.isArray(actions) &&
       actions.length > 0 &&
       actions.every((action) => this._isInspectionAction(action));
+  }
+
+  _hasOnlyEvidenceGatheringActions(actions = []) {
+    return Array.isArray(actions) &&
+      actions.length > 0 &&
+      actions.every((action) => this._isEvidenceGatheringAction(action));
   }
 
   _formatInspectionTranscript(label, content, language = "") {
@@ -4605,9 +5185,161 @@ Now continue the professional edit loop:
             action &&
             (action.type === "file" ||
               action.type === "patch" ||
+              action.type === "apply_diff" ||
+              action.type === "insert_content" ||
               action.type === "mkdir")
         )
       : [];
+  }
+
+  _buildEvidenceFollowUpPrompt(originalRequest, toolResults = []) {
+    const transcript = toolResults
+      .map((result) => String(result?.transcript || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+
+    return `You are continuing a request after real tool execution.
+Return executable structured actions only.
+
+Original user request:
+${originalRequest}
+
+Tool results:
+${transcript || "[no tool output]"}
+
+Continue from the real evidence above:
+- Use the tool results above as ground truth.
+- If you now have enough evidence, return the next structured action(s) needed for the task.
+- Prefer the smallest next step that materially advances the task.
+- For edit requests, return PATCH: or FILE: actions once you have enough evidence.
+- Add focused verification CMD: only when it materially proves the fix.
+- You may request another evidence step only when the previous tool results were insufficient.
+- Do not repeat the same tool action unless the earlier result failed or was incomplete.
+- Do not output explanations.`;
+  }
+
+  async _runGitHubEvidenceAction(action, workspaceFolder) {
+    const summaryLabel = `GITHUB_CONTEXT: ${JSON.stringify({
+      mode: action?.mode || "repo",
+      ...(action?.owner ? { owner: action.owner } : {}),
+      ...(action?.repo ? { repo: action.repo } : {}),
+      ...(Number.isInteger(action?.number) ? { number: action.number } : {})
+    })}`;
+
+    try {
+      const result = await this._fetchGitHubContext(action, workspaceFolder);
+      return {
+        success: true,
+        transcript: this._formatInspectionTranscript(
+          summaryLabel,
+          result?.summary || "[no GitHub summary]"
+        )
+      };
+    } catch (error) {
+      return {
+        success: false,
+        transcript: this._formatInspectionTranscript(
+          summaryLabel,
+          `Error: ${safeErrorMessage(error)}`
+        )
+      };
+    }
+  }
+
+  async _runEvidenceGatheringAction(action, workspaceFolder) {
+    if (this._isInspectionAction(action)) {
+      return this._runInspectionAction(action, workspaceFolder);
+    }
+
+    if (action?.type === "mcp_tool") {
+      try {
+        return await this._runMcpToolAction(action, workspaceFolder);
+      } catch (error) {
+        const message = safeErrorMessage(error);
+        return {
+          success: false,
+          transcript: buildToolTranscript({
+            serverName: action.serverName,
+            toolName: action.toolName,
+            success: false,
+            text: message
+          })
+        };
+      }
+    }
+
+    if (action?.type === "github_context") {
+      return this._runGitHubEvidenceAction(action, workspaceFolder);
+    }
+
+    return {
+      success: false,
+      transcript: this._formatInspectionTranscript(
+        `UNKNOWN: ${action?.type || "action"}`,
+        "Error: unsupported evidence action."
+      )
+    };
+  }
+
+  async _runAgenticEvidenceRound(
+    originalRequest,
+    actions,
+    workspaceFolder,
+    runtimeConfig,
+    requestMode,
+    systemOverlay = ""
+  ) {
+    const evidenceActions = Array.isArray(actions)
+      ? actions.filter((action) => this._isEvidenceGatheringAction(action))
+      : [];
+    if (evidenceActions.length === 0) {
+      return {
+        error: "No evidence-gathering actions were available to run."
+      };
+    }
+
+    const toolResults = [];
+    for (const action of evidenceActions) {
+      if (action?.type === "mcp_tool") {
+        this._postMessage({
+          type: "status",
+          text: `Running MCP tool ${action.serverName}.${action.toolName}...`
+        });
+      } else if (action?.type === "github_context") {
+        this._postMessage({
+          type: "status",
+          text: `Loading GitHub ${action.mode || "repository"} context...`
+        });
+      }
+      toolResults.push(
+        await this._runEvidenceGatheringAction(action, workspaceFolder)
+      );
+    }
+
+    const nextMode = requestMode === "fast" ? "heavy" : requestMode;
+    return this.agent.chat(
+      this._buildEvidenceFollowUpPrompt(originalRequest, toolResults),
+      workspaceFolder,
+      null,
+      null,
+      {
+        mode: nextMode,
+        intentOverride: this._detectIntent(originalRequest),
+        interactionStyle: "agent_loop",
+        runtimeConfig,
+        skipHistory: true,
+        systemOverlay,
+        onStatus: (text) => {
+          if (this._shouldSuppressInternalStatus(text)) {
+            return;
+          }
+          this._postMessage({
+            type: "status",
+            text: `Tool follow-up: ${text}`
+          });
+        }
+      }
+    );
   }
 
   _hasOversizedGateFileAction(actions = []) {
@@ -4757,6 +5489,31 @@ Now continue the professional edit loop:
       reasons.push("large patch");
     }
 
+    const optimizerDecision =
+      reasons.length === 0 &&
+      editableActions.length > 0 &&
+      typeof this._shouldSkipGate === "function"
+        ? this._shouldSkipGate(
+            editableActions.filter((action) => action?.type !== "mkdir"),
+            {
+              requestMode: options.requestMode,
+              explicitWorkflowId: options.explicitWorkflowId
+            }
+          )
+        : null;
+
+    if (
+      reasons.length === 0 &&
+      optimizerDecision &&
+      optimizerDecision.skip === false
+    ) {
+      reasons.push(
+        optimizerDecision.risk === "high"
+          ? "optimizer high-risk edit"
+          : "optimizer requested review"
+      );
+    }
+
     return {
       enabled: reasons.length > 0,
       gateMode,
@@ -4800,6 +5557,14 @@ Now continue the professional edit loop:
         planLines.push(`FILE ${action.path || "(missing path)"}`);
       } else if (action.type === "patch") {
         planLines.push(`PATCH ${action.path || "(missing path)"}`);
+      } else if (action.type === "apply_diff") {
+        planLines.push(`APPLY_DIFF ${action.path || "(missing path)"}`);
+      } else if (action.type === "insert_content") {
+        planLines.push(
+          `INSERT_CONTENT ${action.path || "(missing path)"} @ line ${
+            Number.isFinite(action.line) ? action.line : "?"
+          }`
+        );
       } else if (action.type === "mkdir") {
         planLines.push(`MKDIR ${action.path || "(missing path)"}`);
       } else if (action.type === "cmd") {
@@ -4853,6 +5618,47 @@ Now continue the professional edit loop:
           ]
             .filter(Boolean)
             .join("\n")
+        );
+        continue;
+      }
+
+      if (action.type === "apply_diff") {
+        let currentContext = "";
+        if (workspaceFolder && action.path) {
+          try {
+            const fullPath = this._resolveActionFilePath(workspaceFolder, action.path);
+            const currentContent = await fs.readFile(fullPath, "utf8");
+            currentContext = this._buildRecoveryFileContext(action.path, currentContent);
+          } catch (_) {
+            currentContext = `Current file content for ${action.path} could not be loaded.`;
+          }
+        }
+
+        detailBlocks.push(
+          [
+            `APPLY_DIFF target: ${action.path}`,
+            "Diff blocks:",
+            "```",
+            this._truncateGateSnippet(action.diff, 2200),
+            "```",
+            currentContext
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+        continue;
+      }
+
+      if (action.type === "insert_content") {
+        detailBlocks.push(
+          [
+            `INSERT_CONTENT target: ${action.path}`,
+            `Line: ${Number.isFinite(action.line) ? action.line : "?"}`,
+            "Planned insertion:",
+            "```",
+            this._truncateGateSnippet(action.content, 2200),
+            "```"
+          ].join("\n")
         );
         continue;
       }
@@ -5111,15 +5917,28 @@ Now continue the professional edit loop:
   }
 
   _shouldPrepareWorkspaceContext(intent, message, mode = this.chatMode) {
-    if (mode === "bugfix") return false;
-    if (mode === "heavy" || mode === "deep") return true;
-
-    const text = message || "";
+    if (mode === "bugfix" || mode === "fast") return false;
+    const text = String(message || "").trim();
+    if (!text) return false;
     if (intent === "scan") return true;
 
-    return /\b(codebase|repo|repository|project|workspace|all files|multiple files|architecture|graph|graphify|overview|summari[sz]e|audit)\b/i.test(
-      text
-    );
+    const explicitRepoScope =
+      /\b(codebase|repo|repository|project|workspace|all files|multiple files|architecture|graph|graphify|folders?|directories?)\b/i.test(
+        text
+      ) &&
+      /\b(scan|read|inspect|map(?:\s+out)?|walk\s*through|walkthrough|overview|summari[sz]e|audit|analy[sz]e|review|explain|understand)\b/i.test(
+        text
+      );
+
+    const explicitWideEdit =
+      /\b(edit|fix|update|change|refactor|rewrite|debug|clean\s+up)\b/i.test(
+        text
+      ) &&
+      /\b(repo[-\s]?wide|workspace[-\s]?wide|project[-\s]?wide|across\s+the\s+(?:repo|repository|project|workspace)|throughout\s+the\s+(?:repo|repository|project|workspace)|multiple files|all files|entire\s+(?:repo|repository|project|workspace)|whole\s+(?:repo|repository|project|workspace))\b/i.test(
+        text
+      );
+
+    return explicitRepoScope || explicitWideEdit;
   }
 
   _isReadmePath(filePath) {
@@ -5503,7 +6322,17 @@ ${trimmedText}`;
     try {
       const fullPath = path.join(workspaceFolder, relativePath);
       const content = await fs.readFile(fullPath, "utf8");
-      const validation = new FrontendValidator(fullPath, content).validate();
+      const graphContext = loadGraphContextForFile(fullPath);
+      const validation = new FrontendValidator(
+        fullPath,
+        content,
+        graphContext
+          ? {
+              graphData: graphContext.data,
+              graphRoot: graphContext.graphRoot
+            }
+          : {}
+      ).validate();
       if (!validation.hasIssues) {
         return { success: true, issues: [] };
       }
@@ -5930,6 +6759,15 @@ ${trimmedText}`;
     if (!webview || this._boundWebviews.has(webview)) return;
     this._boundWebviews.add(webview);
     webview.onDidReceiveMessage(async (message) => {
+      if (
+        !message ||
+        typeof message !== "object" ||
+        Array.isArray(message) ||
+        typeof message.type !== "string"
+      ) {
+        return;
+      }
+
       console.log("[ChatPanel] Received message:", message.type);
       const workspaceFolder = this._getEffectiveWorkspaceFolder();
 
@@ -5937,10 +6775,12 @@ ${trimmedText}`;
         try {
           console.log("[ChatPanel] Processing chat message:", message.text?.substring(0, 50));
           const trimmedText = (message.text || "").trim();
-        let requestText = trimmedText;
-        let requestMode = this._getRequestMode();
-        let systemOverlay = "";
-        let activeRuntimeConfig = null;
+          let requestText = trimmedText;
+          let requestMode = this._getRequestMode();
+          let systemOverlay = "";
+          let activeRuntimeConfig = null;
+          const followupIntentOverride =
+            this._normalizeFollowupIntentOverride(message.intentOverride);
 
         if (/^\/undo\b/i.test(trimmedText) || this._isUndoRequest(trimmedText)) {
           await this._undoEdit();
@@ -6063,7 +6903,9 @@ ${trimmedText}`;
         }
 
         const intent =
-          workflowIntentOverride || this.agent._detectIntent(requestText);
+          workflowIntentOverride ||
+          followupIntentOverride ||
+          this.agent._detectIntent(requestText);
         const isEditLikeIntent = this._isEditLikeIntent(intent, requestText);
         let hasExplicitCommandRequest = this._hasExplicitCommandRequest(requestText);
         const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(requestText);
@@ -6251,6 +7093,12 @@ ${trimmedText}`;
               bufferStructuredActions: isEditLikeIntent
             });
             this._consumeQueuedModeOverride();
+            const mcpSystemOverlay = await this._buildMcpSystemOverlay(
+              workspaceFolder
+            );
+            const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay]
+              .filter(Boolean)
+              .join("\n\n");
             response = await this.agent.chat(
               requestText,
               workspaceFolder,
@@ -6260,8 +7108,11 @@ ${trimmedText}`;
               this.abortController.signal,
               {
                 mode: requestMode,
-                systemOverlay,
-                intentOverride: workflowIntentOverride || undefined,
+                systemOverlay: combinedSystemOverlay,
+                intentOverride:
+                  workflowIntentOverride ||
+                  followupIntentOverride ||
+                  undefined,
                 interactionStyle: this._getInteractionStyleForRequest(
                   isEditLikeIntent
                 ),
@@ -6283,7 +7134,10 @@ ${trimmedText}`;
               config.provider,
               config.model,
               duration,
-              !response.error
+              !response.error,
+              response?.pipelineMetrics ||
+                this.agent.getLastPipelineMetrics?.() ||
+                null
             );
             this._postAutoHealState();
           } catch (chatError) {
@@ -6388,28 +7242,34 @@ ${trimmedText}`;
         }
 
         if (response.actions && response.actions.length > 0) {
-          let inspectionRounds = 0;
+          const mcpSystemOverlay = await this._buildMcpSystemOverlay(
+            workspaceFolder
+          );
+          const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay]
+            .filter(Boolean)
+            .join("\n\n");
+          let evidenceRounds = 0;
           while (
-            isEditLikeIntent &&
-            this._hasOnlyInspectionActions(response.actions) &&
-            inspectionRounds < MAX_AGENTIC_INSPECTION_ROUNDS
+            this._hasOnlyEvidenceGatheringActions(response.actions) &&
+            evidenceRounds < MAX_AGENTIC_EVIDENCE_ROUNDS
           ) {
-            inspectionRounds += 1;
+            evidenceRounds += 1;
             this._postMessage({
               type: "status",
-              text: `Inspection round ${inspectionRounds}: gathering workspace evidence before editing...`
+              text: `Evidence round ${evidenceRounds}: running tool actions before continuing...`
             });
-            response = await this._runAgenticInspectionRound(
+            response = await this._runAgenticEvidenceRound(
               requestText,
               response.actions,
               workspaceFolder,
               activeRuntimeConfig || (await this._getEffectiveAiConfig()),
-              requestMode
+              requestMode,
+              combinedSystemOverlay
             );
             if (!response || response.error) {
               this._postMessage({
                 type: "error",
-                text: response?.error || "Inspection follow-up failed."
+                text: response?.error || "Tool follow-up failed."
               });
               return;
             }
@@ -6418,7 +7278,7 @@ ${trimmedText}`;
           if (
             !hasDirectStructuredActions &&
             isEditLikeIntent &&
-            !this._hasOnlyInspectionActions(response.actions)
+            !this._hasOnlyEvidenceGatheringActions(response.actions)
           ) {
             const gateResult = await this._runGStackEditGate(
               requestText,
@@ -6431,6 +7291,14 @@ ${trimmedText}`;
               }
             );
             response = gateResult.response;
+          }
+
+          if (response?.error) {
+            this._postMessage({
+              type: "error",
+              text: response.error
+            });
+            return;
           }
 
           const hasFileAction = response.actions.some(
@@ -6644,6 +7512,20 @@ ${trimmedText}`;
                   continue;
                 }
 
+                if (action.type === "apply_diff") {
+                  const syntaxValidation = await validateSyntax(
+                    activeFileName || action.path || "active-file",
+                    nextContent
+                  );
+                  if (!syntaxValidation.valid) {
+                    this._postMessage({
+                      type: "error",
+                      text: `Refusing to apply syntax-invalid diff to ${action.path}: ${syntaxValidation.error}`
+                    });
+                    continue;
+                  }
+                }
+
                 this._postMessage({
                   type: "status",
                   text:
@@ -6700,6 +7582,11 @@ ${trimmedText}`;
                 this._postMessage({
                   type: "status",
                   text: `Skipped command without workspace: ${action.command}`
+                });
+              } else if (action.type === "mcp_tool") {
+                this._postMessage({
+                  type: "error",
+                  text: "MCP tool calls require an open workspace folder with mcp.config.json."
                 });
               }
             }
@@ -6782,6 +7669,8 @@ ${trimmedText}`;
                 });
                 continue;
               }
+              insideActions.push({ action, result: null });
+            } else {
               insideActions.push({ action, result: null });
             }
           }
@@ -7552,6 +8441,34 @@ ${trimmedText}`;
                   text: `Error loading GitHub context: ${error.message}`
                 });
               }
+            } else if (action.type === "mcp_tool") {
+              this._postMessage({
+                type: "status",
+                text: `Running MCP tool ${action.serverName}.${action.toolName}...`
+              });
+              try {
+                const result = await this._runMcpToolAction(action, workspaceFolder);
+                if (result.success) {
+                  this._postMessage({
+                    type: "stream",
+                    text: result.text
+                  });
+                  this._postMessage({
+                    type: "status",
+                    text: `\u2705 MCP tool completed: ${action.serverName}.${action.toolName}`
+                  });
+                } else {
+                  this._postMessage({
+                    type: "error",
+                    text: result.error || `MCP tool failed: ${action.serverName}.${action.toolName}`
+                  });
+                }
+              } catch (error) {
+                this._postMessage({
+                  type: "error",
+                  text: `Error running MCP tool ${action.serverName}.${action.toolName}: ${error.message}`
+                });
+              }
             } else if (action.type === "graphify") {
               console.log("[ChatPanel] Executing graphify action");
               
@@ -7988,7 +8905,7 @@ ${trimmedText}`;
             provider: selectedProvider,
             model: selectedModel,
             providers: this._buildProviderCatalog(),
-            keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Default, will update
+            keyPresence: this._getImmediateProviderPresence(),
             models: defaultModels,
             ...this._getImageInputCapability(selectedProvider, selectedModel)
           });
@@ -8001,6 +8918,9 @@ ${trimmedText}`;
           this._postSessionState();
           this._postWorkspaceMemorySettings().catch((error) => {
             console.warn("[ChatPanel] Failed to post workspace settings:", error);
+          });
+          this._postMcpSettings(workspaceFolder).catch((error) => {
+            console.warn("[ChatPanel] Failed to post MCP settings:", error);
           });
           
           // Fetch real key presence in background
@@ -8025,11 +8945,19 @@ ${trimmedText}`;
         this._fetchAndSendModels(selectedProvider);
       } else if (message.type === "reloadWorkspaceSettings") {
         await this._postWorkspaceMemorySettings();
+      } else if (message.type === "reloadMcpSettings") {
+        await this._postMcpSettings(workspaceFolder);
       } else if (message.type === "saveWorkspaceMemorySettings") {
         await this._saveWorkspaceMemorySettings(message.settings || {});
         this._postMessage({
           type: "status",
           text: "Workspace tracking settings saved."
+        });
+      } else if (message.type === "saveMcpConfig") {
+        await this._saveMcpConfig(message.configText || "");
+        this._postMessage({
+          type: "status",
+          text: "MCP configuration saved."
         });
       } else if (message.type === "workspaceSettingsAction") {
         try {
@@ -8038,6 +8966,18 @@ ${trimmedText}`;
           this._postMessage({
             type: "error",
             text: `Workspace action failed: ${error.message}`
+          });
+        }
+      } else if (message.type === "mcpSettingsAction") {
+        try {
+          await this._handleMcpSettingsAction(
+            message.action,
+            message.serverName || ""
+          );
+        } catch (error) {
+          this._postMessage({
+            type: "error",
+            text: `MCP action failed: ${error.message}`
           });
         }
       } else if (message.type === "createSession") {
@@ -8133,7 +9073,7 @@ ${trimmedText}`;
               provider: message.provider,
               model: nextModel,
               providers: this._buildProviderCatalog(),
-              keyPresence: { ollama: true, groq: false, openrouter: false, anthropic: false, nvidia: false }, // Will update in background
+              keyPresence: this._getImmediateProviderPresence(),
               models: defaultModels,
               ...this._getImageInputCapability(message.provider, nextModel)
             });
@@ -8283,7 +9223,7 @@ ${trimmedText}`;
         }
       } else if (message.type === "openExternal") {
         const targetUrl = this._sanitizeExternalUrl(message.url, {
-          allowHttp: true,
+          allowHttp: false,
           allowHttps: true
         });
         if (!targetUrl) {

@@ -31,10 +31,18 @@ describe("cli", () => {
 
   test("parses flags and positional target", () => {
     expect(parseArgs(["src/app.js", "--check", "--json"])).toMatchObject({
+      command: "fix",
       targetPath: "src/app.js",
       check: true,
       json: true,
       write: false
+    });
+  });
+
+  test("defaults to the interactive agent session with no arguments", () => {
+    expect(parseArgs([])).toMatchObject({
+      command: "agent",
+      interactiveDefault: true
     });
   });
 
@@ -106,6 +114,17 @@ describe("cli", () => {
       agentMessage: "fix src/cli.js",
       mode: "heavy",
       maxSteps: 8
+    });
+  });
+
+  test("parses exec as a one-shot agent task", () => {
+    expect(
+      parseArgs(["exec", "fix", "the", "CLI", "--mode", "deep", "--max-steps", "4"])
+    ).toMatchObject({
+      command: "exec",
+      agentMessage: "fix the CLI",
+      mode: "deep",
+      maxSteps: 4
     });
   });
 
@@ -271,8 +290,8 @@ describe("cli", () => {
 
     expect(exitCode).toBe(2);
     expect(io.error).toHaveBeenCalledWith("Unknown option: --wat");
-    expect(io.error).toHaveBeenCalledWith(expect.stringContaining("Usage: code-janitor"));
-    expect(getHelpText()).toContain("--check");
+    expect(io.error).toHaveBeenCalledWith(expect.stringContaining("code-janitor exec <task>"));
+    expect(getHelpText()).toContain("Running code-janitor with no arguments opens the interactive agent session.");
   });
 
   test("delegates chat subcommand to chat runner", async () => {
@@ -308,6 +327,43 @@ describe("cli", () => {
         agentMessage: "fix src/cli.js",
         mode: "deep",
         maxSteps: 5
+      }),
+      io
+    );
+  });
+
+  test("delegates exec subcommand to agent runner", async () => {
+    const io = createIo();
+    mockRunAgentCli.mockResolvedValue(0);
+
+    const exitCode = await runCli(
+      ["exec", "debug", "the", "CLI", "--mode", "deep", "--max-steps", "5"],
+      io
+    );
+
+    expect(exitCode).toBe(0);
+    expect(mockRunAgentCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "exec",
+        agentMessage: "debug the CLI",
+        mode: "deep",
+        maxSteps: 5
+      }),
+      io
+    );
+  });
+
+  test("delegates bare invocation to the interactive agent runner", async () => {
+    const io = createIo();
+    mockRunAgentCli.mockResolvedValue(0);
+
+    const exitCode = await runCli([], io);
+
+    expect(exitCode).toBe(0);
+    expect(mockRunAgentCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "agent",
+        interactiveDefault: true
       }),
       io
     );

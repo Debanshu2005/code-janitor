@@ -8,6 +8,7 @@
 const fs = require("fs").promises;
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
+const babelParser = require("@babel/parser");
 const os = require("os");
 
 /**
@@ -137,6 +138,41 @@ function getSyntaxCheckInvocation(filePath) {
   return null;
 }
 
+function validateJavaScriptLikeSyntax(filePath, content) {
+  const ext = path.extname(filePath).toLowerCase();
+  const plugins = [
+    "classProperties",
+    "classPrivateProperties",
+    "classPrivateMethods",
+    "decorators-legacy",
+    "dynamicImport",
+    "importAttributes",
+    "topLevelAwait"
+  ];
+
+  if (ext === ".jsx" || ext === ".tsx") {
+    plugins.push("jsx");
+  }
+  if (ext === ".ts" || ext === ".tsx") {
+    plugins.push("typescript");
+  }
+
+  try {
+    babelParser.parse(content, {
+      sourceType: "unambiguous",
+      sourceFilename: path.basename(filePath),
+      errorRecovery: false,
+      plugins
+    });
+    return { valid: true };
+  } catch (err) {
+    return {
+      valid: false,
+      error: `Syntax error: ${err.message}`
+    };
+  }
+}
+
 /**
  * Validate syntax of content before writing to file
  * Returns { valid: true } or { valid: false, error: string }
@@ -155,6 +191,10 @@ async function validateSyntax(filePath, content) {
         error: `JSON syntax error: ${err.message}`
       };
     }
+  }
+
+  if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) {
+    return validateJavaScriptLikeSyntax(filePath, content);
   }
   
   // Get syntax check command

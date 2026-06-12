@@ -5,6 +5,7 @@ const readline = require("readline");
 const AIAgent = require("./ai-agent/agent");
 const { extractReadableContent } = require("./ai-agent/web-content-utils");
 const {
+  BUILT_IN_PROVIDERS,
   buildChatRuntimeConfig,
   createDefaultIo,
   getDefaultModelForProvider,
@@ -30,6 +31,62 @@ function getAgentLoopOverlay() {
     "Do not restate the whole plan every turn.",
     "When the task is complete, stop emitting actions and give the final plain-text answer."
   ].join("\n");
+}
+
+function getAgentHelpText() {
+  return [
+    "Slash commands:",
+    "  /help                 Show available commands",
+    "  /status               Show the active provider, model, and mode",
+    "  /mode fast|heavy|deep Switch reasoning mode",
+    "  /provider NAME        Switch provider",
+    "  /model NAME           Set the active model",
+    "  /clear                Start a fresh agent session",
+    "  /exit                 Leave the session",
+    "",
+    "Shortcuts:",
+    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter"
+  ].join("\n");
+}
+
+function logAgentStatus(io, { mode, model, provider }) {
+  io.log(`Mode: ${mode} | Provider: ${provider} | Model: ${model}`);
+}
+
+function buildProviderSwitchMessage(provider, model, options = {}) {
+  const activeConfig = resolveCliAiConfig({
+    ...options,
+    model,
+    provider
+  });
+  const missingKey =
+    (provider === "anthropic" && !activeConfig.anthropicApiKey) ||
+    (provider === "groq" && !activeConfig.groqApiKey) ||
+    (provider === "nvidia" && !activeConfig.nvidiaApiKey) ||
+    (provider === "openrouter" && !activeConfig.openrouterApiKey);
+
+  if (missingKey) {
+    return `Provider switched to ${provider}. Add the API key in env vars or ${getDefaultCliConfigPath()}.`;
+  }
+
+  return `Provider switched to ${provider} (${model}).`;
+}
+
+function pickModelForProvider(provider, currentModel) {
+  const trimmedModel = String(currentModel || "").trim();
+  if (!trimmedModel) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  if (provider === "nvidia" && !isLikelyNvidiaModel(trimmedModel)) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  if (provider !== "nvidia" && isLikelyNvidiaModel(trimmedModel)) {
+    return getDefaultModelForProvider(provider);
+  }
+
+  return trimmedModel;
 }
 
 function findStructuredActionStart(text) {
@@ -581,15 +638,15 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
   let model = initialConfig.model || getDefaultModelForProvider(provider);
   let agent = new AIAgent();
 
-  normalizedIo.log("Code Janitor agent loop");
-  normalizedIo.log(
-    "Commands: /fast, /heavy, /deep, /anthropic, /groq, /nvidia, /ollama, /openrouter, /clear, /exit"
-  );
+  normalizedIo.log("Code Janitor");
+  normalizedIo.log("Interactive agent session. Ask for edits, debugging, reviews, or repo walkthroughs.");
+  logAgentStatus(normalizedIo, { mode, model, provider });
+  normalizedIo.log("Type /help for commands.");
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "code-janitor-agent> "
+    prompt: "janitor> "
   });
 
   rl.prompt();
@@ -605,6 +662,18 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
 
       if (/^\/(exit|quit)$/i.test(trimmed)) {
         rl.close();
+        return;
+      }
+
+      if (/^\/help$/i.test(trimmed)) {
+        normalizedIo.log(getAgentHelpText());
+        rl.prompt();
+        return;
+      }
+
+      if (/^\/status$/i.test(trimmed)) {
+        logAgentStatus(normalizedIo, { mode, model, provider });
+        rl.prompt();
         return;
       }
 
@@ -629,32 +698,46 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
         return;
       }
 
+      const modeMatch = trimmed.match(/^\/mode\s+(fast|heavy|deep)$/i);
+      if (modeMatch) {
+        mode = modeMatch[1].toLowerCase();
+        normalizedIo.log(`Mode switched to ${mode}.`);
+        rl.prompt();
+        return;
+      }
+
+      const providerMatch = trimmed.match(/^\/provider\s+([a-z0-9._-]+)$/i);
+      if (providerMatch) {
+        const nextProvider = providerMatch[1].toLowerCase();
+        if (!BUILT_IN_PROVIDERS.has(nextProvider)) {
+          normalizedIo.error(
+            `Unknown provider "${nextProvider}". Choose one of: ${Array.from(BUILT_IN_PROVIDERS)
+              .sort()
+              .join(", ")}.`
+          );
+          rl.prompt();
+          return;
+        }
+
+        provider = nextProvider;
+        model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
+        rl.prompt();
+        return;
+      }
+
+      const modelMatch = trimmed.match(/^\/model\s+(.+)$/i);
+      if (modelMatch) {
+        model = modelMatch[1].trim();
+        normalizedIo.log(`Model switched to ${model}.`);
+        rl.prompt();
+        return;
+      }
+
       if (/^\/(anthropic|groq|nvidia|ollama|openrouter)$/i.test(trimmed)) {
         provider = trimmed.slice(1).toLowerCase();
-        if (
-          provider !== "nvidia" ||
-          !isLikelyNvidiaModel(model) ||
-          !String(model || "").trim()
-        ) {
-          model = getDefaultModelForProvider(provider);
-        }
-        const activeConfig = resolveCliAiConfig({
-          ...options,
-          model,
-          provider
-        });
-        const missingKey =
-          (provider === "anthropic" && !activeConfig.anthropicApiKey) ||
-          (provider === "groq" && !activeConfig.groqApiKey) ||
-          (provider === "nvidia" && !activeConfig.nvidiaApiKey) ||
-          (provider === "openrouter" && !activeConfig.openrouterApiKey);
-        if (missingKey) {
-          normalizedIo.log(
-            `Provider switched to ${provider}. Add the API key in env vars or ${getDefaultCliConfigPath()}.`
-          );
-        } else {
-          normalizedIo.log(`Provider switched to ${provider} (${model}).`);
-        }
+        model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
         rl.prompt();
         return;
       }

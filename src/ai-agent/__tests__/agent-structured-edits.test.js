@@ -185,6 +185,38 @@ describe("AIAgent structured edit parsing", () => {
     ]);
   });
 
+  test("parses MCP_TOOL actions as grounding steps", () => {
+    const agent = new AIAgent();
+    const response = [
+      "MCP_TOOL:",
+      "```json",
+      "{",
+      "  \"server\": \"filesystem\",",
+      "  \"tool\": \"read_file\",",
+      "  \"arguments\": {",
+      "    \"path\": \"src/extension.js\"",
+      "  }",
+      "}",
+      "```"
+    ].join("\n");
+
+    const parsed = agent._parseResponse(response);
+
+    expect(parsed.actions).toEqual([
+      {
+        type: "mcp_tool",
+        serverName: "filesystem",
+        toolName: "read_file",
+        arguments: {
+          path: "src/extension.js"
+        }
+      }
+    ]);
+    expect(
+      agent._hasRequiredActions("edit", "inspect the file before editing", parsed.actions)
+    ).toBe(true);
+  });
+
   test("loads workspace memory context when a handoff file is present", async () => {
     const workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "cj-agent-memory-")
@@ -226,6 +258,351 @@ describe("AIAgent structured edit parsing", () => {
     expect(result).toContain("Repository Blueprint");
     expect(result).toContain("Recent Changes");
     expect(result).toContain("Git Snapshot");
+  });
+
+  test("loads workspace memory from the shared root mirror when it is the available handoff file", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-root-")
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, "workspacememory.md"),
+      [
+        "# Workspace Memory",
+        "",
+        "## Repository Blueprint",
+        "- Audience: any AI agent working in this repository can treat this file as the current handoff ledger.",
+        "",
+        "## Recent Changes",
+        "- 2026-05-16T10:00:00.000Z | saved | src/ai-agent/chat-panel.js"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "use the handoff memory before you scan",
+      "scan"
+    );
+
+    expect(result).toContain("Workspace Memory Context");
+    expect(result).toContain("Repository Blueprint");
+    expect(result).toContain("Recent Changes");
+  });
+
+  test("loads workspace memory context from workspace.json when the structured manifest is present", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-json-")
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, "workspace.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          workspace: {
+            name: "demo-repo",
+            root: workspaceRoot,
+            activeFile: "src/extension.js",
+            outputFiles: {
+              structuredManifest: "workspace.json"
+            },
+            suggestedStartingPoints: ["src/extension.js", "README.md"],
+            stats: {
+              totalFiles: 12,
+              topLevelAreas: [{ name: "src", count: 8 }],
+              primaryFileTypes: [{ name: ".js", count: 10 }],
+              keyFiles: ["src/extension.js"],
+              fileInventory: [{ path: "src/extension.js", extension: ".js" }]
+            }
+          },
+          package: {
+            available: true,
+            name: "demo-repo",
+            version: "1.0.0",
+            scripts: { test: "jest" },
+            dependencies: { jest: "^29.0.0" },
+            devDependencies: {}
+          },
+          currentStack: {
+            trackedChangeCount: 1,
+            trackedFileSnapshotCount: 1,
+            changeTypeCounts: { save: 1, create: 0, delete: 0, rename: 0 },
+            lastActivityAt: "2026-05-18T10:00:00.000Z"
+          },
+          recentChanges: [
+            {
+              type: "save",
+              path: "src/extension.js",
+              summary: "Updated extension command wiring.",
+              recordedAt: "2026-05-18T10:00:00.000Z"
+            }
+          ],
+          hotFiles: [{ filePath: "src/extension.js", count: 1 }],
+          git: {
+            available: true,
+            branch: "main",
+            statusSummary: "1 modified",
+            statusLines: ["M src/extension.js"]
+          },
+          github: {
+            available: false,
+            summary: "GitHub context unavailable"
+          },
+          graphify: {
+            reportAvailable: true,
+            reportPath: "graphify-out/GRAPH_REPORT.md",
+            highlights: "## Overview\n- Total Files: 12"
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "use the workspace manifest before you scan the repo",
+      "scan"
+    );
+
+    expect(result).toContain("Workspace Memory Context");
+    expect(result).toContain("Structured manifest");
+    expect(result).toContain("Recent Changes");
+    expect(result).toContain("Git Snapshot");
+  });
+
+  test("loads agent instructions context from AGENTS.md when repo instructions are present", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-instructions-")
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, "AGENTS.md"),
+      [
+        "# AI Agent Instructions",
+        "",
+        "## Repository Context Priority",
+        "1. Read workspace.json first",
+        "2. Read graphify-out/GRAPH_REPORT.md next",
+        "",
+        "## Graphify Knowledge Graph",
+        "Use Graphify before broad repo scans."
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "follow the repo instructions before scanning the codebase",
+      "scan"
+    );
+
+    expect(result).toContain("Agent Instructions Context");
+    expect(result).toContain("AGENTS.md");
+    expect(result).toContain("Repository Context Priority");
+    expect(result).toContain("Graphify Knowledge Graph");
+  });
+
+  test("loads agent instructions for repo-context questions even without naming AGENTS.md", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-instructions-repo-context-")
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, "AGENTS.md"),
+      [
+        "# AI Agent Instructions",
+        "",
+        "## Repository Context Priority",
+        "1. Read workspace.json first",
+        "2. Read graphify-out/GRAPH_REPORT.md next",
+        "",
+        "## Graphify Knowledge Graph",
+        "Use Graphify before broad repo scans."
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "how does src/graphify/graph-loader.js fit in this repository?",
+      "general"
+    );
+
+    expect(result).toContain("Agent Instructions Context");
+    expect(result).toContain("Repository Context Priority");
+    expect(result).not.toContain("Workspace Memory Context");
+  });
+
+  test("skips knowledge graph loading for localized edit requests", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-graph-skip-")
+    );
+    const agent = new AIAgent();
+    agent._getKnowledgeGraphAssets = jest.fn(async () => ({
+      reportText: "# Graph report",
+      graphData: null
+    }));
+
+    const result = await agent._loadKnowledgeGraph(
+      workspaceRoot,
+      "fix the current file",
+      "edit"
+    );
+
+    expect(result).toBe("");
+    expect(agent._getKnowledgeGraphAssets).not.toHaveBeenCalled();
+  });
+
+  test("skips knowledge graph loading for single-file path edits", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-graph-single-path-")
+    );
+    const agent = new AIAgent();
+    agent._getKnowledgeGraphAssets = jest.fn(async () => ({
+      reportText: "# Graph report",
+      graphData: null
+    }));
+
+    const result = await agent._loadKnowledgeGraph(
+      workspaceRoot,
+      "fix src/ai-agent/agent.js so the retry prompt stays short",
+      "edit"
+    );
+
+    expect(result).toBe("");
+    expect(agent._getKnowledgeGraphAssets).not.toHaveBeenCalled();
+  });
+
+  test("skips workspace memory for focused edit requests that already target a file", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-focused-edit-")
+    );
+    fs.mkdirSync(path.join(workspaceRoot, "graphify-out"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(workspaceRoot, "graphify-out", "WORKSPACE_MEMORY.md"),
+      [
+        "# Workspace Memory",
+        "",
+        "## Repository Blueprint",
+        "- Graphify report: available",
+        "",
+        "## Workspace Focus",
+        "- Active file in focus: src/ai-agent/agent.js",
+        "",
+        "## Hot Files",
+        "- src/ai-agent/agent.js (3 tracked changes)"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "fix src/ai-agent/agent.js so the retry prompt stays short",
+      "edit"
+    );
+
+    expect(result).toBe("");
+  });
+
+  test("uses a compact workspace memory excerpt for repo-wide edit debugging", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-compact-")
+    );
+    fs.mkdirSync(path.join(workspaceRoot, "graphify-out"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(workspaceRoot, "graphify-out", "WORKSPACE_MEMORY.md"),
+      [
+        "# Workspace Memory",
+        "",
+        "## Repository Blueprint",
+        "- Graphify report: available",
+        "",
+        "## Workspace Focus",
+        "- Active file in focus: src/ai-agent/chat-panel.js",
+        "",
+        "## Current Workspace",
+        "- Tracked files in snapshot: 12",
+        "",
+        "## Package Snapshot",
+        "- Package: code-janitor",
+        "",
+        "## Recent Changes",
+        "- 2026-05-16T10:00:00.000Z | saved | src/ai-agent/chat-panel.js",
+        "",
+        "## Hot Files",
+        "- src/ai-agent/chat-panel.js (4 tracked changes)",
+        "",
+        "## Git Snapshot",
+        "- Branch: main"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const agent = new AIAgent();
+    const result = await agent._loadWorkspaceMemory(
+      workspaceRoot,
+      "debug the ai response slowdown across the repo",
+      "debug"
+    );
+
+    expect(result).toContain("Workspace Memory Context");
+    expect(result).toContain("Workspace Focus");
+    expect(result).toContain("Hot Files");
+    expect(result).toContain("Git Snapshot");
+    expect(result).not.toContain("Package Snapshot");
+    expect(result).not.toContain("Recent Changes");
+  });
+
+  test("caches workspace memory reads while the handoff file is unchanged", async () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cj-agent-memory-cache-")
+    );
+    fs.mkdirSync(path.join(workspaceRoot, "graphify-out"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(workspaceRoot, "graphify-out", "WORKSPACE_MEMORY.md"),
+      [
+        "# Workspace Memory",
+        "",
+        "## Repository Blueprint",
+        "- Graphify report: available",
+        "",
+        "## Recent Changes",
+        "- 2026-05-16T10:00:00.000Z | saved | src/ai-agent/agent.js"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const readFileSpy = jest.spyOn(fs.promises, "readFile");
+    const agent = new AIAgent();
+
+    try {
+      const first = await agent._loadWorkspaceMemory(
+        workspaceRoot,
+        "what changed in the workspace recently?",
+        "scan"
+      );
+      const second = await agent._loadWorkspaceMemory(
+        workspaceRoot,
+        "what changed in the workspace recently?",
+        "scan"
+      );
+
+      expect(first).toContain("Workspace Memory Context");
+      expect(second).toContain("Workspace Memory Context");
+      expect(readFileSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   test("normalizes leading dot segments in structured edit paths", () => {
@@ -479,6 +856,38 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     expect(agent._detectIntent("How do I fix this?")).toBe("explain");
+  });
+
+  test("routes difference questions into compare intent", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._detectIntent("What's the difference between the old AI response path and the new one?")
+    ).toBe("compare");
+  });
+
+  test("routes implementation strategy questions into plan intent", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._detectIntent("Give me a migration plan for this auth flow.")
+    ).toBe("plan");
+  });
+
+  test("routes verification-focused questions into test intent", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._detectIntent("What tests should we add for this retry logic?")
+    ).toBe("test");
+  });
+
+  test("keeps edit intent when comparison text also asks for a change", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._detectIntent("Compare the two approaches and update src/app.js to use the safer one.")
+    ).toBe("edit");
   });
 
   test("treats refactor requests with explicit file changes as structured edits", () => {
@@ -1122,6 +1531,32 @@ describe("AIAgent structured edit parsing", () => {
     expect(instruction).not.toContain("%%SHOW_FIX_BUTTON%%");
   });
 
+  test("security preamble does not treat ordinary URLs as malicious by default", () => {
+    const agent = new AIAgent();
+
+    const instruction = agent._buildSystemInstruction("general", "", "fast", false);
+
+    expect(instruction).toContain(
+      "Do not treat ordinary website, documentation, API, CDN, localhost, or asset URLs as malicious on their own."
+    );
+    expect(instruction).toContain(
+      "payload delivery, credential theft, exfiltration, covert beaconing, or command execution"
+    );
+  });
+
+  test("security preamble does not treat Playwright and MCP setup as malicious by default", () => {
+    const agent = new AIAgent();
+
+    const instruction = agent._buildSystemInstruction("general", "", "fast", false);
+
+    expect(instruction).toContain(
+      "Do not treat benign developer tooling requests as malicious on their own, including MCP configuration, Playwright/browser automation for testing"
+    );
+    expect(instruction).toContain(
+      "Browser automation, HTTP requests, shell commands, and MCP tool calls should only trigger this gate when they are clearly tied to malicious goals"
+    );
+  });
+
   test("fast mode no longer asks for compact replies by default", () => {
     const agent = new AIAgent();
 
@@ -1147,6 +1582,127 @@ describe("AIAgent structured edit parsing", () => {
     expect(generalInstruction).not.toContain("Be concise and correct.");
     expect(greetingInstruction).toContain("Reply naturally and helpfully.");
     expect(greetingInstruction).not.toContain("Reply naturally and briefly.");
+  });
+
+  test("fast mode uses a compact base instruction", () => {
+    const agent = new AIAgent();
+
+    const instruction = agent._buildSystemInstruction(
+      "general",
+      "",
+      "fast",
+      false
+    );
+    const heavyInstruction = agent._buildSystemInstruction(
+      "general",
+      "",
+      "heavy",
+      false
+    );
+
+    expect(instruction).toContain("Core workspace abilities:");
+    expect(instruction).not.toContain("Code Janitor capabilities:");
+    expect(heavyInstruction).toContain("Code Janitor capabilities:");
+  });
+
+  test("fast edit mode uses a shorter execution instruction", () => {
+    const agent = new AIAgent();
+
+    const fastInstruction = agent._buildSystemInstruction(
+      "edit",
+      "",
+      "fast",
+      false
+    );
+    const heavyInstruction = agent._buildSystemInstruction(
+      "edit",
+      "",
+      "heavy",
+      false
+    );
+
+    expect(fastInstruction).toContain(
+      "Prefer PATCH for existing files and FILE only for new files or broad rewrites."
+    );
+    expect(fastInstruction.length).toBeLessThan(heavyInstruction.length);
+  });
+
+  test("fast mode avoids repo context for single-file read requests", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._shouldUseRepoContextInFastMode(
+        "read the current file and explain this function"
+      )
+    ).toBe(false);
+    expect(
+      agent._shouldUseRepoContextInFastMode(
+        "scan the repository and summarize the architecture"
+      )
+    ).toBe(true);
+  });
+
+  test("fast mode avoids repo context for localized active-file failures", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._shouldUseRepoContextInFastMode(
+        "why is the current file failing in this project"
+      )
+    ).toBe(false);
+    expect(
+      agent._shouldUseRepoContextInFastMode(
+        "why is the project failing across multiple files"
+      )
+    ).toBe(true);
+  });
+
+  test("fast mode skips workspace assist context for single-file edits", () => {
+    const agent = new AIAgent();
+
+    expect(
+      agent._shouldLoadWorkspaceAssistContext(
+        "fix src/ai-agent/agent.js so the retry prompt stays short",
+        "edit",
+        "fast",
+        "ollama"
+      )
+    ).toBe(false);
+    expect(
+      agent._shouldLoadWorkspaceAssistContext(
+        "find src/ai-agent/agent.js and src/ai-agent/chat-panel.js dependencies",
+        "debug",
+        "fast",
+        "ollama"
+      )
+    ).toBe(true);
+  });
+
+  test("fast execution prompt trims oversized repo and file context", () => {
+    const agent = new AIAgent();
+
+    const result = agent._buildFastExecutionPrompt({
+      effectiveSystemInstruction: "SYSTEM",
+      editHint: "\nUse PATCH.",
+      assistantWorkspaceContext:
+        "**Workspace Memory Context**\n" + "repo context ".repeat(300),
+      editableTargetsContext: "Editable targets: src/ai-agent/agent.js",
+      focusedEditLanguageHint: "Use JavaScript syntax.",
+      activeCtx: "Active file:\n" + "const line = 1;\n".repeat(1500),
+      contextToUse:
+        "Relevant workspace files:\n" + "File: src/other.js\n```\nvalue\n```\n".repeat(200),
+      history: "User: previous request\n" + "assistant chatter ".repeat(150),
+      resolvedMessage:
+        "fix src/ai-agent/agent.js so the retry prompt stays short"
+    });
+
+    expect(result.prompt.length).toBeLessThanOrEqual(16000);
+    expect(result.prompt).toContain(
+      "fix src/ai-agent/agent.js so the retry prompt stays short"
+    );
+    expect(result.prompt).toContain("Active file:");
+    expect(result.prompt).not.toContain("assistant chatter ".repeat(40));
+    expect(result.prompt).toContain("[context truncated for prompt budget]");
   });
 
   test("file-only retry prompt forbids placeholders and truncation", () => {
@@ -1443,6 +1999,46 @@ describe("AIAgent structured edit parsing", () => {
     expect(agent._getLatencyProfile(config, "deep", "create").maxTokens).toBe(12288);
   });
 
+  test("model size heuristic parses common model naming patterns", () => {
+    const agent = new AIAgent();
+
+    expect(agent._estimateModelSizeInBillions("qwen2.5-coder:7b")).toBe(7);
+    expect(agent._estimateModelSizeInBillions("mixtral-8x7b-32768")).toBe(56);
+    expect(agent._estimateModelSizeInBillions("meta/llama-3.1-70b-instruct")).toBe(70);
+    expect(agent._estimateModelSizeInBillions("claude-sonnet")).toBeNull();
+  });
+
+  test("larger models get smaller prompt-context budgets", () => {
+    const agent = new AIAgent();
+    const smallProfile = agent._getLatencyProfile(
+      {
+        provider: "ollama",
+        model: "qwen2.5-coder:3b",
+        maxTokens: { fast: 2048, heavy: 4096, deep: 8192, create: 12288 }
+      },
+      "fast",
+      "edit"
+    );
+    const largeProfile = agent._getLatencyProfile(
+      {
+        provider: "nvidia",
+        model: "meta/llama-3.1-70b-instruct",
+        maxTokens: { fast: 2048, heavy: 4096, deep: 8192, create: 12288 }
+      },
+      "fast",
+      "edit"
+    );
+
+    expect(largeProfile.contextChars).toBeLessThan(smallProfile.contextChars);
+    expect(largeProfile.fileSnippetChars).toBeLessThan(smallProfile.fileSnippetChars);
+    expect(largeProfile.fastExecutionPromptChars).toBeLessThan(
+      smallProfile.fastExecutionPromptChars
+    );
+    expect(largeProfile.activeFileContextChars).toBeLessThan(
+      smallProfile.activeFileContextChars
+    );
+  });
+
   test("fast edit requests can use the larger configured edit budget", () => {
     const agent = new AIAgent();
     const config = {
@@ -1565,6 +2161,74 @@ describe("AIAgent structured edit parsing", () => {
     });
 
     expect(agent._appendConversationEntry).not.toHaveBeenCalled();
+  });
+
+  test("successful chats expose explicit pipeline metrics", async () => {
+    const agent = new AIAgent();
+    agent._prepareRuntimeConfig = jest.fn(async (config) => config);
+    agent.getConfig = jest.fn(() => ({
+      enabled: true,
+      provider: "custom:test",
+      model: "gpt-like",
+      timeout: 1000
+    }));
+    agent._buildFetchedWebContext = jest.fn(async () => "");
+    agent._getLatencyProfile = jest.fn(() => ({
+      relevantFileCount: 1,
+      fileSnippetChars: 200,
+      contextChars: 2000,
+      maxTokens: 256
+    }));
+    agent._getEditorState = jest.fn(() => ({ allOpenTabs: [] }));
+    agent._resolveEditableTargets = jest.fn(() => ({ scope: "workspace", paths: [] }));
+    agent._buildSystemInstruction = jest.fn(() => "system");
+    agent._getActiveFileContext = jest.fn(() => "");
+    agent._shouldUseRepoContextInFastMode = jest.fn(() => false);
+    agent._buildPromptHistoryContext = jest.fn(() => "");
+    agent._createRequestSignal = jest.fn(() => undefined);
+    agent._buildRequestOptions = jest.fn(() => ({
+      url: "https://example.test",
+      headers: {},
+      body: "{}",
+      parseChunk: jest.fn(() => null)
+    }));
+    agent._readResponseText = jest.fn(async () => "All set.");
+    agent._parseResponse = jest.fn(() => ({ text: "All set.", actions: [] }));
+
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: true, value: undefined }),
+          cancel: jest.fn()
+        })
+      }
+    }));
+
+    const result = await agent.chat("explain the current file", "/workspace", null, null, {
+      runtimeConfig: {
+        enabled: true,
+        provider: "custom:test",
+        model: "gpt-like",
+        timeout: 1000
+      }
+    });
+
+    expect(result.pipelineMetrics).toBeDefined();
+    expect(result.pipelineMetrics.mode).toBe("fast");
+    expect(result.pipelineMetrics.stages.map((stage) => stage.name)).toEqual(
+      expect.arrayContaining([
+        "prepare_request",
+        "context_assembly",
+        "prompt_construction",
+        "token_budget_and_routing",
+        "llm_inference",
+        "output_parser",
+        "output_validation",
+        "memory_update"
+      ])
+    );
+    expect(agent.getLastPipelineMetrics()).toEqual(result.pipelineMetrics);
   });
 
   test("chat rejects image attachments for text-only models before requesting the provider", async () => {
@@ -1701,8 +2365,131 @@ describe("AIAgent structured edit parsing", () => {
       expect.any(Object),
       expect.stringContaining("Return ONLY executable actions now."),
       "fast",
-      "edit"
+      "edit",
+      []
     );
+    expect(result.actions).toEqual([
+      {
+        type: "patch",
+        path: "src/app.js",
+        search: "const status = 'draft';\n",
+        replace: "const status = 'ready';\n"
+      }
+    ]);
+  });
+
+  test("structured retries preserve image attachments and extended timeout budget", async () => {
+    const agent = new AIAgent();
+    const images = [
+      {
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,ZmFrZQ=="
+      }
+    ];
+
+    agent._prepareRuntimeConfig = jest.fn(async (config) => config);
+    agent.getConfig = jest.fn(() => ({ enabled: true, provider: "custom:test", timeout: 1000, model: "vision-pro" }));
+    agent._loadKnowledgeGraph = jest.fn(async () => "");
+    agent._buildFetchedWebContext = jest.fn(async () => "");
+    agent._getLatencyProfile = jest.fn(() => ({ relevantFileCount: 1, fileSnippetChars: 200, contextChars: 2000, maxTokens: 256 }));
+    agent._getEditorState = jest.fn(() => ({ allOpenTabs: [] }));
+    agent._resolveEditableTargets = jest.fn(() => ({ scope: "workspace", paths: [] }));
+    agent._buildSystemInstruction = jest.fn(() => "system");
+    agent._getActiveFileContext = jest.fn(() => "");
+    agent._shouldUseRepoContextInFastMode = jest.fn(() => false);
+    agent._buildPromptHistoryContext = jest.fn(() => "");
+    agent._createRequestSignal = jest.fn(() => undefined);
+    agent._buildRequestOptions = jest
+      .fn()
+      .mockImplementation((config, prompt, mode, intent, requestImages) => ({
+        url: "https://example.test",
+        headers: {},
+        body: JSON.stringify({
+          prompt,
+          mode,
+          intent,
+          requestImages: Array.isArray(requestImages) ? requestImages : []
+        }),
+        parseChunk: jest.fn(() => null)
+      }));
+    agent._readResponseText = jest
+      .fn()
+      .mockResolvedValueOnce("I'll inspect the screenshot and handle it.")
+      .mockResolvedValueOnce(
+        [
+          "PATCH: src/app.js",
+          "SEARCH:",
+          "```js",
+          "const status = 'draft';",
+          "```",
+          "REPLACE:",
+          "```js",
+          "const status = 'ready';",
+          "```"
+        ].join("\n")
+      );
+
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: true, value: undefined }),
+          cancel: jest.fn()
+        })
+      }
+    }));
+
+    const result = await agent.chat(
+      "fix the UI shown in the screenshot",
+      "/workspace",
+      null,
+      null,
+      {
+        intentOverride: "edit",
+        forceStructuredEdits: true,
+        runtimeConfig: {
+          enabled: true,
+          provider: "custom:test",
+          timeout: 1000,
+          model: "vision-pro"
+        },
+        images
+      }
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(agent._buildRequestOptions).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Object),
+      expect.any(String),
+      "fast",
+      "edit",
+      [
+        {
+          name: "image-1",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,ZmFrZQ==",
+          base64Data: "ZmFrZQ=="
+        }
+      ]
+    );
+    expect(agent._buildRequestOptions).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Object),
+      expect.stringContaining("Return ONLY executable actions now."),
+      "fast",
+      "edit",
+      [
+        {
+          name: "image-1",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,ZmFrZQ==",
+          base64Data: "ZmFrZQ=="
+        }
+      ]
+    );
+    expect(agent._createRequestSignal).toHaveBeenNthCalledWith(1, null, 360000);
+    expect(agent._createRequestSignal).toHaveBeenNthCalledWith(2, null, 360000);
     expect(result.actions).toEqual([
       {
         type: "patch",
@@ -1842,6 +2629,40 @@ describe("AIAgent structured edit parsing", () => {
     );
 
     expect(text).toBe("Hello world");
+  });
+
+  test("falls back to raw JSON provider bodies when no SSE tokens are parsed", async () => {
+    const agent = new AIAgent();
+    const encoder = new TextEncoder();
+    const body = JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: "Hello from a non-streaming provider"
+          }
+        }
+      ]
+    });
+    let index = 0;
+
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (index > 0) {
+              return { done: true, value: undefined };
+            }
+            index += 1;
+            return { done: false, value: encoder.encode(body) };
+          },
+          cancel: jest.fn()
+        })
+      }
+    };
+
+    const text = await agent._readResponseText(response, () => null);
+
+    expect(text).toBe("Hello from a non-streaming provider");
   });
 
   test("does not treat a far-earlier repeated block as stream repetition", () => {

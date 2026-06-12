@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.0.0",
+  "version": "1.2.2",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -53,6 +53,7 @@
     "onCommand:codeJanitor.livePreview",
     "onCommand:codeJanitor.validateFrontend",
     "onCommand:codeJanitor.openChat",
+    "onCommand:codeJanitor.showProjectPlanner",
     "onCommand:codeJanitor.showGitHubContext",
     "onCommand:codeJanitor.refreshWorkspaceMemory",
     "onCommand:codeJanitor.openWorkspaceMemory",
@@ -64,7 +65,8 @@
     "onCommand:codeJanitor.generateEdgeCases",
     "onCommand:codeJanitor.executeTests",
     "onCommand:codeJanitor.generateDocumentation",
-    "onView:codeJanitor.chatSidebar"
+    "onView:codeJanitor.chatSidebar",
+    "onView:codeJanitor.projectPlanner"
   ],
   "contributes": {
     "viewsContainers": {
@@ -77,6 +79,14 @@
       ]
     },
     "views": {
+      "explorer": [
+        {
+          "id": "codeJanitor.projectPlanner",
+          "name": "Project Planner",
+          "type": "webview",
+          "icon": "src/ai-agent/logo.png"
+        }
+      ],
       "codeJanitorSidebar": [
         {
           "id": "codeJanitor.chatSidebar",
@@ -239,7 +249,7 @@
         "codeJanitor.assistant.workspaceMemory.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Continuously track workspace file activity and maintain a reusable Markdown repo ledger with Graphify, Git, and GitHub context for AI handoff."
+          "description": "Continuously track workspace file activity and maintain a reusable Markdown repo ledger plus a structured workspace.json manifest with Graphify, Git, and GitHub context for AI handoff."
         },
         "codeJanitor.assistant.workspaceMemory.autoRefreshDelay": {
           "type": "number",
@@ -280,7 +290,7 @@
         "codeJanitor.assistant.workspaceMemory.outputPath": {
           "type": "string",
           "default": "graphify-out/WORKSPACE_MEMORY.md",
-          "description": "Workspace-relative path for the generated assistant memory Markdown repo ledger."
+          "description": "Workspace-relative path for the generated assistant memory Markdown repo ledger. Code Janitor also writes a structured workspace.json manifest at the workspace root."
         },
         "codeJanitor.assistant.projectPlanner.enabled": {
           "type": "boolean",
@@ -334,6 +344,11 @@
       {
         "command": "codeJanitor.openChat",
         "title": "Open AI Chat",
+        "category": "Code Janitor"
+      },
+      {
+        "command": "codeJanitor.showProjectPlanner",
+        "title": "Show Project Planner",
         "category": "Code Janitor"
       },
       {
@@ -410,6 +425,9 @@
           "command": "codeJanitor.openChat"
         },
         {
+          "command": "codeJanitor.showProjectPlanner"
+        },
+        {
           "command": "codeJanitor.showGitHubContext"
         },
         {
@@ -435,6 +453,23 @@
         },
         {
           "command": "codeJanitor.generateDocumentation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "codeJanitor.refreshWorkspaceMemory",
+          "when": "view == codeJanitor.projectPlanner",
+          "group": "navigation"
+        },
+        {
+          "command": "codeJanitor.showProjectPlanner",
+          "when": "view == codeJanitor.projectPlanner",
+          "group": "navigation@0"
+        },
+        {
+          "command": "codeJanitor.openChat",
+          "when": "view == codeJanitor.projectPlanner",
+          "group": "navigation@1"
         }
       ]
     },
@@ -495,10 +530,10 @@
   "scripts": {
     "start": "node src/cli.js",
     "build": "npm run package",
-    "test": "node node_modules/jest/bin/jest.js",
+    "test": "jest",
     "test:setup": "node setup-tests.js",
-    "test:watch": "node node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "node node_modules/jest/bin/jest.js --coverage",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "lint": "eslint src/**/*.js",
     "lint:fix": "eslint --fix src/**/*.js",
     "format:js": "prettier --write \"src/**/*.js\"",
@@ -512,6 +547,7 @@
     "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@babel/core": "^7.26.0",
     "@babel/generator": "^7.26.2",
     "@babel/parser": "^7.26.2",
@@ -524,7 +560,8 @@
     "import-fresh": "^3.3.0",
     "parent-module": "^1.0.1",
     "parse5": "^8.0.0",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.32.0",

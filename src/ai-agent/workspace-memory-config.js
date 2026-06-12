@@ -2,6 +2,7 @@ const path = require("path");
 
 const DEFAULT_OUTPUT_RELATIVE_PATH = "graphify-out/WORKSPACE_MEMORY.md";
 const SHARED_WORKSPACE_MEMORY_FILENAME = "workspacememory.md";
+const SHARED_WORKSPACE_JSON_FILENAME = "workspace.json";
 
 function sanitizeOutputRelativePath(value) {
   const raw = String(value || "").trim().replace(/\\/g, "/");
@@ -31,6 +32,10 @@ function resolveWorkspaceMemoryPaths(workspaceRoot, outputRelativePath) {
     sharedMirrorRelativePath: SHARED_WORKSPACE_MEMORY_FILENAME,
     sharedMirrorAbsolutePath: workspaceRoot
       ? path.join(workspaceRoot, SHARED_WORKSPACE_MEMORY_FILENAME)
+      : "",
+    structuredManifestRelativePath: SHARED_WORKSPACE_JSON_FILENAME,
+    structuredManifestAbsolutePath: workspaceRoot
+      ? path.join(workspaceRoot, SHARED_WORKSPACE_JSON_FILENAME)
       : ""
   };
 }
@@ -38,6 +43,7 @@ function resolveWorkspaceMemoryPaths(workspaceRoot, outputRelativePath) {
 module.exports = {
   DEFAULT_OUTPUT_RELATIVE_PATH,
   SHARED_WORKSPACE_MEMORY_FILENAME,
+  SHARED_WORKSPACE_JSON_FILENAME,
   sanitizeOutputRelativePath,
   resolveWorkspaceMemoryPaths
 };

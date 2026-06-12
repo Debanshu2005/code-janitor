@@ -17,6 +17,10 @@ jest.mock(
         get: jest.fn(),
         update: jest.fn()
       }))
+    },
+    ConfigurationTarget: {
+      Global: "global",
+      Workspace: "workspace"
     }
   }),
   { virtual: true }
@@ -63,6 +67,16 @@ describe("ChatPanel structured edit helpers", () => {
     expect(result.text).toContain("const line1 = 1;");
     expect(result.text).toContain("const line1400 = 1400;");
     expect(result.text).toContain("[truncated");
+  });
+
+  test("delegates intent detection to the agent when the panel needs an override", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      _detectIntent: jest.fn(() => "edit")
+    };
+
+    expect(panel._detectIntent("fix src/app.js")).toBe("edit");
+    expect(panel.agent._detectIntent).toHaveBeenCalledWith("fix src/app.js");
   });
 
   test("syntax scan checks dirty HTML buffers through the shared syntax validator", async () => {
@@ -206,6 +220,41 @@ describe("ChatPanel structured edit helpers", () => {
     expect(summary).toContain("insert src/app.js");
   });
 
+  test("normalizes followup intent overrides for suggestion buttons", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(panel._normalizeFollowupIntentOverride("code")).toBe("edit");
+    expect(panel._normalizeFollowupIntentOverride("plan")).toBe("plan");
+    expect(panel._normalizeFollowupIntentOverride("ask")).toBe("general");
+    expect(panel._normalizeFollowupIntentOverride("review")).toBe("review");
+  });
+
+  test("ignores unsupported followup intent overrides", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(panel._normalizeFollowupIntentOverride("")).toBe("");
+    expect(panel._normalizeFollowupIntentOverride("unknown-mode")).toBe("");
+  });
+
+  test("fast mode skips eager workspace prep even for repo-scoped prompts", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._shouldPrepareWorkspaceContext(
+        "scan",
+        "scan the repository and summarize the architecture",
+        "fast"
+      )
+    ).toBe(false);
+    expect(
+      panel._shouldPrepareWorkspaceContext(
+        "scan",
+        "scan the repository and summarize the architecture",
+        "heavy"
+      )
+    ).toBe(true);
+  });
+
   test("structured action summary includes todo list updates", () => {
     const panel = Object.create(ChatPanel.prototype);
 
@@ -238,6 +287,21 @@ describe("ChatPanel structured edit helpers", () => {
     expect(summary).toContain("content insertion");
     expect(summary).toContain("Apply diff to src/app.js");
     expect(summary).toContain("Insert content into src/app.js");
+  });
+
+  test("structured action summary includes MCP tool previews", () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    const summary = panel._buildStructuredActionDisplaySummary([
+      {
+        type: "mcp_tool",
+        serverName: "filesystem",
+        toolName: "read_file"
+      }
+    ]);
+
+    expect(summary).toContain("MCP tool call");
+    expect(summary).toContain("filesystem.read_file");
   });
 
   test("treats apply_diff and insert_content as executable file actions", () => {
@@ -464,6 +528,150 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("effective AI config reports ollama after forcing a keyless cloud provider back to ollama", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const update = jest.fn().mockResolvedValue(undefined);
+    panel.agent = {
+      getConfig: jest.fn(() => ({
+        provider: "groq",
+        model: "llama-3.1-8b-instant",
+        ollamaUrl: "http://localhost:11434",
+        groqApiKey: "",
+        openrouterApiKey: "",
+        anthropicApiKey: "",
+        nvidiaApiKey: ""
+      }))
+    };
+    panel._getSelectedProviderId = jest.fn(() => "groq");
+    panel._setSelectedProviderId = jest.fn().mockResolvedValue(undefined);
+    panel._isBuiltInProvider = jest.fn((provider) =>
+      ["ollama", "groq", "openrouter", "anthropic", "nvidia"].includes(provider)
+    );
+    panel._getCustomProviderById = jest.fn(() => null);
+    panel._getStoredApiKey = jest.fn(async () => "");
+    panel._getDefaultModelForProvider = jest.fn((provider) =>
+      provider === "ollama" ? "qwen2.5-coder:7b" : "llama-3.1-8b-instant"
+    );
+
+    vscode.workspace.getConfiguration.mockReturnValue({
+      get: jest.fn(),
+      update
+    });
+
+    const config = await panel._getEffectiveAiConfig();
+
+    expect(update).toHaveBeenCalledWith(
+      "provider",
+      "ollama",
+      expect.anything()
+    );
+    expect(panel._setSelectedProviderId).toHaveBeenCalledWith("ollama");
+    expect(config.provider).toBe("ollama");
+    expect(config.model).toBe("qwen2.5-coder:7b");
+  });
+
+  test("remembered provider presence keeps saved API keys across provider switches", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._lastKnownProviderPresence = {
+      ollama: true,
+      groq: false,
+      openrouter: false,
+      anthropic: false,
+      nvidia: false
+    };
+    panel._getImmediateProviderPresence = ChatPanel.prototype._getImmediateProviderPresence;
+    panel._rememberProviderPresence = ChatPanel.prototype._rememberProviderPresence;
+
+    panel._rememberProviderPresence({ nvidia: true });
+    const nextPresence = panel._rememberProviderPresence({ openrouter: true });
+
+    expect(nextPresence).toMatchObject({
+      ollama: true,
+      nvidia: true,
+      openrouter: true
+    });
+  });
+
+  test("persisting an API key updates immediate provider presence", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._lastKnownProviderPresence = {
+      ollama: true,
+      groq: false,
+      openrouter: false,
+      anthropic: false,
+      nvidia: false
+    };
+    panel.context = {
+      secrets: {
+        store: jest.fn().mockResolvedValue(undefined)
+      }
+    };
+    panel._getImmediateProviderPresence = ChatPanel.prototype._getImmediateProviderPresence;
+    panel._rememberProviderPresence = ChatPanel.prototype._rememberProviderPresence;
+    panel._getApiKeyConfigKey = ChatPanel.prototype._getApiKeyConfigKey;
+    panel._getApiSecretKey = ChatPanel.prototype._getApiSecretKey;
+    panel._sanitizeApiKey = ChatPanel.prototype._sanitizeApiKey;
+    panel._getConfigTargetForKey = jest.fn(() => vscode.ConfigurationTarget.Global);
+
+    const update = jest.fn().mockResolvedValue(undefined);
+    vscode.workspace.getConfiguration.mockReturnValue({
+      get: jest.fn(() => ""),
+      update
+    });
+
+    await panel._persistApiKey("nvidia", "secret-value");
+
+    expect(panel.context.secrets.store).toHaveBeenCalled();
+    expect(panel._getImmediateProviderPresence()).toMatchObject({
+      ollama: true,
+      nvidia: true
+    });
+  });
+
+  test("sanitized external URLs block non-HTTPS navigation and restrict HTTP provider endpoints to loopback", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._isLoopbackHost = ChatPanel.prototype._isLoopbackHost;
+    panel._sanitizeExternalUrl = ChatPanel.prototype._sanitizeExternalUrl;
+
+    expect(
+      panel._sanitizeExternalUrl("http://example.com/docs", {
+        allowHttp: false,
+        allowHttps: true
+      })
+    ).toBe("");
+    expect(
+      panel._sanitizeExternalUrl("http://localhost:11434/v1", {
+        allowHttp: true,
+        allowHttps: true,
+        restrictHttpToLoopback: true
+      })
+    ).toBe("http://localhost:11434/v1");
+    expect(
+      panel._sanitizeExternalUrl("http://192.168.1.10:8000/v1", {
+        allowHttp: true,
+        allowHttps: true,
+        restrictHttpToLoopback: true
+      })
+    ).toBe("");
+  });
+
+  test("posted webview messages include the shared extension token", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const postMessage = jest.fn();
+    panel.panel = { webview: { postMessage } };
+    panel.sidebarView = null;
+    panel._webviewMessageToken = "token-123";
+    panel._postMessage = ChatPanel.prototype._postMessage;
+
+    panel._postMessage({ type: "status", text: "hello" });
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "status",
+      text: "hello",
+      __codeJanitorToken: "token-123"
+    });
+  });
+
   test("undo state exposes the most recent undo id", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._undoStack = [
@@ -589,6 +797,97 @@ describe("ChatPanel structured edit helpers", () => {
       type: "streamReplace",
       text: "Which file should I update, and what exact behavior do you want changed?"
     });
+  });
+
+  test("renders a structured action summary for workspace edit responses", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._stripStructuredActionsFromText = ChatPanel.prototype._stripStructuredActionsFromText;
+    panel._findStructuredActionStart = ChatPanel.prototype._findStructuredActionStart;
+    panel._buildStructuredActionDisplaySummary =
+      ChatPanel.prototype._buildStructuredActionDisplaySummary;
+
+    const text = panel._buildVisibleAssistantText(
+      {
+        text: [
+          "I'll update the auth wiring.",
+          "",
+          "PATCH: src/app.js",
+          "SEARCH:",
+          "```js",
+          "const status = 'draft';",
+          "```",
+          "REPLACE:",
+          "```js",
+          "const status = 'ready';",
+          "```"
+        ].join("\n"),
+        actions: [
+          {
+            type: "patch",
+            path: "src/app.js",
+            search: "const status = 'draft';\n",
+            replace: "const status = 'ready';\n"
+          }
+        ]
+      },
+      { preferStructuredSummary: true }
+    );
+
+    expect(text).toContain("I'll update the auth wiring.");
+    expect(text).toContain("Model prepared executable changes.");
+    expect(text).toContain("Patch src/app.js");
+    expect(text).toContain("Applying 1 patch now.");
+    expect(text).not.toContain("PATCH: src/app.js");
+  });
+
+  test("keeps raw assistant text when structured summaries are not requested", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._buildAuditHaltDisplayText =
+      ChatPanel.prototype._buildAuditHaltDisplayText;
+    panel._parseAuditHaltBlock = ChatPanel.prototype._parseAuditHaltBlock;
+    panel._looksLikeFalsePositiveAuditHalt =
+      ChatPanel.prototype._looksLikeFalsePositiveAuditHalt;
+
+    const text = panel._buildVisibleAssistantText(
+      {
+        text: "PATCH: src/app.js",
+        actions: [{ type: "patch", path: "src/app.js" }]
+      },
+      { preferStructuredSummary: false }
+    );
+
+    expect(text).toBe("PATCH: src/app.js");
+  });
+
+  test("renders package.json audit halts as likely false positives in the chat bubble", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._buildAuditHaltDisplayText =
+      ChatPanel.prototype._buildAuditHaltDisplayText;
+    panel._parseAuditHaltBlock = ChatPanel.prototype._parseAuditHaltBlock;
+    panel._looksLikeFalsePositiveAuditHalt =
+      ChatPanel.prototype._looksLikeFalsePositiveAuditHalt;
+
+    const text = panel._buildVisibleAssistantText(
+      {
+        text: [
+          "%%AUDIT_HALTED%%",
+          "Flagged pattern: hardcoded credentials",
+          "Location: package.json",
+          "Reason: The package.json file contains hardcoded GitHub API tokens and URLs, which could be used for malicious purposes if accessed by unauthorized parties.",
+          "%%END%%"
+        ].join("\n"),
+        actions: []
+      },
+      { preferStructuredSummary: false }
+    );
+
+    expect(text).toContain(
+      "Security gate paused this reply, but the flagged reason looks like a likely false positive."
+    );
+    expect(text).toContain("Flagged pattern: hardcoded credentials");
+    expect(text).toContain("Location: package.json");
+    expect(text).toContain("Model reason:");
+    expect(text).not.toContain("%%AUDIT_HALTED%%");
   });
 
   test("blocks execution when structured actions are flagged as incomplete", () => {
@@ -846,8 +1145,12 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel._postMessage).not.toHaveBeenCalled();
   });
 
-  test("keeps action-only structured replies intact for the chat bubble", () => {
+  test("replaces action-only structured replies with an execution summary in the chat bubble", () => {
     const panel = Object.create(ChatPanel.prototype);
+    panel._stripStructuredActionsFromText = ChatPanel.prototype._stripStructuredActionsFromText;
+    panel._findStructuredActionStart = ChatPanel.prototype._findStructuredActionStart;
+    panel._buildStructuredActionDisplaySummary =
+      ChatPanel.prototype._buildStructuredActionDisplaySummary;
 
     const visibleText = panel._buildVisibleAssistantText(
       {
@@ -876,21 +1179,19 @@ describe("ChatPanel structured edit helpers", () => {
 
     expect(visibleText).toBe(
       [
-        "PATCH: src/app.js",
-        "SEARCH:",
-        "```js",
-        "old",
-        "```",
-        "REPLACE:",
-        "```js",
-        "next",
-        "```"
+        "Model prepared executable changes.",
+        "- Patch src/app.js",
+        "Applying 1 patch now."
       ].join("\n")
     );
   });
 
-  test("keeps prose and raw structured actions together in the chat bubble", () => {
+  test("keeps prose while replacing raw structured actions with an execution summary", () => {
     const panel = Object.create(ChatPanel.prototype);
+    panel._stripStructuredActionsFromText = ChatPanel.prototype._stripStructuredActionsFromText;
+    panel._findStructuredActionStart = ChatPanel.prototype._findStructuredActionStart;
+    panel._buildStructuredActionDisplaySummary =
+      ChatPanel.prototype._buildStructuredActionDisplaySummary;
 
     const visibleText = panel._buildVisibleAssistantText(
       {
@@ -923,15 +1224,9 @@ describe("ChatPanel structured edit helpers", () => {
       [
         "Updating the active file and then verifying it.",
         "",
-        "PATCH: src/app.js",
-        "SEARCH:",
-        "```js",
-        "old",
-        "```",
-        "REPLACE:",
-        "```js",
-        "next",
-        "```"
+        "Model prepared executable changes.",
+        "- Patch src/app.js",
+        "Applying 1 patch now."
       ].join("\n")
     );
   });
@@ -1040,11 +1335,15 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
-  test("bugfix mode skips workspace preparation", () => {
+  test("workspace preparation only runs for explicit repo-wide requests", () => {
     const panel = Object.create(ChatPanel.prototype);
 
     expect(panel._shouldPrepareWorkspaceContext("debug", "scan the active file", "bugfix")).toBe(false);
     expect(panel._shouldPrepareWorkspaceContext("scan", "scan the workspace", "heavy")).toBe(true);
+    expect(panel._shouldPrepareWorkspaceContext("debug", "fix package.json version handling", "heavy")).toBe(false);
+    expect(panel._shouldPrepareWorkspaceContext("explain", "explain the current file", "deep")).toBe(false);
+    expect(panel._shouldPrepareWorkspaceContext("explain", "walk through the repo architecture", "deep")).toBe(true);
+    expect(panel._shouldPrepareWorkspaceContext("edit", "refactor this across the repository", "fast")).toBe(false);
   });
 
   test("resolves gstack slash commands into workflow requests", () => {
@@ -1134,6 +1433,61 @@ describe("ChatPanel structured edit helpers", () => {
 
     expect(decision.enabled).toBe(false);
     expect(decision.reasons).toEqual([]);
+  });
+
+  test("smart gstack gate treats apply_diff edits as editable workflow actions", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._getGStackGateMode = jest.fn(() => "smart");
+
+    const decision = panel._getGStackGateDecision(
+      "Rewrite the package metadata safely",
+      [
+        {
+          type: "apply_diff",
+          path: "package.json",
+          diff: [
+            "<<<<<<< SEARCH",
+            ":start_line: 2",
+            "-------",
+            '  "name": "old-name",',
+            "=======",
+            '  "name": "new-name",',
+            ">>>>>>> REPLACE"
+          ].join("\n")
+        }
+      ],
+      { requestMode: "fast" }
+    );
+
+    expect(decision.enabled).toBe(true);
+    expect(decision.reasons).toEqual(expect.arrayContaining(["high-impact path"]));
+  });
+
+  test("smart gstack gate can use optimizer review signals when heuristics stay quiet", () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._getGStackGateMode = jest.fn(() => "smart");
+    panel._shouldSkipGate = jest.fn(() => ({
+      skip: false,
+      reason: "high_risk",
+      risk: "high",
+      confidence: 0.54
+    }));
+
+    const decision = panel._getGStackGateDecision(
+      "Apply a broad diff to the active source file",
+      [
+        {
+          type: "apply_diff",
+          path: "src/ui/button.js",
+          diff: "<<<<<<< SEARCH\n:start_line: 1\n-------\nold\n=======\nnew\n>>>>>>> REPLACE"
+        }
+      ],
+      { requestMode: "fast" }
+    );
+
+    expect(panel._shouldSkipGate).toHaveBeenCalled();
+    expect(decision.enabled).toBe(true);
+    expect(decision.reasons).toEqual(["optimizer high-risk edit"]);
   });
 
   test("always gstack gate reviews any AI-generated edit plan", () => {
@@ -1318,6 +1672,69 @@ describe("ChatPanel structured edit helpers", () => {
       interactionStyle: "agent_loop",
       runtimeConfig: { provider: "custom:test", model: "gpt-like" },
       skipHistory: true
+    });
+    expect(response.actions).toEqual([
+      {
+        type: "patch",
+        path: "src/app.js",
+        search: "const answer = 41;\n",
+        replace: "const answer = 42;\n"
+      }
+    ]);
+  });
+
+  test("evidence round re-prompts after mixed tool actions", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.agent = {
+      chat: jest.fn().mockResolvedValue({
+        text: "PATCH: src/app.js",
+        actions: [
+          {
+            type: "patch",
+            path: "src/app.js",
+            search: "const answer = 41;\n",
+            replace: "const answer = 42;\n"
+          }
+        ]
+      })
+    };
+    panel._postMessage = jest.fn();
+    panel._shouldSuppressInternalStatus = jest.fn(() => false);
+    panel._detectIntent = jest.fn(() => "edit");
+    panel._runEvidenceGatheringAction = jest
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        transcript: "READ: src/app.js\n```js\nconst answer = 41;\n```"
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        transcript: "GITHUB_CONTEXT: {\"mode\":\"repo\"}\n```text\nRepo summary\n```"
+      });
+
+    const response = await panel._runAgenticEvidenceRound(
+      "fix src/app.js",
+      [
+        { type: "read", path: "src/app.js" },
+        { type: "github_context", mode: "repo", owner: "demo", repo: "repo" }
+      ],
+      "/workspace",
+      { provider: "custom:test", model: "gpt-like" },
+      "fast",
+      "overlay"
+    );
+
+    expect(panel.agent.chat).toHaveBeenCalledTimes(1);
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("Tool results:");
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("READ: src/app.js");
+    expect(panel.agent.chat.mock.calls[0][0]).toContain("Repo summary");
+    expect(panel.agent.chat.mock.calls[0][4]).toMatchObject({
+      mode: "heavy",
+      intentOverride: "edit",
+      interactionStyle: "agent_loop",
+      runtimeConfig: { provider: "custom:test", model: "gpt-like" },
+      skipHistory: true,
+      systemOverlay: "overlay"
     });
     expect(response.actions).toEqual([
       {
@@ -1584,6 +2001,45 @@ describe("ChatPanel structured edit helpers", () => {
     );
   });
 
+  test("frontend verification uses graph context to resolve workspace-wide assets", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-frontend-graph-"));
+    const relativePath = "packages/app/pages/index.html";
+    const fullPath = path.join(workspaceRoot, relativePath);
+    const sharedLogoPath = path.join(workspaceRoot, "shared", "logo.png");
+    const graphDir = path.join(workspaceRoot, "graphify-out");
+
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.mkdirSync(path.dirname(sharedLogoPath), { recursive: true });
+    fs.mkdirSync(graphDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "package.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(workspaceRoot, "packages", "app", "package.json"), "{}\n", "utf8");
+    fs.writeFileSync(sharedLogoPath, "png", "utf8");
+    fs.writeFileSync(
+      fullPath,
+      "<img src=\"shared/logo.png\" alt=\"Shared logo\">",
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(graphDir, "graph.json"),
+      JSON.stringify({
+        nodes: [{ path: "shared/logo.png", type: "asset" }],
+        edges: []
+      }),
+      "utf8"
+    );
+
+    const result = await panel._runFrontendVerificationForFile(
+      workspaceRoot,
+      relativePath
+    );
+
+    expect(result).toEqual({
+      success: true,
+      issues: []
+    });
+  });
+
   test("failed syntax repair restores the previous file contents", async () => {
     const panel = Object.create(ChatPanel.prototype);
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-repair-rollback-"));
@@ -1758,6 +2214,75 @@ describe("ChatPanel structured edit helpers", () => {
       expect.objectContaining({
         type: "error",
         text: expect.stringContaining("restored automatically")
+      })
+    );
+  });
+
+  test("falls back to the raw MCP config text when initialization fails", async () => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cj-mcp-ui-"));
+    const configPath = path.join(workspaceRoot, "mcp.config.json");
+    const invalidConfigText = '{\n  "mcpServers": {\n    "filesystem":\n';
+
+    fs.writeFileSync(configPath, invalidConfigText, "utf8");
+
+    try {
+      const panel = Object.create(ChatPanel.prototype);
+      panel._ensureMcpReady = jest.fn().mockResolvedValue(null);
+      panel._getMcpWorkspaceRoot = jest.fn(() => workspaceRoot);
+      panel._lastMcpInitializationError = "Unexpected end of JSON input";
+
+      const settings = await panel._getMcpSettings();
+
+      expect(settings.workspaceRoot).toBe(workspaceRoot);
+      expect(settings.configPath).toBe(configPath);
+      expect(settings.configText).toBe(invalidConfigText);
+      expect(settings.initializationError).toContain("Unexpected end");
+    } finally {
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("saves MCP config through the loader when the manager is not initialized yet", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    const save = jest.fn().mockResolvedValue(undefined);
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    panel.mcpClientManager = {
+      configLoader: { save },
+      initialize
+    };
+    panel._ensureMcpReady = jest.fn().mockResolvedValue(null);
+    panel._getMcpWorkspaceRoot = jest.fn(() => "/workspace");
+    panel._postMcpSettings = jest.fn().mockResolvedValue(undefined);
+    panel._lastMcpInitializationError = "bad config";
+
+    await panel._saveMcpConfig('{"mcpServers":{}}');
+
+    expect(save).toHaveBeenCalledWith("/workspace", '{"mcpServers":{}}');
+    expect(initialize).toHaveBeenCalledWith("/workspace");
+    expect(panel._lastMcpInitializationError).toBe("");
+    expect(panel._postMcpSettings).toHaveBeenCalled();
+  });
+
+  test("opens mcp.config.json even when MCP initialization is failing", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel.mcpClientManager = {
+      getUiState: jest.fn(() => ({
+        configPath: "/workspace/mcp.config.json"
+      }))
+    };
+    panel._getMcpWorkspaceRoot = jest.fn(() => "/workspace");
+    panel._revealWorkspaceFile = jest.fn().mockResolvedValue(undefined);
+    panel._postMessage = jest.fn();
+
+    await panel._handleMcpSettingsAction("openMcpConfig");
+
+    expect(panel._revealWorkspaceFile).toHaveBeenCalledWith(
+      "/workspace/mcp.config.json"
+    );
+    expect(panel._postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "status",
+        text: "Opened mcp.config.json."
       })
     );
   });
