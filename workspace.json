@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-05T07:08:45.199Z",
-  "generatedAtEpochMs": 1783235325199,
+  "generatedAt": "2026-07-05T07:35:08.538Z",
+  "generatedAtEpochMs": 1783236908538,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,15 +14,14 @@
   "workspace": {
     "name": "code-janitor",
     "root": "d:\\CityGrid\\my-project\\code-janitor",
-    "activeFile": "src/services/mcp/MCPToolExecutor.js",
-    "refreshReason": "manual",
+    "activeFile": "package.json",
+    "refreshReason": "tracked-change",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
       "markdownMirror": "workspacememory.md",
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "src/services/mcp/MCPToolExecutor.js",
       "package.json",
       ".gitignore",
       ".tmp-vsix-100/extension/README.md",
@@ -34,7 +33,7 @@
       "arduino-ide-agent/package.json"
     ],
     "stats": {
-      "totalFiles": 1061,
+      "totalFiles": 1067,
       "topLevelAreas": [
         {
           "name": "formatters",
@@ -42,11 +41,11 @@
         },
         {
           "name": "src",
-          "count": 142
+          "count": 146
         },
         {
           "name": "[root]",
-          "count": 103
+          "count": 104
         },
         {
           "name": "arduino-ide-agent",
@@ -54,7 +53,7 @@
         },
         {
           "name": "docs",
-          "count": 20
+          "count": 21
         },
         {
           "name": "bob_sessions",
@@ -76,7 +75,7 @@
         },
         {
           "name": ".js",
-          "count": 138
+          "count": 142
         },
         {
           "name": ".md",
@@ -88,7 +87,7 @@
         },
         {
           "name": ".vsix",
-          "count": 71
+          "count": 72
         },
         {
           "name": ".cfg",
@@ -100,7 +99,7 @@
         },
         {
           "name": ".txt",
-          "count": 25
+          "count": 26
         }
       ],
       "keyFiles": [
@@ -973,6 +972,12 @@
           "isKeyFile": false
         },
         {
+          "path": "code-janitor-1.2.4.vsix",
+          "topLevelArea": "[root]",
+          "extension": ".vsix",
+          "isKeyFile": false
+        },
+        {
           "path": "code-janitor-1.22.9.vsix",
           "topLevelArea": "[root]",
           "extension": ".vsix",
@@ -1018,6 +1023,12 @@
           "path": "DIAGNOSTIC_STEPS.md",
           "topLevelArea": "[root]",
           "extension": ".md",
+          "isKeyFile": false
+        },
+        {
+          "path": "docs/AI_AGENT_PIPELINE_HANDOFF.txt",
+          "topLevelArea": "docs",
+          "extension": ".txt",
           "isKeyFile": false
         },
         {
@@ -5527,6 +5538,12 @@
           "isKeyFile": false
         },
         {
+          "path": "src/ai-agent/__tests__/agent-run-store.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
           "path": "src/ai-agent/__tests__/agent-structured-edits.test.js",
           "topLevelArea": "src",
           "extension": ".js",
@@ -5575,6 +5592,12 @@
           "isKeyFile": false
         },
         {
+          "path": "src/ai-agent/__tests__/tool-guardrails.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
           "path": "src/ai-agent/__tests__/web-content-utils.test.js",
           "topLevelArea": "src",
           "extension": ".js",
@@ -5582,6 +5605,12 @@
         },
         {
           "path": "src/ai-agent/__tests__/workspace-memory.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/ai-agent/agent-run-store.js",
           "topLevelArea": "src",
           "extension": ".js",
           "isKeyFile": false
@@ -5654,6 +5683,12 @@
         },
         {
           "path": "src/ai-agent/review-quality-analyzer.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/ai-agent/tool-guardrails.js",
           "topLevelArea": "src",
           "extension": ".js",
           "isKeyFile": false
@@ -6487,7 +6522,7 @@
     "available": true,
     "name": "code-janitor",
     "displayName": "Code Janitor",
-    "version": "1.2.3",
+    "version": "1.0.0",
     "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
     "license": "MIT",
     "homepage": "https://code-janitor-web.vercel.app",
@@ -6563,11 +6598,11 @@
     }
   },
   "currentStack": {
-    "lastActivityAt": "2026-07-05T06:24:23.550Z",
-    "trackedChangeCount": 1,
+    "lastActivityAt": "2026-07-05T07:35:06.509Z",
+    "trackedChangeCount": 3,
     "trackedFileSnapshotCount": 1,
     "changeTypeCounts": {
-      "save": 1,
+      "save": 3,
       "create": 0,
       "delete": 0,
       "rename": 0
@@ -6576,14 +6611,78 @@
   "trackedSnapshots": [
     {
       "filePath": "package.json",
-      "updatedAt": 1783232663550,
+      "updatedAt": 1783236906509,
       "lineCount": 577,
       "charCount": 20777,
-      "hash": "bf949b79c816",
+      "hash": "1238fd02261c",
       "preview": "{ / \"name\": \"code-janitor\", / \"displayName\": \"Code Janitor\", / \"description\": \"Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant sy..."
     }
   ],
   "recentChanges": [
+    {
+      "type": "save",
+      "path": "package.json",
+      "toPath": "",
+      "summary": "Line 5: replaced 1 line with 1 line.",
+      "recordedAt": "2026-07-05T07:35:06.509Z",
+      "recordedAtEpochMs": 1783236906509,
+      "before": {
+        "kind": "text",
+        "lineCount": 577,
+        "charCount": 20777,
+        "hash": "e95a76950568",
+        "preview": "{ / \"name\": \"code-janitor\", / \"displayName\": \"Code Janitor\", / \"description\": \"Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant sy...",
+        "updatedAt": 1783236906509
+      },
+      "after": {
+        "kind": "text",
+        "lineCount": 577,
+        "charCount": 20777,
+        "hash": "1238fd02261c",
+        "preview": "{ / \"name\": \"code-janitor\", / \"displayName\": \"Code Janitor\", / \"description\": \"Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant sy...",
+        "updatedAt": 1783236906509
+      },
+      "diff": {
+        "lineStart": 5,
+        "removedLines": 1,
+        "addedLines": 1,
+        "summary": "Line 5: replaced 1 line with 1 line.",
+        "beforeFragment": "2.4",
+        "afterFragment": "0.0"
+      }
+    },
+    {
+      "type": "save",
+      "path": "package.json",
+      "toPath": "",
+      "summary": "Line 5: replaced 1 line with 1 line.",
+      "recordedAt": "2026-07-05T07:29:21.241Z",
+      "recordedAtEpochMs": 1783236561241,
+      "before": {
+        "kind": "text",
+        "lineCount": 577,
+        "charCount": 20777,
+        "hash": "bf949b79c816",
+        "preview": "{ / \"name\": \"code-janitor\", / \"displayName\": \"Code Janitor\", / \"description\": \"Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant sy...",
+        "updatedAt": 1783236561241
+      },
+      "after": {
+        "kind": "text",
+        "lineCount": 577,
+        "charCount": 20777,
+        "hash": "e95a76950568",
+        "preview": "{ / \"name\": \"code-janitor\", / \"displayName\": \"Code Janitor\", / \"description\": \"Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant sy...",
+        "updatedAt": 1783236561241
+      },
+      "diff": {
+        "lineStart": 5,
+        "removedLines": 1,
+        "addedLines": 1,
+        "summary": "Line 5: replaced 1 line with 1 line.",
+        "beforeFragment": "3",
+        "afterFragment": "4"
+      }
+    },
     {
       "type": "save",
       "path": "package.json",
@@ -6620,17 +6719,16 @@
   "hotFiles": [
     {
       "filePath": "package.json",
-      "count": 1
+      "count": 3
     }
   ],
   "git": {
     "available": true,
     "branch": "main",
-    "headSummary": "2026-07-05 a4e428d5 feat: implement new AI agent core framework with MCP tool execution, semantic caching, and utility modules",
-    "statusSummary": "3 modifieds",
-    "changedFileCount": 3,
+    "headSummary": "2026-07-05 4b3ea9b8 feat: implement MCP service integration and enhanced AI agent architecture with tool guardrails and registry management",
+    "statusSummary": "2 modifieds",
+    "changedFileCount": 2,
     "statusLines": [
-      "M .gitignore",
       "M package.json",
       "M workspace.json"
     ],
@@ -6638,7 +6736,7 @@
   },
   "github": {
     "available": true,
-    "summary": "GitHub Repository: Debanshu2005/code-janitor\nDescription: An autocorrect and syntax fixer for multiple programming languages.\nVisibility: public | Default branch: main\nStars: 1 | Forks: 0 | Open issues: 0\n\nLatest commit on main:\n- a4e428d by Debanshu2005 on 2026-07-05\n  feat: implement new AI agent core framework with MCP tool execution, semantic caching, and utility modules\n\nURL: https://github.com/Debanshu2005/code-janitor"
+    "summary": "GitHub Repository: Debanshu2005/code-janitor\nDescription: An autocorrect and syntax fixer for multiple programming languages.\nVisibility: public | Default branch: main\nStars: 1 | Forks: 0 | Open issues: 0\n\nLatest commit on main:\n- 4b3ea9b by Debanshu2005 on 2026-07-05\n  feat: implement MCP service integration and enhanced AI agent architecture with tool guardrails and registry management\n\nURL: https://github.com/Debanshu2005/code-janitor"
   },
   "graphify": {
     "reportAvailable": true,
