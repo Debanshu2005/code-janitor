@@ -7,7 +7,8 @@
 const {
   fetchGitHubContext,
   validateGitHubContextRequest,
-  parseGitHubRemoteUrl
+  parseGitHubRemoteUrl,
+  githubContextCache
 } = require("../fetch-github-context");
 
 function createJsonResponse(data, status = 200) {
@@ -23,6 +24,7 @@ function createJsonResponse(data, status = 200) {
 describe("fetch-github-context", () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    githubContextCache.clear();
     delete global.fetch;
   });
 
@@ -180,7 +182,40 @@ describe("fetch-github-context", () => {
         null,
         {}
       )
-    ).rejects.toThrow("Configure codeJanitor.github.apiToken or GITHUB_TOKEN");
+    ).rejects.toThrow("Configure the GitHub token in SecretStorage or GITHUB_TOKEN");
+  });
+
+  test("caches repeated repository context requests briefly", async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          full_name: "octocat/Hello-World",
+          description: "Example repository",
+          private: false,
+          default_branch: "main",
+          stargazers_count: 42,
+          forks_count: 7,
+          open_issues_count: 5,
+          html_url: "https://github.com/octocat/Hello-World"
+        })
+      )
+      .mockResolvedValueOnce(createJsonResponse([]))
+      .mockResolvedValueOnce(createJsonResponse([]))
+      .mockResolvedValueOnce(createJsonResponse([]));
+
+    const commandRunner = jest.fn().mockResolvedValue({
+      success: true,
+      output: "git@github.com:octocat/Hello-World.git"
+    });
+    const request = { mode: "repo" };
+    const context = { commandRunner };
+
+    const first = await fetchGitHubContext(request, "/workspace", context);
+    const second = await fetchGitHubContext(request, "/workspace", context);
+
+    expect(first.summary).toBe(second.summary);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 });
 

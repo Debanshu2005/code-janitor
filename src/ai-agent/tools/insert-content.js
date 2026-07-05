@@ -7,6 +7,7 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const { resolveAndValidatePath } = require("../../utils/safe-path");
 
 /**
  * Normalize line endings for consistent handling
@@ -73,9 +74,7 @@ function insertContentIntoText(fileContent, lineNumber, content) {
  */
 async function insertContent(filePath, lineNumber, content, workspaceRoot) {
   // Resolve absolute path
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(workspaceRoot, filePath);
+  const { absolutePath } = resolveAndValidatePath(filePath, workspaceRoot);
   
   // Read file content
   let fileContent;
@@ -110,9 +109,7 @@ async function insertContent(filePath, lineNumber, content, workspaceRoot) {
  * Validate insert operation before executing
  */
 async function validateInsert(filePath, lineNumber, workspaceRoot) {
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(workspaceRoot, filePath);
+  const { absolutePath } = resolveAndValidatePath(filePath, workspaceRoot);
   
   try {
     const fileContent = await fs.readFile(absolutePath, "utf8");

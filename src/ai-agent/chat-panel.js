@@ -923,10 +923,12 @@ class ChatPanel {
       // CRITICAL FIX: Force provider to ollama if no API keys are configured
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     const currentProvider = this._getSelectedProviderId() || cfg.get("provider", "ollama");
-    const groqKey = cfg.get("groqApiKey", "");
-    const openrouterKey = cfg.get("openrouterApiKey", "");
-    const anthropicKey = cfg.get("anthropicApiKey", "");
-    const nvidiaKey = cfg.get("nvidiaApiKey", "");
+    const [groqKey, openrouterKey, anthropicKey, nvidiaKey] = await Promise.all([
+      this._getStoredApiKey("groq"),
+      this._getStoredApiKey("openrouter"),
+      this._getStoredApiKey("anthropic"),
+      this._getStoredApiKey("nvidia")
+    ]);
 
     // If using a cloud provider but no API key is set, force to ollama
     if (currentProvider === "groq" && !groqKey) {
@@ -2909,14 +2911,12 @@ ${fileContent}
       );
     }
 
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const configValue = this._sanitizeApiKey(cfg.get(configKey, ""));
     const secretValue = this._sanitizeApiKey(
       await this.context.secrets.get(this._getApiSecretKey(provider))
     );
 
     if (secretValue) return secretValue;
-    return configValue;
+    return "";
   }
 
   async _getEffectiveAiConfig() {
@@ -3090,12 +3090,10 @@ ${fileContent}
   }
 
   async _getStoredGitHubToken() {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.github");
-    const configValue = this._sanitizeApiKey(cfg.get("apiToken", ""));
     const secretValue = this._sanitizeApiKey(
       await this.context?.secrets?.get?.(this._getGitHubSecretKey())
     );
-    return secretValue || configValue;
+    return secretValue;
   }
 
   async _persistGitHubToken(apiToken) {

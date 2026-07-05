@@ -7,6 +7,8 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const { resolveAndValidatePath } = require("../../utils/safe-path");
+const { parseFile } = require("./list-code-definition-names");
 
 const MAX_FILES_PER_REQUEST = 5;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -85,16 +87,65 @@ function isBinaryFile(buffer) {
   return false;
 }
 
+function formatDefinitionParams(params = []) {
+  const names = params
+    .map((param) => param?.name)
+    .filter(Boolean);
+  return names.length > 0 ? `(${names.join(", ")})` : "()";
+}
+
+function formatOutlineResult(result) {
+  const lines = [];
+
+  lines.push(`# ${result.path}`);
+
+  if (result.error) {
+    lines.push(`Error: ${result.error}`);
+    return lines.join("\n");
+  }
+
+  lines.push(`Outline mode: AST definitions only`);
+  lines.push(`Language: ${result.language}`);
+  lines.push(`Definitions found: ${result.definitionCount}`);
+  lines.push("");
+
+  if (!Array.isArray(result.definitions) || result.definitions.length === 0) {
+    lines.push("No definitions found in this file.");
+    return lines.join("\n");
+  }
+
+  for (const definition of result.definitions) {
+    const signature =
+      definition.type === "function" || definition.type === "method"
+        ? `${definition.name}${formatDefinitionParams(definition.params)}`
+        : definition.name;
+    lines.push(
+      `${definition.line} | ${definition.kind || definition.type}: ${signature}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
 /**
  * Read a single file with optional line ranges
  */
 async function readSingleFile(fileSpec, workspaceRoot) {
   const { path: filePath, lineRanges } = fileSpec;
+  const outlineOnly =
+    fileSpec.outlineOnly === true || String(fileSpec.mode || "").toLowerCase() === "outline";
   
-  // Resolve absolute path
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(workspaceRoot, filePath);
+  // Resolve and validate path stays within workspace
+  let absolutePath;
+  let relativePath;
+  try {
+    ({ absolutePath, relativePath } = resolveAndValidatePath(filePath, workspaceRoot));
+  } catch (pathError) {
+    return {
+      path: filePath,
+      error: pathError.message
+    };
+  }
   
   try {
     // Check file size
@@ -105,6 +156,20 @@ async function readSingleFile(fileSpec, workspaceRoot) {
         path: filePath,
         error: `File too large (${Math.round(stats.size / 1024 / 1024)}MB). Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`,
         size: stats.size
+      };
+    }
+
+    if (outlineOnly) {
+      const outline = await parseFile(relativePath, workspaceRoot);
+      const outlineContent = formatOutlineResult(outline);
+      return {
+        path: filePath,
+        content: outlineContent,
+        totalLines: outline.definitionCount || 0,
+        displayedLines: outlineContent.split("\n").length,
+        size: stats.size,
+        ranges: ["outline"],
+        mode: "outline"
       };
     }
     

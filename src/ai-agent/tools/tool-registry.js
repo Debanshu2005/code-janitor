@@ -115,7 +115,7 @@ const y = 4;
       files: {
         type: "array",
         required: true,
-        description: "Array of file specs: [{ path: string, lineRanges?: string[] }]",
+        description: "Array of file specs: [{ path: string, lineRanges?: string[], mode?: 'full' | 'outline', outlineOnly?: boolean }]. Use outline mode first for large source files when signatures are enough.",
         maxItems: 5
       }
     },
@@ -127,6 +127,10 @@ const y = 4;
       {
         description: "Read with line ranges",
         usage: "read_file([{ path: 'src/app.js', lineRanges: ['1-50', '100-150'] }])"
+      },
+      {
+        description: "Read AST outline only",
+        usage: "read_file([{ path: 'src/app.js', mode: 'outline' }])"
       },
       {
         description: "Read multiple files",

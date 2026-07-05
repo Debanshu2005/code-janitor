@@ -146,12 +146,12 @@
         "codeJanitor.ai.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "description": "Anthropic API key for Claude models (get key at https://console.anthropic.com)"
+          "description": "Legacy migration-only field. Use the Code Janitor chat provider key prompt so the key is stored in VS Code SecretStorage."
         },
         "codeJanitor.ai.nvidiaApiKey": {
           "type": "string",
           "default": "",
-          "description": "NVIDIA NIM API key (get key at https://build.nvidia.com)"
+          "description": "Legacy migration-only field. Use the Code Janitor chat provider key prompt so the key is stored in VS Code SecretStorage."
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
@@ -161,12 +161,12 @@
         "codeJanitor.ai.groqApiKey": {
           "type": "string",
           "default": "",
-          "description": "Groq API key (get free key at https://console.groq.com)"
+          "description": "Legacy migration-only field. Use the Code Janitor chat provider key prompt so the key is stored in VS Code SecretStorage."
         },
         "codeJanitor.ai.openrouterApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenRouter API key (get key at https://openrouter.ai)"
+          "description": "Legacy migration-only field. Use the Code Janitor chat provider key prompt so the key is stored in VS Code SecretStorage."
         },
         "codeJanitor.ai.ollamaUrl": {
           "type": "string",
@@ -239,7 +239,7 @@
         "codeJanitor.github.apiToken": {
           "type": "string",
           "default": "",
-          "description": "GitHub API token used for repository, issue, and pull request context. Stored in VS Code secrets after first load."
+          "description": "Legacy migration-only field. Use Code Janitor settings UI to store the token in VS Code SecretStorage, or set GITHUB_TOKEN."
         },
         "codeJanitor.github.apiBaseUrl": {
           "type": "string",

@@ -15,7 +15,7 @@ const {
   resolveFrameworkCommand
 } = require("../execute-tests");
 const fs = require("fs").promises;
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 const path = require("path");
 
 // Mock dependencies
@@ -294,11 +294,23 @@ describe("execute-tests", () => {
   describe("buildTestCommand", () => {
     it("should build a Jest command for a specific test file", () => {
       const command = buildTestCommand(
-        { name: "jest", command: "npx jest" },
+        { name: "jest", command: "npx", args: ["jest"] },
         "src/__tests__/cli.test.js"
       );
 
-      expect(command).toBe('npx jest --runTestsByPath "src/__tests__/cli.test.js"');
+      expect(command).toEqual({
+        command: "npx",
+        args: ["jest", "--runTestsByPath", "src/__tests__/cli.test.js"]
+      });
+    });
+
+    it("passes shell metacharacters as data arguments", () => {
+      const command = buildTestCommand(
+        { name: "jest", command: "npx", args: ["jest"] },
+        "src/__tests__/weird;rm -rf .test.js"
+      );
+
+      expect(command.args).toContain("src/__tests__/weird;rm -rf .test.js");
     });
   });
 
@@ -311,7 +323,10 @@ describe("execute-tests", () => {
         mockWorkspaceRoot
       );
 
-      expect(command).toBe(`node "${path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")}"`);
+      expect(command).toEqual({
+        command: process.execPath,
+        args: [path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")]
+      });
       expect(fs.access).toHaveBeenCalledWith(
         path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")
       );
@@ -325,7 +340,10 @@ describe("execute-tests", () => {
         mockWorkspaceRoot
       );
 
-      expect(command).toBe("npx jest");
+      expect(command).toEqual({
+        command: "npx",
+        args: ["jest"]
+      });
     });
   });
   
@@ -343,7 +361,7 @@ describe("execute-tests", () => {
       fs.mkdir.mockResolvedValue(undefined);
       fs.writeFile.mockResolvedValue(undefined);
       
-      exec.mockImplementation((_command, _options, callback) => {
+      execFile.mockImplementation((_command, _args, _options, callback) => {
         callback(null, "Tests: 0 failed, 5 passed, 5 total", "");
       });
       
@@ -356,12 +374,17 @@ describe("execute-tests", () => {
       expect(result.success).toBe(true);
       expect(result.framework).toBe("jest");
       expect(result.results).toBeDefined();
-      expect(exec).toHaveBeenCalledWith(
-        `node "${path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js")}" --runTestsByPath "app.test.js"`,
+      expect(execFile).toHaveBeenCalledWith(
+        process.execPath,
+        [
+          path.join(mockWorkspaceRoot, "node_modules", "jest", "bin", "jest.js"),
+          "--runTestsByPath",
+          "app.test.js"
+        ],
         expect.objectContaining({ cwd: mockWorkspaceRoot }),
         expect.any(Function)
       );
-      expect(fs.unlink).toHaveBeenCalledWith(path.join(mockWorkspaceRoot, "app.test.js"));
+      expect(fs.unlink).toHaveBeenCalledWith(path.resolve(mockWorkspaceRoot, "app.test.js"));
     });
     
     it("should handle test execution errors", async () => {
@@ -375,7 +398,7 @@ describe("execute-tests", () => {
         { name: "app.test.js", isFile: () => true, isDirectory: () => false }
       ]);
       
-      exec.mockImplementation((_command, _options, callback) => {
+      execFile.mockImplementation((_command, _args, _options, callback) => {
         const error = new Error("Test execution failed");
         error.stdout = "";
         error.stderr = "";
@@ -389,6 +412,17 @@ describe("execute-tests", () => {
       
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
+    });
+
+    it("rejects test paths outside the workspace", async () => {
+      const result = await executeTests({
+        framework: "jest",
+        testPath: "../outside.test.js"
+      }, mockWorkspaceRoot);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid test path");
+      expect(execFile).not.toHaveBeenCalled();
     });
   });
 });

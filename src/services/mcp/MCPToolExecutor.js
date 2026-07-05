@@ -62,7 +62,10 @@ async function executeMcpTool(params = {}, workspaceRoot, executionContext = {})
 
   const manager = await ensureManager(workspaceRoot);
   const tool = manager.getTool(params.serverName, params.toolName);
-  const risk = assessToolRisk(params.serverName, tool);
+  const risk = assessToolRisk(
+    params.serverName,
+    tool || { name: params.toolName }
+  );
 
   if (
     risk.requiresConfirmation &&
@@ -123,18 +126,19 @@ function assessToolRisk(serverName, tool = null) {
   const lowerServer = String(serverName || "").toLowerCase();
   const lowerToolName = String(tool?.name || "").toLowerCase();
   const riskyVerbPattern =
-    /\b(delete|destroy|remove|write|update|create|merge|dispatch|restart|stop|kill|exec|run|push|close|approve)\b/i;
+    /(delete|destroy|remove|write|update|create|merge|dispatch|restart|stop|kill|exec|run|push|close|approve|commit|apply|modify|upload|send)/i;
+
+  const isUnknownRisk = annotations.readOnlyHint === undefined && annotations.destructiveHint === undefined;
 
   const requiresConfirmation =
-    (annotations.destructiveHint === true &&
-      (lowerServer === "github" || lowerServer === "docker")) ||
-    ((lowerServer === "github" || lowerServer === "docker") &&
-      riskyVerbPattern.test(lowerToolName));
+    annotations.destructiveHint === true ||
+    riskyVerbPattern.test(lowerToolName) ||
+    isUnknownRisk;
 
   return {
     requiresConfirmation,
     reason: requiresConfirmation
-      ? "the tool may perform a state-changing GitHub or Docker action"
+      ? (isUnknownRisk ? `the tool has unknown risk (no safety annotations)` : `the tool may perform a state-changing action on ${lowerServer || "an MCP server"}`)
       : ""
   };
 }

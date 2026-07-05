@@ -10,6 +10,7 @@ const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
 const babelParser = require("@babel/parser");
 const os = require("os");
+const { resolveAndValidatePath } = require("../../utils/safe-path");
 
 /**
  * Parse diff string into structured blocks
@@ -377,9 +378,7 @@ function applyDiffToContent(content, diffString) {
  */
 async function applyDiff(filePath, diffString, workspaceRoot) {
   // Resolve absolute path
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(workspaceRoot, filePath);
+  const { absolutePath } = resolveAndValidatePath(filePath, workspaceRoot);
   
   // Read file content
   let content;

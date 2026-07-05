@@ -6,11 +6,18 @@
  */
 
 const { execFile } = require("child_process");
+const crypto = require("crypto");
 const vscode = require("../../utils/vscode-shim");
+const { SemanticCache, getOrSet } = require("../../utils/semantic-cache");
 
 const DEFAULT_API_BASE_URL = "https://api.github.com";
 const VALID_MODES = new Set(["repo", "issue", "pull_request"]);
 const BODY_PREVIEW_LIMIT = 280;
+const GITHUB_CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000;
+const githubContextCache = new SemanticCache({
+  maxSize: 100,
+  ttlMs: GITHUB_CONTEXT_CACHE_TTL_MS
+});
 
 function validateGitHubContextRequest(request = {}) {
   const errors = [];
@@ -256,13 +263,6 @@ async function getGitHubToken(executionContext = {}) {
     return String(secretToken).trim();
   }
 
-  const configToken = String(
-    vscode.workspace.getConfiguration("codeJanitor.github").get("apiToken", "") || ""
-  ).trim();
-  if (configToken) {
-    return configToken;
-  }
-
   return String(process.env.GITHUB_TOKEN || "").trim();
 }
 
@@ -273,8 +273,39 @@ function getApiBaseUrl() {
   return configured || DEFAULT_API_BASE_URL;
 }
 
-async function githubRequest(apiPath, executionContext = {}) {
-  const token = await getGitHubToken(executionContext);
+function fingerprintToken(token) {
+  const raw = String(token || "");
+  if (!raw) {
+    return "none";
+  }
+
+  return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+function buildGitHubContextCacheKey({
+  apiBaseUrl,
+  token,
+  mode,
+  owner,
+  repo,
+  number
+}) {
+  return JSON.stringify({
+    apiBaseUrl,
+    token: fingerprintToken(token),
+    mode,
+    owner,
+    repo,
+    number: Number.isInteger(number) ? number : null
+  });
+}
+
+async function githubRequest(apiPath, executionContext = {}, requestOptions = {}) {
+  const token =
+    typeof requestOptions.token === "string"
+      ? requestOptions.token
+      : await getGitHubToken(executionContext);
+  const apiBaseUrl = requestOptions.apiBaseUrl || getApiBaseUrl();
   const headers = {
     Accept: "application/vnd.github+json",
     "User-Agent": "Code-Janitor/1.0",
@@ -285,7 +316,7 @@ async function githubRequest(apiPath, executionContext = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${getApiBaseUrl()}${apiPath}`, { headers });
+  const response = await fetch(`${apiBaseUrl}${apiPath}`, { headers });
   if (!response.ok) {
     let details = "";
     try {
@@ -297,7 +328,7 @@ async function githubRequest(apiPath, executionContext = {}) {
 
     if (response.status === 401 || response.status === 403 || response.status === 404) {
       throw new Error(
-        `GitHub API request failed with ${response.status}.${details} Configure codeJanitor.github.apiToken or GITHUB_TOKEN if the repository is private or rate-limited.`
+        `GitHub API request failed with ${response.status}.${details} Configure the GitHub token in SecretStorage or GITHUB_TOKEN if the repository is private or rate-limited.`
       );
     }
 
@@ -319,15 +350,68 @@ async function fetchGitHubContext(request = {}, workspaceRoot, executionContext 
     workspaceRoot,
     executionContext
   );
+  const apiBaseUrl = getApiBaseUrl();
+  const token = await getGitHubToken(executionContext);
+  const requestOptions = { apiBaseUrl, token };
+  const cacheKey = buildGitHubContextCacheKey({
+    apiBaseUrl,
+    token,
+    mode,
+    owner,
+    repo,
+    number: request.number
+  });
 
+  if (executionContext.cache !== false) {
+    return getOrSet(githubContextCache, cacheKey, () =>
+      fetchGitHubContextUncached(
+        { ...request, mode },
+        owner,
+        repo,
+        executionContext,
+        requestOptions
+      )
+    );
+  }
+
+  return fetchGitHubContextUncached(
+    { ...request, mode },
+    owner,
+    repo,
+    executionContext,
+    requestOptions
+  );
+}
+
+async function fetchGitHubContextUncached(
+  request,
+  owner,
+  repo,
+  executionContext,
+  requestOptions
+) {
+  const mode = request.mode || "repo";
   if (mode === "repo") {
-    const repoData = await githubRequest(`/repos/${owner}/${repo}`, executionContext);
+    const repoData = await githubRequest(
+      `/repos/${owner}/${repo}`,
+      executionContext,
+      requestOptions
+    );
     const [pulls, issueList, commits] = await Promise.all([
-      githubRequest(`/repos/${owner}/${repo}/pulls?state=open&per_page=5`, executionContext),
-      githubRequest(`/repos/${owner}/${repo}/issues?state=open&per_page=10`, executionContext),
+      githubRequest(
+        `/repos/${owner}/${repo}/pulls?state=open&per_page=5`,
+        executionContext,
+        requestOptions
+      ),
+      githubRequest(
+        `/repos/${owner}/${repo}/issues?state=open&per_page=10`,
+        executionContext,
+        requestOptions
+      ),
       githubRequest(
         `/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(repoData.default_branch)}&per_page=1`,
-        executionContext
+        executionContext,
+        requestOptions
       )
     ]);
 
@@ -353,7 +437,8 @@ async function fetchGitHubContext(request = {}, workspaceRoot, executionContext 
   if (mode === "issue") {
     const issueData = await githubRequest(
       `/repos/${owner}/${repo}/issues/${request.number}`,
-      executionContext
+      executionContext,
+      requestOptions
     );
     return {
       success: true,
@@ -367,7 +452,8 @@ async function fetchGitHubContext(request = {}, workspaceRoot, executionContext 
 
   const pullData = await githubRequest(
     `/repos/${owner}/${repo}/pulls/${request.number}`,
-    executionContext
+    executionContext,
+    requestOptions
   );
   return {
     success: true,
@@ -383,6 +469,7 @@ module.exports = {
   fetchGitHubContext,
   validateGitHubContextRequest,
   parseGitHubRemoteUrl,
+  githubContextCache,
   DEFAULT_API_BASE_URL,
   VALID_MODES
 };

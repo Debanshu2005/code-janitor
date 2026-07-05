@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-12T03:55:11.499Z",
-  "generatedAtEpochMs": 1781236511499,
+  "generatedAt": "2026-07-05T06:09:21.954Z",
+  "generatedAtEpochMs": 1783231761954,
   "generator": {
     "name": "Code Janitor",
     "feature": "workspace-memory"
@@ -14,15 +14,15 @@
   "workspace": {
     "name": "code-janitor",
     "root": "d:\\CityGrid\\my-project\\code-janitor",
-    "activeFile": "workspacememory.md",
-    "refreshReason": "startup",
+    "activeFile": "src/ai-agent/tools/execute-tests.js",
+    "refreshReason": "manual",
     "outputFiles": {
       "markdown": "graphify-out/WORKSPACE_MEMORY.md",
       "markdownMirror": "workspacememory.md",
       "structuredManifest": "workspace.json"
     },
     "suggestedStartingPoints": [
-      "workspacememory.md",
+      "src/ai-agent/tools/execute-tests.js",
       ".gitignore",
       ".tmp-vsix-100/extension/README.md",
       ".tmp-vsix-100/extension/package.json",
@@ -33,7 +33,7 @@
       "arduino-ide-agent/package.json"
     ],
     "stats": {
-      "totalFiles": 1051,
+      "totalFiles": 1058,
       "topLevelAreas": [
         {
           "name": "formatters",
@@ -41,7 +41,7 @@
         },
         {
           "name": "src",
-          "count": 134
+          "count": 140
         },
         {
           "name": "[root]",
@@ -57,7 +57,7 @@
         },
         {
           "name": "bob_sessions",
-          "count": 16
+          "count": 17
         },
         {
           "name": ".tmp-vsix-100",
@@ -75,11 +75,11 @@
         },
         {
           "name": ".js",
-          "count": 130
+          "count": 136
         },
         {
           "name": ".md",
-          "count": 82
+          "count": 83
         },
         {
           "name": "[no extension]",
@@ -775,6 +775,12 @@
         },
         {
           "path": "bob_sessions/bob_task_may-16-2026_8-59-43-pm.md",
+          "topLevelArea": "bob_sessions",
+          "extension": ".md",
+          "isKeyFile": false
+        },
+        {
+          "path": "bob_sessions/bob_task_may-17-2026_1-23-50-pm.md",
           "topLevelArea": "bob_sessions",
           "extension": ".md",
           "isKeyFile": false
@@ -5550,6 +5556,12 @@
           "isKeyFile": false
         },
         {
+          "path": "src/ai-agent/__tests__/provider-utils.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
           "path": "src/ai-agent/__tests__/review-quality-analyzer.test.js",
           "topLevelArea": "src",
           "extension": ".js",
@@ -6228,6 +6240,12 @@
           "isKeyFile": false
         },
         {
+          "path": "src/services/mcp/__tests__/MCPToolExecutor-risk.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
           "path": "src/services/mcp/index.js",
           "topLevelArea": "src",
           "extension": ".js",
@@ -6264,6 +6282,18 @@
           "isKeyFile": false
         },
         {
+          "path": "src/utils/__tests__/safe-path.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/utils/__tests__/safe-url.test.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
           "path": "src/utils/cli-config.js",
           "topLevelArea": "src",
           "extension": ".js",
@@ -6277,6 +6307,18 @@
         },
         {
           "path": "src/utils/minimal-diff.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/utils/safe-path.js",
+          "topLevelArea": "src",
+          "extension": ".js",
+          "isKeyFile": false
+        },
+        {
+          "path": "src/utils/safe-url.js",
           "topLevelArea": "src",
           "extension": ".js",
           "isKeyFile": false
@@ -6518,149 +6560,34 @@
   "git": {
     "available": true,
     "branch": "main",
-    "headSummary": "2026-05-17 15202964 Merge branch 'main' of https://github.com/Debanshu2005/code-janitor",
-    "statusSummary": "38 modifieds, 91 deleteds, 4 untrackeds",
-    "changedFileCount": 133,
+    "headSummary": "2026-06-12 5f953929 Merge branch 'main' of https://github.com/Debanshu2005/code-janitor",
+    "statusSummary": "13 modifieds, 5 untrackeds",
+    "changedFileCount": 18,
     "statusLines": [
-      "M .janitor-audit-log",
-      "M .vscodeignore",
-      "M AGENTS.md",
-      "D GOOGLE_YOUTUBE_INTEGRATION.md",
-      "D GRAPHIFY_INTEGRATION_SUMMARY.md",
-      "D GRAPHIFY_METHOD3_FIX.md",
-      "D HOW_TO_GET_YOUTUBE_API_KEY.md",
-      "D IMPLEMENTATION_GUIDE.md",
-      "D INSTALLATION_GUIDE.md",
-      "D INTERNET_CONNECTIVITY_COMPLETE.md",
-      "D INTERNET_CONNECTIVITY_GUIDE.md",
-      "D INTERNET_CONNECTIVITY_INTEGRATION.md",
-      "D PERFORMANCE_FIX.md",
-      "D QUICK_FIX_WITH_AI.md",
-      "D QUICK_REFERENCE.md",
-      "M README.md",
-      "D URGENT_FIX.md",
-      "D VERSION_1.10.0_SUMMARY.md",
-      "D VERSION_1.11.0_FIX.md",
-      "D VERSION_1.12.0_COMPLETE_FIX.md",
-      "D VERSION_1.5.5_CHANGES.md",
-      "D VERSION_1.5.7_FIX.md",
-      "D VERSION_1.5.8_CRASH_FIX.md",
-      "D VERSION_1.5.9_NVIDIA_FIX.md",
-      "D VERSION_1.6.1_NOTES.md",
-      "D YOUTUBE_AI_INTEGRATION.md",
-      "D YOUTUBE_CHAT_PANEL_UI.md",
-      "D YOUTUBE_COMPLETE_FIX.md",
-      "D YOUTUBE_COMPLETE_SUMMARY.md",
-      "D YOUTUBE_DUCKDUCKGO_IMPLEMENTATION.md",
-      "D YOUTUBE_EMBED_FIX.md",
-      "D YOUTUBE_FINAL_SUMMARY.md",
-      "D YOUTUBE_IMPLEMENTATION_SUMMARY.md",
-      "D YOUTUBE_INTEGRATION.md",
-      "D YOUTUBE_ISSUES_FIXED.md",
-      "D YOUTUBE_MIGRATION_NOTICE.md",
-      "D YOUTUBE_QUICK_SETUP.md",
-      "D YOUTUBE_SEARCH_TEST_REPORT.md",
-      "D YOUTUBE_TEST_CHECKLIST.md",
-      "D YOUTUBE_USER_GUIDE.md",
-      "D code-janitor-1.10.0.vsix",
-      "D code-janitor-1.10.1.vsix",
-      "D code-janitor-1.10.2.vsix",
-      "D code-janitor-1.10.3.vsix",
-      "D code-janitor-1.10.4.vsix",
-      "D code-janitor-1.10.5.vsix",
-      "D code-janitor-1.10.6.vsix",
-      "D code-janitor-1.10.7.vsix",
-      "D code-janitor-1.10.8.vsix",
-      "D code-janitor-1.10.9.vsix",
-      "D code-janitor-1.11.0.vsix",
-      "D code-janitor-1.11.1.vsix",
-      "D code-janitor-1.11.2.vsix",
-      "D code-janitor-1.11.3.vsix",
-      "D code-janitor-1.11.4.vsix",
-      "D code-janitor-1.11.5.vsix",
-      "D code-janitor-1.11.6.vsix",
-      "D code-janitor-1.11.7.vsix",
-      "D code-janitor-1.11.8.vsix",
-      "D code-janitor-1.11.9.vsix",
-      "D code-janitor-1.12.0.vsix",
-      "D code-janitor-1.12.1.vsix",
-      "D code-janitor-1.12.2.vsix",
-      "D code-janitor-1.12.3.vsix",
-      "D code-janitor-1.12.4.vsix",
-      "D code-janitor-1.12.5.vsix",
-      "D code-janitor-1.12.6.vsix",
-      "D code-janitor-1.12.7.vsix",
-      "D code-janitor-1.12.8.vsix",
-      "D code-janitor-1.12.9.vsix",
-      "D code-janitor-1.13.0.vsix",
-      "D code-janitor-1.13.1.vsix",
-      "D code-janitor-1.14.0.vsix",
-      "D code-janitor-1.14.1.vsix",
-      "D code-janitor-1.14.2.vsix",
-      "D code-janitor-1.4.8.vsix",
-      "D code-janitor-1.4.9.vsix",
-      "D code-janitor-1.5.0.vsix",
-      "D code-janitor-1.5.1.vsix",
-      "D code-janitor-1.5.2.vsix",
-      "D code-janitor-1.5.3.vsix",
-      "D code-janitor-1.5.4.vsix",
-      "D code-janitor-1.5.5.vsix",
-      "D code-janitor-1.5.6.vsix",
-      "D code-janitor-1.5.7.vsix",
-      "D code-janitor-1.5.8.vsix",
-      "D code-janitor-1.5.9.vsix",
-      "D code-janitor-1.6.0.vsix",
-      "D code-janitor-1.6.1.vsix",
-      "D code-janitor-1.6.2.vsix",
-      "D code-janitor-1.8.1.vsix",
-      "D code-janitor-1.8.4.vsix",
-      "D code-janitor-1.9.7.vsix",
-      "D code-janitor-1.9.8.vsix",
-      "D code-janitor-1.9.9.vsix",
-      "M graphify-out/GRAPH_REPORT.md",
-      "M graphify-out/graph.json",
-      "M node_modules/.package-lock.json",
-      "M package-lock.json",
       "M package.json",
-      "M src/__tests__/cli.test.js",
-      "M src/agent-loop-cli.js",
-      "M src/ai-agent/__tests__/agent-structured-edits.test.js",
-      "M src/ai-agent/__tests__/chat-panel-structured-edits.test.js",
-      "M src/ai-agent/__tests__/performance-optimizer.test.js",
-      "M src/ai-agent/__tests__/workspace-memory.test.js",
       "M src/ai-agent/agent.js",
-      "M src/ai-agent/chat-panel.html",
       "M src/ai-agent/chat-panel.js",
-      "M src/ai-agent/performance-optimizer.js",
+      "M src/ai-agent/provider-utils.js",
       "M src/ai-agent/tools/__tests__/execute-tests.test.js",
-      "M src/ai-agent/tools/__tests__/generate-documentation.test.js",
+      "M src/ai-agent/tools/__tests__/fetch-github-context.test.js",
       "M src/ai-agent/tools/apply-diff.js",
-      "M src/ai-agent/tools/attempt-completion.js",
       "M src/ai-agent/tools/execute-tests.js",
-      "M src/ai-agent/tools/generate-documentation.js",
-      "M src/ai-agent/tools/index.js",
-      "M src/ai-agent/tools/tool-registry.js",
-      "M src/ai-agent/workspace-memory-config.js",
-      "M src/ai-agent/workspace-memory.js",
-      "M src/cli-chat.js",
-      "M src/cli.js",
-      "M src/core/__tests__/frontend-validator.test.js",
-      "M src/core/frontend-validator.js",
-      "M src/extension.js",
-      "M src/graphify/__tests__/graphify-runtime.test.js",
-      "M src/graphify/graphify-analyzer.js",
-      "M src/graphify/graphify-panel.js",
-      "M src/self-healing/performance-monitor.js",
-      "?? mcp.config.json",
-      "?? src/ai-agent/project-planner-view.js",
-      "?? src/services/",
-      "?? workspace.json"
+      "M src/ai-agent/tools/fetch-github-context.js",
+      "M src/ai-agent/tools/insert-content.js",
+      "M src/ai-agent/tools/read-file.js",
+      "M src/services/mcp/MCPToolExecutor.js",
+      "M workspace.json",
+      "?? src/ai-agent/__tests__/provider-utils.test.js",
+      "?? src/services/mcp/__tests__/MCPToolExecutor-risk.test.js",
+      "?? src/utils/__tests__/",
+      "?? src/utils/safe-path.js",
+      "?? src/utils/safe-url.js"
     ],
     "error": ""
   },
   "github": {
     "available": true,
-    "summary": "GitHub Repository: Debanshu2005/code-janitor\nDescription: An autocorrect and syntax fixer for multiple programming languages.\nVisibility: public | Default branch: main\nStars: 1 | Forks: 0 | Open issues: 0\n\nLatest commit on main:\n- 5479f54 by Somoshree on 2026-05-17\n  Merge branch 'main' of https://github.com/Debanshu2005/code-janitor\n\nURL: https://github.com/Debanshu2005/code-janitor"
+    "summary": "GitHub Repository: Debanshu2005/code-janitor\nDescription: An autocorrect and syntax fixer for multiple programming languages.\nVisibility: public | Default branch: main\nStars: 1 | Forks: 0 | Open issues: 0\n\nLatest commit on main:\n- 5f95392 by Debanshu2005 on 2026-06-12\n  Merge branch 'main' of https://github.com/Debanshu2005/code-janitor\n\nURL: https://github.com/Debanshu2005/code-janitor"
   },
   "graphify": {
     "reportAvailable": true,

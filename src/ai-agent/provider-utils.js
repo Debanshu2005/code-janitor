@@ -1,5 +1,3 @@
-const vscode = require("../utils/vscode-shim");
-
 const BUILT_IN_PROVIDERS = new Set([
   "ollama",
   "groq",
@@ -52,14 +50,6 @@ function resolveCustomProviderChatUrl(baseUrl) {
   return `${normalized}/v1/chat/completions`;
 }
 
-function getApiKeyConfigKey(provider) {
-  if (provider === "groq") return "groqApiKey";
-  if (provider === "openrouter") return "openrouterApiKey";
-  if (provider === "anthropic") return "anthropicApiKey";
-  if (provider === "nvidia") return "nvidiaApiKey";
-  return null;
-}
-
 function getApiSecretKey(provider) {
   return `codeJanitor.ai.${provider}.apiKey`;
 }
@@ -84,15 +74,11 @@ function getSavedProviderModel(context, provider, fallback = "") {
 }
 
 async function getStoredApiKey(context, provider) {
-  const configKey = getApiKeyConfigKey(provider);
   const secretValue = sanitizeApiKey(
     await context?.secrets?.get?.(getApiSecretKey(provider))
   );
   if (secretValue) return secretValue;
-  if (!configKey) return "";
-
-  const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-  return sanitizeApiKey(cfg.get(configKey, ""));
+  return "";
 }
 
 function getProviderDisplayName(provider, context) {
