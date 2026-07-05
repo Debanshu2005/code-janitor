@@ -89,18 +89,20 @@ Supported targets: one file or one directory. Supported extensions currently inc
 3. **Live Preview**: Use `Alt+P` or Command Palette → `Code Janitor: Live Preview`
 
 
-   <img width="1920" height="1020" alt="Screenshot 2026-04-06 205439" src="https://github.com/user-attachments/assets/5620f974-e99d-4447-85e2-5c2ba09a14e6" />
+  <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/3c3721f1-9311-4c3a-8e0e-202660fd03a5" />
+
 
    
 4. **AI Chat Panel**: Use `Ctrl+Alt+C` or Command Palette → `Code Janitor: Open AI Chat`
 
    
-   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/64887636-95ef-40c2-a41f-9dfa876eba93" />
+ <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/755b2bd3-c9eb-4e1b-8333-871ebb340e82" />
 
    
 5. **Graphify**: Use `Ctrl+Alt+G` or Command Palette → `Code Janitor: Graphify`
    
-   <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/2e7276ec-4fdf-4745-8fe3-83da20377be6" />
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/fb60120c-3574-43b9-85d3-aee1d3ca57d9" />
+
 
 ### AI Chat Features
 
