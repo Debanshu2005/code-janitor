@@ -543,6 +543,7 @@
     "format:html": "prettier --write \"src/**/*.html\"",
     "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c && npm run format:html",
     "clean": "rimraf ./out",
+    "install:formatters": "node scripts/install-formatters.js",
     "package": ".\\node_modules\\.bin\\vsce.cmd package",
     "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
   },

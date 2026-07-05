@@ -1,5 +1,0 @@
-
-Replace `relative/path.ext` with the path to the file you want to rewrite. The changes will be applied directly to the workspace.
-
-For example, if you want to rewrite the `ollama-client.js` file, you can use the following command:
-

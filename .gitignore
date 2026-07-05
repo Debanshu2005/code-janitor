@@ -1,16 +1,41 @@
-# Ignore all markdown files except README.md and bob_sessions
-*.md
-!README.md
-!bob_sessions/*.md
-
-# Node modules
+# Dependencies
 node_modules/
 
-# VS Code
-.vscode/
+# Package/build artifacts
+# Downloaded formatter payloads
+/formatters/google-java-format/
+/formatters/prettier/
+/formatters/python-formatters/
+/formatters/uncrustify/
+/src/core/fixers/black/
+/src/core/fixers/google-java-format-*.jar
+/src/core/fixers/uncrustify-*/
 *.vsix
+*.tgz
+.tmp-*
+.tmp-vsix-*/
+dist/
+out/
+build/
+coverage/
 
-# IDE specific
+# Generated workspace and agent state
+.janitor-audit-log
+graphify-out/
+workspace.json
+workspace*.json
+workspacememory.md
+WORKSPACE_MEMORY.md
+bob_sessions/
+.agent/
+.cursor/
+
+# Local assistant/editor add-ons
+.agents/
+.amazonq/
+
+# VS Code / editor state
+.vscode/
 .idea/
 *.iml
 *.ipr
@@ -21,12 +46,45 @@ node_modules/
 *.sublime-workspace
 *.sublime-project
 
-# Python
+# Environment and logs
+.env
+.env.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python caches
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Java
+# Generated test/output directories
+/test-reports/
+/index.html/
+/None/
+/path/
+/relative/
 
-# Ignore workspace.json
-workspace.json
+# Local scratch/test artifacts
+/Untitled-*.js
+/temp-*.js
+/working-*.js
+/test-*.js
+/test-*.html
+/test_*.py
+/simple-test.html
+/settings.json
+/node.cmd
+/fix_extension*.py
+/replace*.py
+/new-fix-command.txt
+/nvidia-*.txt
+/*_FIX.txt
+/*_FIX.md
+/*_SUMMARY.md
+/*_GUIDE.md
+
+# Legacy stray config
+/eslintrc.js

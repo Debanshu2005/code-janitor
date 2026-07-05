@@ -278,5 +278,5 @@ Code Janitor is licensed under the MIT License. For more information, see the [L
 
 - **Website**: https://code-janitor-web.vercel.app/
 - **GitHub**: https://github.com/Debanshu2005/code-janitor
-- **VS Code Marketplace**: [Code Janitor](https://marketplace.visualstudio.com/items?itemName=your-publisher.code-janitor)
+- **VS Code Marketplace**: [Code Janitor](https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor)
 - **Issues**: https://github.com/Debanshu2005/code-janitor/issues
