@@ -1,4 +1,5 @@
 /* eslint-env jest */
+const path = require("path");
 const mockAnalyzeTarget = jest.fn();
 const mockRunAgentCli = jest.fn();
 const mockRunChatCli = jest.fn();
@@ -165,7 +166,7 @@ describe("cli", () => {
     const exitCode = await runCli(["D:\\project", "--check"], io);
 
     expect(exitCode).toBe(1);
-    expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+    expect(mockAnalyzeTarget).toHaveBeenCalledWith(path.resolve("D:\\project"), {
       ai: false,
       aiModel: "",
       nvidiaApiKey: "",
@@ -230,7 +231,7 @@ describe("cli", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+    expect(mockAnalyzeTarget).toHaveBeenCalledWith(path.resolve("D:\\project"), {
       ai: true,
       aiModel: "qwen2.5-coder:7b",
       nvidiaApiKey: "",
@@ -272,7 +273,7 @@ describe("cli", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(mockAnalyzeTarget).toHaveBeenCalledWith("D:\\project", {
+    expect(mockAnalyzeTarget).toHaveBeenCalledWith(path.resolve("D:\\project"), {
       ai: true,
       aiModel: "meta/llama-3.1-8b-instruct",
       nvidiaApiKey: "secret-token",
