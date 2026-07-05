@@ -6,13 +6,29 @@ const {
 } = require("../MCPToolExecutor");
 
 describe("MCPToolExecutor risk assessment", () => {
-  test("allows explicitly read-only tools", () => {
+  test("requires confirmation for untrusted read-only annotations", () => {
     const risk = assessToolRisk("filesystem", {
       name: "read_file",
       annotations: {
         readOnlyHint: true
       }
     });
+
+    expect(risk.requiresConfirmation).toBe(true);
+    expect(risk.reason).toContain("not marked trusted");
+  });
+
+  test("allows explicitly read-only tools from trusted servers", () => {
+    const risk = assessToolRisk(
+      "filesystem",
+      {
+        name: "read_file",
+        annotations: {
+          readOnlyHint: true
+        }
+      },
+      { trustedServer: true }
+    );
 
     expect(risk.requiresConfirmation).toBe(false);
   });
@@ -30,9 +46,13 @@ describe("MCPToolExecutor risk assessment", () => {
   });
 
   test("requires confirmation for risky tool names beyond GitHub and Docker", () => {
-    const risk = assessToolRisk("postgres", {
-      name: "execute_sql_update"
-    });
+    const risk = assessToolRisk(
+      "postgres",
+      {
+        name: "execute_sql_update"
+      },
+      { trustedServer: true }
+    );
 
     expect(risk.requiresConfirmation).toBe(true);
   });

@@ -78,4 +78,60 @@ describe("ToolRegistry validators", () => {
       )
     ).rejects.toThrow(/should not end with a question|should not start/i);
   });
+
+  test("runs input guardrails before schema validation", async () => {
+    const registry = new ToolRegistry();
+
+    await expect(
+      registry.executeTool("attempt_completion", null, tempDir)
+    ).rejects.toThrow(/Tool input guardrail blocked attempt_completion/i);
+  });
+
+  test("blocks oversized tool output and records a failed execution", async () => {
+    const registry = new ToolRegistry();
+    registry.registerTool({
+      name: "huge_output",
+      description: "Returns a response larger than the output guardrail limit",
+      params: {},
+      handler: async () => "x".repeat(2_000_001)
+    });
+
+    await expect(
+      registry.executeTool("huge_output", {}, tempDir)
+    ).rejects.toThrow(/Tool output guardrail blocked huge_output/i);
+
+    expect(registry.getHistory(1)[0]).toEqual(
+      expect.objectContaining({
+        tool: "huge_output",
+        success: false
+      })
+    );
+  });
+
+  test("emits trace spans around tool execution", async () => {
+    const registry = new ToolRegistry();
+    const trace = {
+      startSpan: jest.fn(() => ({ id: "span-1", name: "tool_call" })),
+      endSpan: jest.fn()
+    };
+
+    registry.registerTool({
+      name: "noop",
+      description: "No-op test tool",
+      params: {},
+      handler: async () => ({ ok: true })
+    });
+
+    await registry.executeTool("noop", {}, tempDir, { trace });
+
+    expect(trace.startSpan).toHaveBeenCalledWith(
+      "tool_call",
+      expect.objectContaining({ toolName: "noop" })
+    );
+    expect(trace.endSpan).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "span-1" }),
+      "completed",
+      expect.objectContaining({ durationMs: expect.any(Number) })
+    );
+  });
 });

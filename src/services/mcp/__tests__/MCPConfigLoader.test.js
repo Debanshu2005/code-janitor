@@ -43,6 +43,7 @@ describe("MCPConfigLoader", () => {
           mcpServers: {
             filesystem: {
               enabled: true,
+              trusted: true,
               command: "npx",
               args: [
                 "-y",
@@ -78,6 +79,8 @@ describe("MCPConfigLoader", () => {
 
     expect(filesystemServer).toBeTruthy();
     expect(githubServer).toBeTruthy();
+    expect(filesystemServer.trusted).toBe(true);
+    expect(githubServer.trusted).toBe(false);
     expect(githubServer.env.GITHUB_TOKEN).toBe("token-from-env");
 
     const filesystemArgs = filesystemServer.args.join(" ");

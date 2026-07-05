@@ -183,6 +183,11 @@ class MCPClientManager extends EventEmitter {
     return connection.getTool(toolName);
   }
 
+  isServerTrusted(serverName) {
+    const connection = this.connections.get(serverName);
+    return connection?.serverConfig?.trusted === true;
+  }
+
   async callTool(serverName, toolName, args = {}, options = {}) {
     const connection = this.connections.get(serverName);
     if (!connection) {
@@ -257,14 +262,16 @@ class MCPClientManager extends EventEmitter {
       "Rules:",
       "- Only call the tools listed below.",
       "- Filesystem MCP access is restricted to the current workspace.",
-      "- Potentially destructive GitHub and Docker tools require user confirmation before execution.",
+      "- MCP tools from untrusted servers or tools with state-changing risk require user confirmation before execution.",
+      "- Tool annotations are hints; only trusted servers can use read-only annotations to skip confirmation.",
       "",
       "Available MCP servers and tools:"
     ];
 
     let renderedToolCount = 0;
     for (const server of connectedServers) {
-      lines.push(`- ${server.name}: ${server.toolCount} tool(s)`);
+      const trustText = this.isServerTrusted(server.name) ? "trusted" : "untrusted";
+      lines.push(`- ${server.name}: ${server.toolCount} tool(s), ${trustText}`);
       if (server.instructions) {
         lines.push(`  Server notes: ${truncateText(server.instructions, 220)}`);
       }

@@ -62,9 +62,11 @@ async function executeMcpTool(params = {}, workspaceRoot, executionContext = {})
 
   const manager = await ensureManager(workspaceRoot);
   const tool = manager.getTool(params.serverName, params.toolName);
+  const trustedServer = manager.isServerTrusted?.(params.serverName) === true;
   const risk = assessToolRisk(
     params.serverName,
-    tool || { name: params.toolName }
+    tool || { name: params.toolName },
+    { trustedServer }
   );
 
   if (
@@ -114,8 +116,20 @@ function getMcpUiState() {
   return mcpClientManager ? mcpClientManager.getUiState() : null;
 }
 
-function assessToolRisk(serverName, tool = null) {
+function assessToolRisk(serverName, tool = null, options = {}) {
   const annotations = tool?.annotations || {};
+  const trustedServer = options.trustedServer === true;
+  const lowerServer = String(serverName || "").toLowerCase();
+
+  if (!trustedServer) {
+    return {
+      requiresConfirmation: true,
+      reason:
+        `the MCP server ${lowerServer || "unknown"} is not marked trusted; ` +
+        "tool annotations are untrusted hints"
+    };
+  }
+
   if (annotations.readOnlyHint === true && annotations.destructiveHint !== true) {
     return {
       requiresConfirmation: false,
@@ -123,7 +137,6 @@ function assessToolRisk(serverName, tool = null) {
     };
   }
 
-  const lowerServer = String(serverName || "").toLowerCase();
   const lowerToolName = String(tool?.name || "").toLowerCase();
   const riskyVerbPattern =
     /(delete|destroy|remove|write|update|create|merge|dispatch|restart|stop|kill|exec|run|push|close|approve|commit|apply|modify|upload|send)/i;

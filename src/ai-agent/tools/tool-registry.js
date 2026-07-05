@@ -21,6 +21,7 @@ const {
   executeMcpTool,
   validateMcpCall
 } = require("../../services/mcp/MCPToolExecutor");
+const { toolGuardrails } = require("../tool-guardrails");
 
 /**
  * Tool definitions with metadata
@@ -683,6 +684,19 @@ class ToolRegistry {
     if (!tool) {
       throw new Error(`Unknown tool: ${toolName}`);
     }
+
+    const inputGuardrailResult = await toolGuardrails.runInputGuardrails({
+      toolName,
+      params,
+      workspaceRoot,
+      executionContext,
+      toolDefinition: tool
+    });
+    if (!inputGuardrailResult.allowed) {
+      throw new Error(
+        `Tool input guardrail blocked ${toolName}: ${inputGuardrailResult.reason}`
+      );
+    }
     
     // Validate parameters
     const validation = this.validateParams(toolName, params);
@@ -698,11 +712,16 @@ class ToolRegistry {
     if (!toolValidation.valid) {
       throw new Error(`Invalid ${toolName} payload: ${toolValidation.error}`);
     }
-    
+
     // Execute tool
     const startTime = Date.now();
     let result;
     let error;
+    const trace = executionContext.agentRunTrace || executionContext.trace || null;
+    const traceSpan = trace?.startSpan?.("tool_call", {
+      toolName,
+      workspaceRoot: Boolean(workspaceRoot)
+    });
     
     try {
       // Call handler with appropriate parameters
@@ -744,10 +763,33 @@ class ToolRegistry {
       } else {
         result = await tool.handler(params, workspaceRoot, executionContext);
       }
+
+      const outputGuardrailResult = await toolGuardrails.runOutputGuardrails({
+        toolName,
+        params,
+        result,
+        workspaceRoot,
+        executionContext,
+        toolDefinition: tool
+      });
+      if (!outputGuardrailResult.allowed) {
+        throw new Error(
+          `Tool output guardrail blocked ${toolName}: ${outputGuardrailResult.reason}`
+        );
+      }
     } catch (err) {
       error = err.message;
+      trace?.endSpan?.(traceSpan, "failed", {
+        error,
+        durationMs: Date.now() - startTime
+      });
       throw err;
     } finally {
+      if (!error) {
+        trace?.endSpan?.(traceSpan, "completed", {
+          durationMs: Date.now() - startTime
+        });
+      }
       // Record execution
       const execution = {
         tool: toolName,
@@ -755,7 +797,10 @@ class ToolRegistry {
         duration: Date.now() - startTime,
         success: !error,
         error: error,
-        params: this._sanitizeParams(params)
+        params: this._sanitizeParams(params),
+        guardrails: {
+          input: inputGuardrailResult.results || []
+        }
       };
       
       this.executionHistory.push(execution);

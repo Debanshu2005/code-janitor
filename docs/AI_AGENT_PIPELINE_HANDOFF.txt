@@ -1,0 +1,179 @@
+# AI Agent Pipeline Handoff
+
+Date: 2026-07-05
+
+This handoff summarizes the current AI-agent pipeline hardening work, what should happen next, and what future edits should avoid changing.
+
+## Current State
+
+The first production-hardening slice is implemented:
+
+- Durable agent run tracking exists in `src/ai-agent/agent-run-store.js`.
+- Chat pipeline stages in `src/ai-agent/agent.js` now create run IDs, checkpoints, and trace-style spans.
+- Tool input and output guardrails exist in `src/ai-agent/tool-guardrails.js`.
+- `src/ai-agent/tools/tool-registry.js` runs tool guardrails before and after tool execution and emits `tool_call` trace spans.
+- MCP trust handling is stricter:
+  - `mcp.config.json` server entries may include `trusted: true`.
+  - `src/services/mcp/MCPConfigLoader.js` preserves the trusted flag.
+  - `src/services/mcp/MCPClientManager.js` exposes `isServerTrusted`.
+  - `src/services/mcp/MCPToolExecutor.js` requires confirmation for untrusted MCP servers even when tool annotations claim `readOnlyHint`.
+  - `src/ai-agent/chat-panel.js` shows the specific MCP risk reason in the confirmation prompt.
+
+The focused test suite passed:
+
+```powershell
+npm test -- --runInBand src/services/mcp/__tests__/MCPToolExecutor-risk.test.js src/services/mcp/__tests__/MCPConfigLoader.test.js src/services/mcp/__tests__/MCPClientManager.test.js src/ai-agent/tools/__tests__/tool-registry.test.js src/ai-agent/__tests__/agent-run-store.test.js src/ai-agent/__tests__/tool-guardrails.test.js src/ai-agent/__tests__/agent-structured-edits.test.js
+```
+
+Expected result from the last run: 7 test suites passed, 134 tests passed.
+
+## Next Work
+
+### 1. Make Run Traces Visible in the UI
+
+Add a lightweight "Recent agent runs" developer/debug surface in the chat panel or project planner.
+
+Suggested scope:
+
+- Read from `agent.getRecentAgentRuns()`.
+- Show run ID, status, duration, final intent, failed stage, and recent spans.
+- Keep sensitive prompt/tool payloads hidden by default.
+- Add a clear action only if it fits existing UI patterns.
+
+Files likely involved:
+
+- `src/ai-agent/chat-panel.js`
+- `src/ai-agent/chat-panel.html`
+- `src/ai-agent/agent.js`
+
+### 2. Add Guardrail Extension Points Per Tool
+
+The current guardrails are global and size/shape based. Add optional per-tool guardrail registration when a tool has domain-specific risk.
+
+Good next candidates:
+
+- `execute_tests`: bound command/test-target combinations and suspicious environment input.
+- `mcp_call`: require risk metadata in history and block malformed server/tool names before confirmation.
+- `apply_diff` and `insert_content`: record whether workspace path validation passed.
+
+Files likely involved:
+
+- `src/ai-agent/tool-guardrails.js`
+- `src/ai-agent/tools/tool-registry.js`
+- `src/ai-agent/tools/execute-tests.js`
+- `src/services/mcp/MCPToolExecutor.js`
+
+### 3. Add Human-Approval Checkpoints to Run Store
+
+MCP confirmations and any future risky command approvals should be recorded as explicit checkpoints.
+
+Track:
+
+- requested action
+- risk reason
+- approved or denied
+- timestamp
+- server/tool name or command category
+
+Do not store raw secrets, full command output, auth headers, cookies, or full prompts.
+
+Files likely involved:
+
+- `src/ai-agent/chat-panel.js`
+- `src/ai-agent/agent-run-store.js`
+- `src/ai-agent/tools/tool-registry.js`
+
+### 4. Add Sandbox Policy Objects
+
+The current command and tool protections are spread across validators, confirmation prompts, and execution helpers. Create a central policy object that can answer:
+
+- Is this action read-only?
+- Does this action write inside the workspace?
+- Does this action need user confirmation?
+- Does this action need a stricter execution sandbox?
+
+Start small. Do not rewrite every executor in one pass.
+
+Files likely involved:
+
+- New file such as `src/ai-agent/action-policy.js`
+- `src/ai-agent/tools/tool-registry.js`
+- `src/services/mcp/MCPToolExecutor.js`
+- existing command validation paths in `src/ai-agent/agent.js`
+
+### 5. Add Regression Evals for Agent Safety
+
+Create a small deterministic eval suite for the agent pipeline rather than relying only on unit tests.
+
+Suggested cases:
+
+- prompt injection attempts inside fetched web content
+- MCP server claiming unsafe tools are read-only
+- path traversal attempts in file tools
+- command injection attempts in test execution
+- oversized tool output
+- failed provider response preserving a failed run state
+
+Possible location:
+
+- `src/ai-agent/__tests__/agent-safety-regressions.test.js`
+
+## Do Not Change Without a Specific Reason
+
+- Do not revert or overwrite unrelated user edits in `.gitignore`, `package.json`, or `workspace.json`.
+- Do not loosen MCP confirmation rules for untrusted servers.
+- Do not treat MCP `ToolAnnotations` as authoritative unless the server is explicitly trusted.
+- Do not store raw API keys, bearer tokens, cookies, auth headers, full prompts, or full tool outputs in run traces.
+- Do not replace the existing chat pipeline wholesale; extend it in small staged changes.
+- Do not broaden command execution permissions while working on performance or observability.
+- Do not change generated or packaged copies under `.tmp-vsix-100/` unless the task is specifically about packaging artifacts.
+- Do not refactor the large god-node files (`src/ai-agent/agent.js`, `src/ai-agent/chat-panel.js`, `src/extension.js`) for style only.
+
+## Change Boundaries
+
+Prefer these boundaries for the next implementation passes:
+
+- Observability code belongs in `agent-run-store.js` or small helpers, then gets called from `agent.js`.
+- Tool safety checks belong in `tool-guardrails.js`, individual tool validators, or the registry.
+- MCP trust and risk logic belongs in `src/services/mcp/`.
+- UI display/confirmation logic belongs in `chat-panel.js` and `chat-panel.html`.
+- Tests should stay close to the behavior they lock down.
+
+## Verification Checklist
+
+Before handing off future changes, run:
+
+```powershell
+node --check src/ai-agent/agent-run-store.js
+node --check src/ai-agent/tool-guardrails.js
+node --check src/ai-agent/tools/tool-registry.js
+node --check src/services/mcp/MCPToolExecutor.js
+node --check src/services/mcp/MCPClientManager.js
+node --check src/services/mcp/MCPConfigLoader.js
+node --check src/ai-agent/agent.js
+node --check src/ai-agent/chat-panel.js
+```
+
+Then run the focused tests:
+
+```powershell
+npm test -- --runInBand src/services/mcp/__tests__/MCPToolExecutor-risk.test.js src/services/mcp/__tests__/MCPConfigLoader.test.js src/services/mcp/__tests__/MCPClientManager.test.js src/ai-agent/tools/__tests__/tool-registry.test.js src/ai-agent/__tests__/agent-run-store.test.js src/ai-agent/__tests__/tool-guardrails.test.js src/ai-agent/__tests__/agent-structured-edits.test.js
+```
+
+Also run:
+
+```powershell
+git diff --check
+git status --short
+```
+
+On Windows, Jest may fail inside the managed sandbox with an `EPERM` error while resolving paths under `C:\Users\Debanshu`. If that happens, rerun the same test command with the approved elevated test execution path rather than changing the code to work around the sandbox.
+
+## Useful References
+
+- `docs/WORKSPACE_EDITING_PIPELINE.md`
+- `docs/PIPELINE_ANALYSIS_SUMMARY.md`
+- `docs/MCP_INTEGRATION.md`
+- `graphify-out/GRAPH_REPORT.md`
+- `graphify-out/WORKSPACE_MEMORY.md`
+- `workspace.json`

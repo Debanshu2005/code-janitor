@@ -126,6 +126,7 @@ class MCPConfigLoader {
       name: serverName,
       enabled: enabled && availability.available,
       configuredEnabled: enabled,
+      trusted: rawServer.trusted === true,
       command: platformCommand.command,
       args: platformCommand.args,
       env,

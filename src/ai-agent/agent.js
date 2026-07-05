@@ -23,6 +23,7 @@ const {
 } = require("./workspace-memory-config");
 const { assertSafeFetchUrl } = require("../utils/safe-url");
 const { SemanticCache, getOrSet } = require("../utils/semantic-cache");
+const { AgentRunStore, AgentRunTrace } = require("./agent-run-store");
 
 const MAX_SCAN_FILE_SIZE = 200 * 1024;
 const MAX_CONTEXT_CHARS = 8_000;
@@ -183,6 +184,7 @@ class AIAgent {
     this._nvidiaModelsCache = [];
     this._nvidiaModelsFetchedAt = 0;
     this._lastPipelineMetrics = null;
+    this._runStore = new AgentRunStore(context);
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
     this._syncCurrentSessionReferences();
@@ -210,9 +212,21 @@ class AIAgent {
       : null;
   }
 
+  getRecentAgentRuns(limit = 10) {
+    return this._runStore.listRuns(limit);
+  }
+
   _createChatPipelineState({ mode = "fast", earlyIntent = "general" } = {}) {
     this._lastPipelineMetrics = null;
+    const run = this._runStore.createRun({
+      workflowName: "chat",
+      mode,
+      earlyIntent
+    });
+    const trace = new AgentRunTrace(this._runStore, run);
     return {
+      runId: run.id,
+      trace,
       mode,
       earlyIntent,
       startedAt: Date.now(),
@@ -232,6 +246,10 @@ class AIAgent {
 
   async _runChatPipelineStage(state, name, handler) {
     const startedAt = Date.now();
+    const traceSpan = state.trace?.startSpan?.(name, {
+      mode: state.mode,
+      earlyIntent: state.earlyIntent
+    });
     const stage = {
       name,
       startedAt,
@@ -250,18 +268,31 @@ class AIAgent {
         stage.details = details;
       }
       state.stageTimings.push(stage);
+      state.trace?.endSpan?.(traceSpan, "completed", stage.details || {});
+      state.trace?.checkpoint?.(name, {
+        status: "completed",
+        durationMs: stage.durationMs
+      });
       return details;
     } catch (error) {
       stage.status = "failed";
       stage.durationMs = Date.now() - startedAt;
       stage.error = error?.message || String(error);
       state.stageTimings.push(stage);
+      state.trace?.endSpan?.(traceSpan, "failed", { error: stage.error });
+      state.trace?.checkpoint?.(name, {
+        status: "failed",
+        durationMs: stage.durationMs,
+        error: stage.error
+      });
+      state.trace?.fail?.(error, { failedStage: name });
       throw error;
     }
   }
 
   _finalizeChatPipelineResponse(state, response, extra = {}) {
     const pipelineMetrics = {
+      runId: state.runId,
       mode: state.mode,
       earlyIntent: state.earlyIntent,
       finalIntent: extra.finalIntent || state.earlyIntent,
@@ -285,6 +316,18 @@ class AIAgent {
     };
 
     this._lastPipelineMetrics = pipelineMetrics;
+    if (response?.error) {
+      state.trace?.fail?.(response.error, {
+        finalIntent: pipelineMetrics.finalIntent,
+        totalDurationMs: pipelineMetrics.totalDurationMs
+      });
+    } else {
+      state.trace?.complete?.({
+        finalIntent: pipelineMetrics.finalIntent,
+        totalDurationMs: pipelineMetrics.totalDurationMs,
+        actionCount: Array.isArray(response?.actions) ? response.actions.length : 0
+      });
+    }
 
     if (!response || typeof response !== "object" || response.error) {
       return response;

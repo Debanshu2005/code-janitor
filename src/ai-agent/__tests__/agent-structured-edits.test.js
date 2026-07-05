@@ -2215,6 +2215,7 @@ describe("AIAgent structured edit parsing", () => {
     });
 
     expect(result.pipelineMetrics).toBeDefined();
+    expect(result.pipelineMetrics.runId).toMatch(/^run_/);
     expect(result.pipelineMetrics.mode).toBe("fast");
     expect(result.pipelineMetrics.stages.map((stage) => stage.name)).toEqual(
       expect.arrayContaining([
@@ -2229,6 +2230,17 @@ describe("AIAgent structured edit parsing", () => {
       ])
     );
     expect(agent.getLastPipelineMetrics()).toEqual(result.pipelineMetrics);
+
+    const recentRuns = agent.getRecentAgentRuns();
+    expect(recentRuns[0]).toEqual(
+      expect.objectContaining({
+        id: result.pipelineMetrics.runId,
+        status: "completed"
+      })
+    );
+    expect(recentRuns[0].spans.map((span) => span.name)).toEqual(
+      expect.arrayContaining(["prepare_request", "llm_inference"])
+    );
   });
 
   test("chat rejects image attachments for text-only models before requesting the provider", async () => {

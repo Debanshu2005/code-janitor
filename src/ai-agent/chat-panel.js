@@ -3359,14 +3359,16 @@ ${fileContent}
   async _confirmMcpToolAction(action) {
     const manager = await this._ensureMcpReady();
     const tool = manager?.getTool(action.serverName, action.toolName) || null;
-    const risk = assessToolRisk(action.serverName, tool);
+    const risk = assessToolRisk(action.serverName, tool, {
+      trustedServer: manager?.isServerTrusted?.(action.serverName) === true
+    });
 
     if (!risk.requiresConfirmation) {
       return true;
     }
 
     const choice = await vscode.window.showWarningMessage(
-      `Run MCP tool ${action.serverName}.${action.toolName}? This may perform a state-changing GitHub or Docker action.`,
+      `Run MCP tool ${action.serverName}.${action.toolName}? Confirmation is required because ${risk.reason}.`,
       { modal: true },
       "Run Tool"
     );
