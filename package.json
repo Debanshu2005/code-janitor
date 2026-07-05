@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -544,8 +544,8 @@
     "format": "npm run format:js && npm run format:java && npm run format:py && npm run format:c && npm run format:html",
     "clean": "rimraf ./out",
     "install:formatters": "node scripts/install-formatters.js",
-    "package": ".\\node_modules\\.bin\\vsce.cmd package",
-    "publish": ".\\node_modules\\.bin\\vsce.cmd publish"
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

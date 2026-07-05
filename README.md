@@ -2,6 +2,7 @@
 ![VS Code](https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code)
 ![Arduino IDE](https://img.shields.io/badge/Arduino%20IDE-2.x-00979D?logo=arduino)
 ![Node](https://img.shields.io/badge/Node-%3E%3D18-brightgreen?logo=node.js)
+![CI](https://github.com/Debanshu2005/code-janitor/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Introduction
