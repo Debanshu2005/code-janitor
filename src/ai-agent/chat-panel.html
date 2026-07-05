@@ -2487,6 +2487,116 @@
       #image-preview-strip.visible {
         display: flex;
       }
+      #support-prompt {
+        position: fixed;
+        right: 16px;
+        bottom: 92px;
+        display: none;
+        width: min(360px, calc(100vw - 32px));
+        padding: 14px;
+        border: 1px solid rgba(48, 54, 61, 0.7);
+        border-radius: 14px;
+        background:
+          linear-gradient(135deg, rgba(47, 129, 247, 0.12), rgba(63, 185, 80, 0.08)),
+          rgba(13, 17, 23, 0.98);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+        z-index: 38;
+      }
+      #support-prompt.visible {
+        display: block;
+      }
+      body.focus-mode #support-prompt {
+        display: none;
+      }
+      .support-prompt-copy {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .support-prompt-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .support-prompt-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      #support-prompt-close {
+        width: 24px;
+        height: 24px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel-2);
+        color: var(--muted);
+        cursor: pointer;
+        line-height: 1;
+      }
+      #support-prompt-close:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+      .support-prompt-copy strong {
+        color: var(--text);
+        font-weight: 700;
+      }
+      .support-prompt-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        flex-shrink: 0;
+        margin-top: 12px;
+      }
+      .support-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 5px 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel-2);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+        transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+      }
+      .support-link:hover {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: #fff;
+      }
+      .support-link.github:hover {
+        border-color: var(--green);
+        background: var(--green-soft);
+      }
+      #support-prompt-later {
+        min-height: 28px;
+        padding: 5px 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      #support-prompt-later:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
       .image-chip {
         display: flex;
         align-items: center;
@@ -2543,6 +2653,16 @@
         color: var(--muted);
         margin-top: 5px;
         padding-left: 2px;
+      }
+      @media (max-width: 560px) {
+        #support-prompt {
+          right: 10px;
+          bottom: 82px;
+          width: calc(100vw - 20px);
+        }
+        .support-prompt-actions {
+          justify-content: flex-start;
+        }
       }
 
       /* Welcome overlay */
@@ -3615,6 +3735,21 @@
       </div>
     </div>
 
+    <div id="support-prompt" role="dialog" aria-live="polite" aria-label="Support Code Janitor">
+      <div class="support-prompt-head">
+        <div class="support-prompt-title">Like working with Code Janitor?</div>
+        <button id="support-prompt-close" type="button" title="Dismiss support prompt" aria-label="Dismiss support prompt">x</button>
+      </div>
+      <div class="support-prompt-copy">
+        <span>Drop a rating, or join the community by forking the repo and submitting a pull request.</span>
+      </div>
+      <div class="support-prompt-actions">
+        <button id="support-prompt-later" type="button">Later</button>
+        <a class="support-link" data-external-link href="https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor">Rate on Marketplace</a>
+        <a class="support-link github" data-external-link href="https://github.com/Debanshu2005/code-janitor">Fork / PR on GitHub</a>
+      </div>
+    </div>
+
     <script nonce="__CSP_NONCE__">
       var vscode = acquireVsCodeApi();
       var EXTENSION_MESSAGE_TOKEN = "__WEBVIEW_MESSAGE_TOKEN__";
@@ -3626,6 +3761,9 @@
       var imageInput = document.getElementById("image-input");
       var imagePreviewStrip = document.getElementById("image-preview-strip");
       var inputArea = document.getElementById("input-area");
+      var supportPrompt = document.getElementById("support-prompt");
+      var supportPromptClose = document.getElementById("support-prompt-close");
+      var supportPromptLater = document.getElementById("support-prompt-later");
       var headerLogo = document.getElementById("header-logo");
       var headerSub = document.getElementById("header-sub");
       var headerToolsToggle = document.getElementById("header-tools-toggle");
@@ -3720,6 +3858,8 @@
       var imageInputReason = "Attach images for vision-capable models.";
       var currentMcpSettings = null;
       var currentMcpConfigObject = { mcpServers: {} };
+      var SUPPORT_PROMPT_USAGE_THRESHOLD = 4;
+      var SUPPORT_PROMPT_SNOOZE_SENDS = 6;
 
       function isTrustedExtensionMessage(event) {
         var msg = event && event.data;
@@ -3813,6 +3953,67 @@
         var state = Object.assign({}, vscode.getState() || {}, patch || {});
         vscode.setState(state);
         return state;
+      }
+
+      function hideSupportPrompt() {
+        if (supportPrompt) {
+          supportPrompt.classList.remove("visible");
+        }
+      }
+
+      function showSupportPrompt() {
+        if (supportPrompt && !document.body.classList.contains("focus-mode")) {
+          supportPrompt.classList.add("visible");
+        }
+      }
+
+      function maybeShowSupportPrompt(state) {
+        state = state || vscode.getState() || {};
+        if (state.supportPromptDismissed) {
+          hideSupportPrompt();
+          return;
+        }
+
+        var usageCount = Math.max(0, Number(state.supportPromptUsageCount) || 0);
+        var nextAt = Math.max(
+          SUPPORT_PROMPT_USAGE_THRESHOLD,
+          Number(state.supportPromptNextAt) || SUPPORT_PROMPT_USAGE_THRESHOLD
+        );
+        if (usageCount >= nextAt) {
+          showSupportPrompt();
+        }
+      }
+
+      function recordSupportPromptUsage() {
+        var state = vscode.getState() || {};
+        if (state.supportPromptDismissed) {
+          return;
+        }
+
+        var usageCount = Math.max(0, Number(state.supportPromptUsageCount) || 0) + 1;
+        var nextAt = Math.max(
+          SUPPORT_PROMPT_USAGE_THRESHOLD,
+          Number(state.supportPromptNextAt) || SUPPORT_PROMPT_USAGE_THRESHOLD
+        );
+        var nextState = updateWebviewState({
+          supportPromptUsageCount: usageCount,
+          supportPromptNextAt: nextAt
+        });
+        maybeShowSupportPrompt(nextState);
+      }
+
+      function dismissSupportPrompt() {
+        updateWebviewState({ supportPromptDismissed: true });
+        hideSupportPrompt();
+      }
+
+      function snoozeSupportPrompt() {
+        var state = vscode.getState() || {};
+        var usageCount = Math.max(0, Number(state.supportPromptUsageCount) || 0);
+        updateWebviewState({
+          supportPromptNextAt: usageCount + SUPPORT_PROMPT_SNOOZE_SENDS
+        });
+        hideSupportPrompt();
       }
 
       function renderPendingImages() {
@@ -4825,6 +5026,11 @@
 
       function setFocusMode(enabled) {
         document.body.classList.toggle("focus-mode", enabled);
+        if (enabled) {
+          hideSupportPrompt();
+        } else {
+          maybeShowSupportPrompt();
+        }
         updateWebviewState({ focusMode: enabled });
       }
 
@@ -4930,6 +5136,24 @@
       activityClear.onclick = function () {
         resetActivity();
       };
+      if (supportPromptClose) {
+        supportPromptClose.onclick = dismissSupportPrompt;
+      }
+      if (supportPromptLater) {
+        supportPromptLater.onclick = snoozeSupportPrompt;
+      }
+      if (supportPrompt) {
+        supportPrompt.addEventListener("click", function(event) {
+          var target = event.target;
+          if (!target || typeof target.closest !== "function") {
+            return;
+          }
+          if (target.closest("a[data-external-link]")) {
+            dismissSupportPrompt();
+          }
+        });
+      }
+      maybeShowSupportPrompt(initialUiState);
       headerLogo.onclick = function () {
         vscode.postMessage({ type: "openChatCommand" });
       };
@@ -5416,7 +5640,7 @@
         vscode.postMessage({ type: "openExternal", url: externalUrl });
       }
 
-      chat.addEventListener("click", function (event) {
+      document.addEventListener("click", function (event) {
         var target = event.target;
         if (!target || typeof target.closest !== "function") {
           return;
@@ -6340,6 +6564,7 @@
           }
 
           console.log("[Chat] Posting message to extension");
+          recordSupportPromptUsage();
           vscode.postMessage({
             type: "chat",
             text: text,
