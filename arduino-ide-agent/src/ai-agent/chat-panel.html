@@ -5,13 +5,15 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src https: data:; media-src https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src https:;" />
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: 'dark',
-        securityLevel: 'loose',
-        flowchart: { useMaxWidth: true, htmlLabels: false },
-        sequence: { useMaxWidth: true }
-      });
+      if (window.mermaid) {
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'dark',
+          securityLevel: 'loose',
+          flowchart: { useMaxWidth: true, htmlLabels: false },
+          sequence: { useMaxWidth: true }
+        });
+      }
     </script>
     <style>
       *,
@@ -1702,6 +1704,12 @@
           addRow('Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.', 'status');
           return;
         }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          addRow('Microphone access is not available in this webview.', 'status');
+          addActivity('Microphone access unavailable', 'error');
+          updateMicPermissionBadge('denied');
+          return;
+        }
 
         if (isRecording) {
           if (recognition) {
@@ -2195,8 +2203,8 @@
         text = unescapeHtml(text);
         text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-        text = text.replace(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g, '<em>$1</em>');
-        text = text.replace(/(?<!_)_(?!_)([^_]+)_(?!_)/g, '<em>$1</em>');
+        text = text.replace(/(^|[^*])\*(?!\*)([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
+        text = text.replace(/(^|[^_])_(?!_)([^_]+)_(?!_)/g, '$1<em>$2</em>');
         text = text.replace(/`([^`]+)`/g, '<code style="background: rgba(88, 166, 255, 0.12); padding: 2px 6px; border-radius: 4px; font-family: Fira Code, monospace; font-size: 0.9em; color: #9ecbff;">$1</code>');
         text = text.replace(/~~([^~]+)~~/g, '<del style="opacity: 0.7;">$1</del>');
         text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: var(--accent); text-decoration: underline;">$1</a>');
@@ -2209,13 +2217,40 @@
       }
 
       function copyText(text, btn) {
-        navigator.clipboard.writeText(text).then(function () {
+        function markCopied() {
           btn.textContent = "Copied!";
           var originalText = btn.dataset.originalText || "Copy";
           setTimeout(function () {
             btn.textContent = originalText;
           }, 1500);
-        });
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(markCopied).catch(function () {
+            fallbackCopyText(text, markCopied);
+          });
+          return;
+        }
+
+        fallbackCopyText(text, markCopied);
+      }
+
+      function fallbackCopyText(text, onCopied) {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          document.execCommand("copy");
+          onCopied();
+        } catch (error) {
+          console.error("Copy failed:", error);
+        } finally {
+          textarea.remove();
+        }
       }
 
       function makeCodeBlock(lang, code) {
@@ -2255,6 +2290,9 @@
           // Render the mermaid diagram after a short delay
           setTimeout(function() {
             try {
+              if (!window.mermaid) {
+                throw new Error("Mermaid renderer is unavailable.");
+              }
               mermaid.run({ nodes: [diagramDiv] });
             } catch (error) {
               console.error('Mermaid rendering error:', error);
@@ -2316,11 +2354,14 @@
         }
 
         var firstLine = lines[0].trim();
+        var sequenceKeywordPattern = /\b(?:participant|activate|deactivate)\b/;
         var hasSequenceTokens = lines.some(function (line) {
-          return /\bparticipant\b|->>|-->>|activate\b|deactivate\b/.test(line);
+          var compactLine = line.replace(/\s+/g, "");
+          return sequenceKeywordPattern.test(line) || compactLine.indexOf("-" + ">>") !== -1;
         });
+        var flowNodePattern = /^\s*[A-Za-z0-9_]+\s*[\[\(\{]/;
         var hasFlowTokens = lines.some(function (line) {
-          return /-->|^\s*[A-Za-z0-9_]+\s*\[|^\s*[A-Za-z0-9_]+\s*\(|^\s*[A-Za-z0-9_]+\s*\{/.test(line);
+          return line.indexOf("-" + "->") !== -1 || flowNodePattern.test(line);
         });
         var hasKnownStart = /^(graph\s+(TD|LR|BT|RL)|sequenceDiagram|classDiagram|stateDiagram-v2|erDiagram|gantt|pie)\b/.test(firstLine);
 
