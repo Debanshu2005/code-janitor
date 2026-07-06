@@ -104,7 +104,7 @@ describe("Arduino AIAgent structured edit parsing", () => {
     })
     expect(agent.validateCommand("arduino-cli upload -p COM3 --fqbn arduino:avr:uno sketch")).toEqual({
       allowed: false,
-      reason: "Only project-scoped read, test, and build commands are allowed"
+      reason: "Blocked unsafe, global, or network command"
     })
     expect(agent.validateCommand('node -e "console.log(1)"')).toEqual({
       allowed: false,

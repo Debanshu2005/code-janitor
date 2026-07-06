@@ -1393,6 +1393,7 @@
           </button>
           <div class="dropdown-content" id="actions-dropdown-content">
             <div class="dropdown-item" data-action="fix-compile">Fix Compile Error</div>
+            <div class="dropdown-item" data-action="esp-doctor">ESP Board Doctor</div>
             <div class="dropdown-item" data-action="git">🌿 Source Control</div>
             <div class="dropdown-item" data-action="circuit">🔌 Generate Circuit</div>
             <div class="dropdown-item" data-action="syntax">⚡ Check Syntax</div>
@@ -1476,6 +1477,7 @@
     <div id="action-bar" style="display: none;">
       <div class="action-chip" data-action="git">🌿 Source Control</div>
       <div class="action-chip" data-action="circuit">🔌 Generate Circuit</div>
+      <div class="action-chip" data-action="esp-doctor">ESP Board Doctor</div>
       <div class="action-chip" data-action="syntax">⚡ Check syntax</div>
       <div class="action-chip" data-action="scan">🔍 Scan codebase</div>
       <div class="action-chip" data-action="explain">💡 Explain file</div>
@@ -3114,6 +3116,10 @@
         // Circuit diagram generation
         if (action === "circuit") {
           vscode.postMessage({ type: "generateCircuit" });
+          return;
+        }
+        if (action === "esp-doctor") {
+          vscode.postMessage({ type: "espDoctor" });
           return;
         }
         // Syntax/scan chips run directly without the model

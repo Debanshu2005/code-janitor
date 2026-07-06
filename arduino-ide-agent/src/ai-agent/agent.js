@@ -1691,6 +1691,17 @@ class AIAgent {
     }
   }
 
+  _getPreparedEditorContext(workspaceFolder) {
+    const editorState = this._getEditorState(workspaceFolder)
+    return {
+      cacheHit: false,
+      editorState,
+      activeFileContext: this._getActiveFileContext(workspaceFolder),
+      arduinoSketchContext: "",
+      editorStateContext: this._buildEditorStateContext(editorState)
+    }
+  }
+
   _buildRelevantFilesCacheKey(query, workspaceFolder, options = {}) {
     const activeEditor = vscode.window.activeTextEditor || this._lastActiveEditor
     const activePath =
@@ -1898,6 +1909,7 @@ class AIAgent {
       typeof options.onStatus === "function" ? options.onStatus : null
     const runtimeConfig = await this._prepareRuntimeConfig(config, reportStatus)
     const earlyIntent = forcedIntent || this._detectIntent(userMessage)
+    const activeFileOnly = !!options.activeFileOnly
     const latencyProfile = this._getLatencyProfile(
       runtimeConfig,
       mode,
@@ -1968,11 +1980,13 @@ class AIAgent {
       }
     }
 
-    const knowledgeGraphContext = await this._loadKnowledgeGraph(
-      effectiveWorkspace,
-      userMessage,
-      earlyIntent
-    )
+    const knowledgeGraphContext = activeFileOnly
+      ? ""
+      : await this._loadKnowledgeGraph(
+          effectiveWorkspace,
+          userMessage,
+          earlyIntent
+        )
 
     // Only intercept factual questions the model cannot answer
     const lowerMsg = userMessage.trim().toLowerCase()
@@ -2017,14 +2031,15 @@ class AIAgent {
     let prompt
     if (mode === "fast") {
       reportStatus?.("Preparing fast reply...")
-      const preparedContext = this._getPreparedWorkspaceContext(
-        effectiveWorkspace
-      )
+      const preparedContext = activeFileOnly
+        ? this._getPreparedEditorContext(effectiveWorkspace)
+        : this._getPreparedWorkspaceContext(effectiveWorkspace)
       const activeFileContext = preparedContext.activeFileContext
       const arduinoSketchContext = preparedContext.arduinoSketchContext
       const editorState = preparedContext.editorState
       let fastContext = ""
       if (
+        !activeFileOnly &&
         effectiveWorkspace &&
         this._shouldUseRepoContextInFastMode(
           userMessage,
@@ -4191,6 +4206,10 @@ ${userMessage}`
     }
 
     const blockedPatterns = [
+      /\barduino-cli\s+(?:upload|monitor|debug|burn-bootloader|core\s+(?:install|upgrade|update-index)|lib\s+install|config|daemon)\b/,
+      /\b(?:esptool(?:\.py)?|avrdude)\b/,
+      /\b(?:erase_flash|write_flash|read_flash)\b/,
+      /\b(?:pio|platformio)\s+run\b.*\b(?:upload|uploadfs|erase)\b/,
       /\bnpm\s+install\s+-g\b/,
       /\bnpm\s+i\s+-g\b/,
       /\bnpm(?:\.cmd)?\s+(?:exec|install|update|audit|cache|config)\b/,

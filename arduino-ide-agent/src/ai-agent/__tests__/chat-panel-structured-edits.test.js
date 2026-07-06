@@ -18,6 +18,8 @@ jest.mock(
 
 jest.mock("../agent", () => jest.fn())
 
+const path = require("path")
+const vscode = require("vscode")
 const ChatPanel = require("../chat-panel")
 
 describe("Arduino ChatPanel structured edit helpers", () => {
@@ -77,5 +79,38 @@ describe("Arduino ChatPanel structured edit helpers", () => {
       "refactor",
       "clean up this file for me"
     )
+  })
+
+  test("uses active-file-only fast path for current file edits", () => {
+    const panel = Object.create(ChatPanel.prototype)
+    const workspace = path.resolve("tmp-workspace")
+    const activeFile = path.join(workspace, "Blink.ino")
+
+    panel.chatMode = "fast"
+    panel.agent = {
+      _shouldTreatAsEditIntent: jest.fn(() => true)
+    }
+    panel.lastActiveEditor = {
+      document: {
+        fileName: activeFile,
+        uri: { scheme: "file" }
+      }
+    }
+    vscode.window.activeTextEditor = null
+
+    expect(
+      panel._shouldUseActiveFileOnlyEdit(
+        "fix this current file",
+        "edit",
+        workspace
+      )
+    ).toBe(true)
+    expect(
+      panel._shouldUseActiveFileOnlyEdit(
+        "fix all files in the workspace",
+        "edit",
+        workspace
+      )
+    ).toBe(false)
   })
 })

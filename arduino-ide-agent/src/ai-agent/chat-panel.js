@@ -793,6 +793,354 @@ class ChatPanel {
     return lines.join("\n");
   }
 
+  _isArduinoSafetyModeEnabled() {
+    return true;
+  }
+
+  _isBlockedArduinoPath(filePath) {
+    const normalized = String(filePath || "").replace(/\\/g, "/").toLowerCase();
+    if (!normalized) return false;
+    if (/(^|\/)(\.git|node_modules|build|dist|out|\.pio\/build|\.arduinoide)(\/|$)/.test(normalized)) {
+      return true;
+    }
+    return /(^|\/)(\.env|id_rsa|id_dsa|id_ecdsa|id_ed25519|known_hosts)$/.test(normalized) ||
+      /\.(pem|p12|pfx|key)$/i.test(normalized);
+  }
+
+  _validateArduinoSafetyAction(action) {
+    if (!this._isArduinoSafetyModeEnabled() || !action) {
+      return { allowed: true };
+    }
+
+    if (action.type === "cmd") {
+      const command = String(action.command || "").trim();
+      const validation = this.agent.validateCommand(command);
+      if (!validation.allowed) {
+        return {
+          allowed: false,
+          reason: validation.reason || "Blocked unsafe command"
+        };
+      }
+      return { allowed: true };
+    }
+
+    if (action.type === "file" || action.type === "patch" || action.type === "mkdir") {
+      if (this._isBlockedArduinoPath(action.path)) {
+        return {
+          allowed: false,
+          reason: `Arduino Safety Mode blocked a sensitive/generated path: ${action.path}`
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  _detectEspFamilyFromHealth(health, facts = {}) {
+    const raw = [
+      health?.boardName,
+      health?.boardInfo,
+      health?.board?.fqbn,
+      health?.board?.FQBN,
+      health?.board?.name,
+      health?.board?.id,
+      ...(facts.includes || [])
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    if (/\besp32\b|arduino:esp32|espressif:esp32/.test(raw)) return "esp32";
+    if (/\besp8266\b|arduino:esp8266|esp8266:esp8266/.test(raw)) return "esp8266";
+    return "";
+  }
+
+  _resolveEspPinToken(token, constants) {
+    const raw = String(token || "").trim().replace(/[()]/g, "");
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (constants && constants.has(raw)) return constants.get(raw);
+    const dMatch = raw.match(/^D(\d+)$/i);
+    if (dMatch) {
+      const map = new Map([
+        [0, 16],
+        [1, 5],
+        [2, 4],
+        [3, 0],
+        [4, 2],
+        [5, 14],
+        [6, 12],
+        [7, 13],
+        [8, 15]
+      ]);
+      return map.get(Number(dMatch[1])) ?? null;
+    }
+    return null;
+  }
+
+  _collectEspPinUses(content, constants) {
+    const uses = [];
+    const addUse = (kind, token, mode = "") => {
+      const pin = this._resolveEspPinToken(token, constants);
+      if (pin === null || Number.isNaN(pin)) return;
+      uses.push({
+        kind,
+        token: String(token || "").trim(),
+        pin,
+        mode
+      });
+    };
+
+    let match;
+    const pinModeRegex = /\bpinMode\s*\(\s*([^,\)]+)\s*,\s*([A-Z0-9_]+)\s*\)/g;
+    while ((match = pinModeRegex.exec(content))) {
+      addUse("pinMode", match[1], match[2]);
+    }
+
+    const writeRegex = /\b(?:digitalWrite|analogWrite|ledcAttachPin)\s*\(\s*([^,\)]+)/g;
+    while ((match = writeRegex.exec(content))) {
+      addUse("write", match[1], "OUTPUT");
+    }
+
+    const readRegex = /\banalogRead\s*\(\s*([^,\)]+)/g;
+    while ((match = readRegex.exec(content))) {
+      addUse("analogRead", match[1], "INPUT");
+    }
+
+    return uses;
+  }
+
+  async _collectEspSketchFacts(projectRoot) {
+    const files = await this._walkArduinoSourceFiles(projectRoot);
+    const constants = new Map();
+    const includes = new Set();
+    const serialBauds = new Set();
+    const pinUses = [];
+    const hardcodedSecrets = [];
+    const featureFlags = new Set();
+
+    for (const file of files.slice(0, 80)) {
+      let content = "";
+      try {
+        content = await fs.promises.readFile(file, "utf8");
+      } catch (_) {
+        continue;
+      }
+
+      const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
+      let match;
+
+      const defineRegex = /^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(\d+)\b/gm;
+      while ((match = defineRegex.exec(content))) {
+        constants.set(match[1], Number(match[2]));
+      }
+
+      const constRegex = /\b(?:const\s+)?(?:int|byte|uint8_t|uint16_t|gpio_num_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)\s*;/g;
+      while ((match = constRegex.exec(content))) {
+        constants.set(match[1], Number(match[2]));
+      }
+
+      const includeRegex = /^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm;
+      while ((match = includeRegex.exec(content))) {
+        includes.add(match[1]);
+      }
+
+      const baudRegex = /\bSerial(?:\d)?\.begin\s*\(\s*(\d+)/g;
+      while ((match = baudRegex.exec(content))) {
+        serialBauds.add(match[1]);
+      }
+
+      if (/\bWiFi\./.test(content) || /#\s*include\s*[<"](?:WiFi|ESP8266WiFi)\.h[>"]/.test(content)) {
+        featureFlags.add("WiFi");
+      }
+      if (/BluetoothSerial|BLEDevice|NimBLEDevice/.test(content)) {
+        featureFlags.add("Bluetooth/BLE");
+      }
+      if (/WebServer|ESP8266WebServer|AsyncWebServer/.test(content)) {
+        featureFlags.add("Web server");
+      }
+      if (/ArduinoOTA|ElegantOTA|HTTPUpdate|Update\.h/.test(content)) {
+        featureFlags.add("OTA/update");
+      }
+      if (/PubSubClient|MQTTClient|AsyncMqttClient/.test(content)) {
+        featureFlags.add("MQTT");
+      }
+
+      if (/\b(?:ssid|password|wifi_pass|wifi_password)\b\s*(?:\[\])?\s*=\s*["'][^"']{3,}["']/i.test(content)) {
+        hardcodedSecrets.push(rel);
+      }
+
+      for (const use of this._collectEspPinUses(content, constants)) {
+        pinUses.push({ ...use, file: rel });
+      }
+    }
+
+    return {
+      files: files.map((file) => path.relative(projectRoot, file).replace(/\\/g, "/")),
+      includes: Array.from(includes).sort(),
+      serialBauds: Array.from(serialBauds).sort(),
+      pinUses,
+      hardcodedSecrets: Array.from(new Set(hardcodedSecrets)),
+      featureFlags: Array.from(featureFlags).sort()
+    };
+  }
+
+  _buildEspPinWarnings(family, facts) {
+    const warnings = [];
+    const pins = facts.pinUses || [];
+    const uniqueByPin = new Map();
+    for (const use of pins) {
+      if (!uniqueByPin.has(use.pin)) uniqueByPin.set(use.pin, []);
+      uniqueByPin.get(use.pin).push(use);
+    }
+
+    const describeUses = (uses) =>
+      uses
+        .slice(0, 3)
+        .map((use) => `${use.file} ${use.kind}(${use.token}${use.mode ? `, ${use.mode}` : ""})`)
+        .join("; ");
+
+    if (family === "esp32") {
+      for (const pin of [6, 7, 8, 9, 10, 11]) {
+        if (uniqueByPin.has(pin)) {
+          warnings.push(`GPIO${pin}: usually connected to flash on ESP32; avoid using it. ${describeUses(uniqueByPin.get(pin))}`);
+        }
+      }
+      for (const pin of [34, 35, 36, 39]) {
+        const outputUses = (uniqueByPin.get(pin) || []).filter((use) =>
+          /OUTPUT/i.test(use.mode || "") || use.kind === "write"
+        );
+        if (outputUses.length) {
+          warnings.push(`GPIO${pin}: input-only on ESP32, but used as output/write. ${describeUses(outputUses)}`);
+        }
+      }
+      for (const pin of [0, 2, 4, 5, 12, 15]) {
+        if (uniqueByPin.has(pin)) {
+          warnings.push(`GPIO${pin}: ESP32 strapping/boot-sensitive pin; verify external pullups/pulldowns. ${describeUses(uniqueByPin.get(pin))}`);
+        }
+      }
+      if ((facts.featureFlags || []).includes("WiFi")) {
+        for (const pin of [0, 2, 4, 12, 13, 14, 15, 25, 26, 27]) {
+          const adcUses = (uniqueByPin.get(pin) || []).filter((use) => use.kind === "analogRead");
+          if (adcUses.length) {
+            warnings.push(`GPIO${pin}: ADC2 reads can conflict with WiFi on many ESP32 boards. ${describeUses(adcUses)}`);
+          }
+        }
+      }
+    } else if (family === "esp8266") {
+      for (const pin of [6, 7, 8, 9, 10, 11]) {
+        if (uniqueByPin.has(pin)) {
+          warnings.push(`GPIO${pin}: connected to flash on ESP8266; avoid using it. ${describeUses(uniqueByPin.get(pin))}`);
+        }
+      }
+      for (const pin of [0, 2, 15]) {
+        if (uniqueByPin.has(pin)) {
+          warnings.push(`GPIO${pin}: ESP8266 boot strap pin; wiring can prevent boot/upload. ${describeUses(uniqueByPin.get(pin))}`);
+        }
+      }
+      for (const pin of [1, 3]) {
+        if (uniqueByPin.has(pin)) {
+          warnings.push(`GPIO${pin}: shared with Serial TX/RX on ESP8266. ${describeUses(uniqueByPin.get(pin))}`);
+        }
+      }
+    }
+
+    return warnings;
+  }
+
+  _buildEspDoctorReport(health, facts) {
+    const family = this._detectEspFamilyFromHealth(health, facts);
+    const lines = ["ESP Board Doctor"];
+    lines.push("");
+    lines.push(`Project: ${health.projectRoot || "No project root"}`);
+    lines.push(`Board: ${health.boardInfo || "Not detected"}`);
+    lines.push(`ESP family: ${family ? family.toUpperCase() : "Not detected"}`);
+    lines.push(`Port: ${health.portName || "Not detected"}`);
+
+    if (!health.commandExecuted) {
+      lines.push("Verify command: not available; using current diagnostics.");
+    } else {
+      lines.push(`Verify command: ${health.executedCommand}`);
+    }
+
+    lines.push("");
+    lines.push("Sketch signals:");
+    lines.push(`- Source files: ${facts.files.length}`);
+    lines.push(`- Includes: ${facts.includes.length ? facts.includes.slice(0, 12).join(", ") : "none found"}`);
+    lines.push(`- Serial baud: ${facts.serialBauds.length ? facts.serialBauds.join(", ") : "not found"}`);
+    lines.push(`- Features: ${facts.featureFlags.length ? facts.featureFlags.join(", ") : "none detected"}`);
+
+    const warnings = [];
+    if (!family) {
+      if (facts.includes.some((header) => /^(WiFi|ESP8266WiFi|BluetoothSerial|BLEDevice|AsyncTCP|ESPAsyncTCP)\.h$/i.test(header))) {
+        warnings.push("Sketch looks ESP-related, but the selected board is not clearly ESP32/ESP8266.");
+      } else {
+        warnings.push("Selected board does not look like ESP32/ESP8266. Choose an ESP board before using ESP-specific checks.");
+      }
+    }
+    if (!health.port) {
+      warnings.push("No serial port detected. Select the ESP port before upload/monitor.");
+    }
+    if (!facts.serialBauds.length) {
+      warnings.push("No Serial.begin(...) baud rate found; serial monitor settings may be unclear.");
+    }
+    if (facts.hardcodedSecrets.length) {
+      warnings.push(`Hardcoded WiFi credentials may be present in: ${facts.hardcodedSecrets.join(", ")}. Consider secrets.h placeholders.`);
+    }
+    warnings.push(...this._buildEspPinWarnings(family, facts));
+
+    lines.push("");
+    lines.push("ESP checks:");
+    if (warnings.length) {
+      for (const warning of warnings) {
+        lines.push(`- WARN: ${warning}`);
+      }
+    } else {
+      lines.push("- No ESP-specific pin or configuration warnings found.");
+    }
+
+    lines.push("");
+    if (health.issues.length) {
+      lines.push(`Compile diagnostics: ${health.issues.length} issue(s)`);
+      for (const issue of health.issues) {
+        lines.push(`- ${this._formatArduinoIssue(issue)}`);
+      }
+    } else {
+      lines.push("Compile diagnostics: clean");
+    }
+
+    lines.push("");
+    lines.push("Safe next steps:");
+    lines.push("- Use Check Syntax before wiring or uploading.");
+    lines.push("- Use Fix Compile Error for targeted code fixes.");
+    lines.push("- Upload/serial monitor actions remain manual and require explicit user control.");
+
+    return lines.join("\n");
+  }
+
+  async _runEspBoardDoctor(workspaceFolder) {
+    this._postMessage({ type: "thinking" });
+    this._postMessage({
+      type: "status",
+      text: "Running ESP Board Doctor..."
+    });
+
+    const health = await this._collectArduinoHealth(workspaceFolder, null, "ESP Doctor");
+    if (health.error) {
+      this._postMessage({ type: "error", text: health.error });
+      this._postMessage({ type: "done" });
+      return;
+    }
+
+    await this._promptForBoardSelectionIfMissing(health);
+    const facts = await this._collectEspSketchFacts(health.projectRoot || workspaceFolder);
+    this._postMessage({
+      type: "stream",
+      text: this._buildEspDoctorReport(health, facts)
+    });
+    this._postMessage({ type: "done" });
+  }
+
   async _runSyntaxScan(workspaceFolder, specificFiles) {
     this._postMessage({ type: "thinking" });
     this._postMessage({
@@ -2573,6 +2921,28 @@ ${mermaidCode}
     );
   }
 
+  _shouldUseActiveFileOnlyEdit(trimmedText, intent, workspaceFolder) {
+    if (this.chatMode !== "fast") return false;
+    if (!workspaceFolder) return false;
+    if (!this._isEditLikeIntent(intent, trimmedText)) return false;
+    if (/\b(codebase|repo|repository|project|workspace|all files?|every file|entire|whole)\b/i.test(trimmedText || "")) {
+      return false;
+    }
+
+    const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
+    if (!activeEditor || activeEditor.document.uri.scheme !== "file") return false;
+
+    const activePath = activeEditor.document.fileName || "";
+    const relative = path.relative(workspaceFolder, activePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return false;
+
+    return (
+      /\b(current|open|active|this)\s+(file|tab|editor|sketch)?\b/i.test(trimmedText || "") ||
+      /\b(this|it|here)\b/i.test(trimmedText || "") ||
+      !/[/\\]|\.[a-z0-9]{1,5}\b/i.test(trimmedText || "")
+    );
+  }
+
   _shouldSuppressGeneratedCommand(
     isEditLikeIntent,
     hasExplicitCommandRequest,
@@ -2975,6 +3345,11 @@ ${trimmedText}`;
         const trimmedText = (message.text || "").trim();
         const intent = this.agent._detectIntent(trimmedText);
         const isEditLikeIntent = this._isEditLikeIntent(intent, trimmedText);
+        const activeFileOnlyEdit = this._shouldUseActiveFileOnlyEdit(
+          trimmedText,
+          intent,
+          workspaceFolder
+        );
         let hasExplicitCommandRequest = this._hasExplicitCommandRequest(trimmedText);
         const wantsActiveFileEdit = /\b(current|open|active)\s+(file|tab|editor)\b/i.test(trimmedText);
         const hasExplicitDestructiveWriteIntent =
@@ -3079,7 +3454,13 @@ ${trimmedText}`;
           });
         } else {
           this.agent.setActiveEditor(this.lastActiveEditor || vscode.window.activeTextEditor);
-          if (workspaceFolder && (this.chatMode === "heavy" || this.chatMode === "deep" || intent === "scan")) {
+          if (activeFileOnlyEdit) {
+            this._postMessage({
+              type: "status",
+              text: "Fast editor mode: using active file context only."
+            });
+          }
+          if (!activeFileOnlyEdit && workspaceFolder && (this.chatMode === "heavy" || this.chatMode === "deep" || intent === "scan")) {
             const forcePrep = intent === "scan";
             this._postMessage({ type: "status", text: "Studying workspace before responding..." });
             const prep = await this.agent.prepareWorkspaceContext(trimmedText, workspaceFolder, { force: forcePrep });
@@ -3135,6 +3516,7 @@ ${trimmedText}`;
               this.abortController.signal,
               {
                 mode: this.chatMode,
+                activeFileOnly: activeFileOnlyEdit,
                 images: Array.isArray(message.images) ? message.images : [],
                 onStatus: (text) => { this._postMessage({ type: "status", text }); }
               }
@@ -3224,6 +3606,15 @@ ${trimmedText}`;
             });
 
             for (const action of response.actions) {
+              const safety = this._validateArduinoSafetyAction(action);
+              if (!safety.allowed) {
+                this._postMessage({
+                  type: "status",
+                  text: `Arduino Safety Mode: ${safety.reason}`
+                });
+                continue;
+              }
+
               if (action.type === "file") {
                 const activeEditor = this.lastActiveEditor || vscode.window.activeTextEditor;
                 const shouldApplyToOpenFile =
@@ -3361,6 +3752,15 @@ ${trimmedText}`;
           console.log(`[FileActions] Workspace: ${workspaceFolder}`);
           
           for (const action of response.actions) {
+            const safety = this._validateArduinoSafetyAction(action);
+            if (!safety.allowed) {
+              this._postMessage({
+                type: "status",
+                text: `Arduino Safety Mode: ${safety.reason}`
+              });
+              continue;
+            }
+
             if (action.type === "patch") {
               const fullPath = this._resolveActionFilePath(
                 workspaceFolder,
@@ -3758,6 +4158,8 @@ ${trimmedText}`;
         await this._runFixCompileErrors(workspaceFolder, files);
       } else if (message.type === "libraryAudit") {
         await this._runArduinoLibraryAudit(workspaceFolder);
+      } else if (message.type === "espDoctor") {
+        await this._runEspBoardDoctor(workspaceFolder);
       } else if (message.type === "refreshProviderModels" || message.type === "ready") {
         // Webview signals it's fully loaded or user switched to Ollama — send current state
         if (message.type === "ready") {
