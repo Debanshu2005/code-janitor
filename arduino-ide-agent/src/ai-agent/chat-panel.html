@@ -1390,6 +1390,7 @@
             <span class="dropdown-arrow">▼</span>
           </button>
           <div class="dropdown-content" id="actions-dropdown-content">
+            <div class="dropdown-item" data-action="fix-compile">Fix Compile Error</div>
             <div class="dropdown-item" data-action="git">🌿 Source Control</div>
             <div class="dropdown-item" data-action="circuit">🔌 Generate Circuit</div>
             <div class="dropdown-item" data-action="syntax">⚡ Check Syntax</div>
@@ -1880,12 +1881,29 @@
       };
 
       var modelsByProvider = {
-        groq: ["llama-3.1-8b-instant"],
+        groq: [
+          "llama-3.1-8b-instant",
+          "llama-3.1-70b-versatile",
+          "llama3-8b-8192",
+          "llama3-70b-8192",
+          "mixtral-8x7b-32768",
+          "gemma2-9b-it"
+        ],
         openrouter: [
-          "google/gemini-2.5-flash-image",
-          "mistralai/mistral-7b-instruct:free",
+          "qwen/qwen-2.5-coder-32b-instruct",
+          "qwen/qwen3-coder:free",
+          "qwen/qwen3-coder",
+          "qwen/qwen3-32b",
+          "qwen/qwen3-14b",
+          "qwen/qwen3-8b",
+          "qwen/qwq-32b",
+          "qwen/qwen2.5-coder-7b-instruct",
+          "qwen/qwen-2.5-72b-instruct",
+          "deepseek/deepseek-r1-distill-qwen-32b",
+          "meta-llama/llama-3.3-70b-instruct",
           "meta-llama/llama-3.1-8b-instruct:free",
           "google/gemini-2.0-flash-exp:free",
+          "mistralai/mistral-7b-instruct:free",
         ],
         anthropic: [
           "claude-opus-4-5",
@@ -3060,6 +3078,10 @@
         // Syntax/scan chips run directly without the model
         if (action === "syntax") {
           vscode.postMessage({ type: "syntaxScan", activeOnly: true });
+          return;
+        }
+        if (action === "fix-compile") {
+          vscode.postMessage({ type: "fixCompile", activeOnly: false });
           return;
         }
         if (action === "scan") {

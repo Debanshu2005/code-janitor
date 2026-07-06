@@ -436,6 +436,34 @@ class AIAgent {
     return this.getSessionState()
   }
 
+  deleteSession(sessionId) {
+    if (!sessionId) return this.getSessionState()
+
+    const existingIndex = this.chatSessions.findIndex(
+      (session) => session.id === sessionId
+    )
+    if (existingIndex < 0) return this.getSessionState()
+
+    this.chatSessions = this.chatSessions.filter(
+      (session) => session.id !== sessionId
+    )
+
+    if (this.chatSessions.length === 0) {
+      const replacement = this._createSessionRecord({ title: "New Chat 1" })
+      this.chatSessions = [replacement]
+      this.currentSessionId = replacement.id
+    } else if (this.currentSessionId === sessionId) {
+      const [nextSession] = this.chatSessions
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+      this.currentSessionId = nextSession.id
+    }
+
+    this._syncCurrentSessionReferences()
+    this._persistChatState()
+    return this.getSessionState()
+  }
+
   _buildPromptHistoryContext(isTabQuestion = false) {
     const session = this._getCurrentSession()
     const parts = []
@@ -1920,9 +1948,6 @@ class AIAgent {
     )
     const isTabQuestion = this._isTabQuestion(userMessage)
 
-    // Arduino IDE chat does not use Graphify context.
-    const knowledgeGraphContext = ""
-
     // Resolve effective workspace — use active file's directory if no workspace or file is outside
     const activeEditor =
       vscode.window.activeTextEditor || this._lastActiveEditor
@@ -1942,6 +1967,12 @@ class AIAgent {
         }
       }
     }
+
+    const knowledgeGraphContext = await this._loadKnowledgeGraph(
+      effectiveWorkspace,
+      userMessage,
+      earlyIntent
+    )
 
     // Only intercept factual questions the model cannot answer
     const lowerMsg = userMessage.trim().toLowerCase()

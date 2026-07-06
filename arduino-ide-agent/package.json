@@ -160,6 +160,8 @@
     ]
   },
   "scripts": {
+    "test": "..\\node_modules\\.bin\\jest.cmd src/ai-agent/__tests__",
+    "test:watch": "..\\node_modules\\.bin\\jest.cmd src/ai-agent/__tests__ --watch",
     "package": "..\\node_modules\\.bin\\vsce.cmd package"
   },
   "devDependencies": {
