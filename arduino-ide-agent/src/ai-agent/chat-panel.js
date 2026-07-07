@@ -71,11 +71,14 @@ class ChatPanel {
     }, null, context.subscriptions);
   }
 
-  // Unified message routing: reaches the sidebar view OR the popup panel,
-  // whichever is currently active. Mirrors the pattern from the VSCode agent.
+  // Unified message routing: reply to every live Code Janitor webview. The
+  // welcome sidebar can remain alive while the chat panel is active, so choosing
+  // only one target can strand UI state like "Saving..." in the wrong webview.
   _postMessage(message) {
-    const wv = this.sidebarView?.webview || this.panel?.webview;
-    if (wv) wv.postMessage(message);
+    const targets = [this.panel?.webview, this.sidebarView?.webview].filter(Boolean);
+    for (const webview of new Set(targets)) {
+      webview.postMessage(message);
+    }
   }
 
   _postSessionState(extra = {}) {
@@ -1975,49 +1978,8 @@ Rules:
     await this._focusWelcomeSidebar();
   }
 
-  _getApiKeyConfigKey(provider) {
-    if (provider === "groq") return "groqApiKey";
-    if (provider === "openrouter") return "openrouterApiKey";
-    if (provider === "anthropic") return "anthropicApiKey";
-    if (provider === "nvidia") return "nvidiaApiKey";
-    return null;
-  }
-
   _getApiSecretKey(provider) {
     return `codeJanitor.ai.${provider}.apiKey`;
-  }
-
-  async _persistApiKey(provider, apiKey) {
-    const configKey = this._getApiKeyConfigKey(provider);
-    if (!configKey || !apiKey) return;
-    await this.context.secrets.store(this._getApiSecretKey(provider), apiKey);
-    await this._updateAiConfig(configKey, apiKey);
-  }
-
-  async _restoreApiKeys() {
-    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
-    const providers = ["groq", "openrouter", "anthropic", "nvidia"];
-    const presence = {
-      groq: false,
-      openrouter: false,
-      anthropic: false,
-      nvidia: false
-    };
-
-    for (const provider of providers) {
-      const configKey = this._getApiKeyConfigKey(provider);
-      const configValue = cfg.get(configKey, "");
-      const secretValue = await this.context.secrets.get(this._getApiSecretKey(provider));
-      const effectiveValue = configValue || secretValue || "";
-
-      if (!configValue && secretValue) {
-        await this._updateAiConfig(configKey, secretValue);
-      }
-
-      presence[provider] = !!effectiveValue;
-    }
-
-    return presence;
   }
 
   _getLanguageIdForPath(filePath) {
@@ -3232,18 +3194,31 @@ ${trimmedText}`;
       return false;
     }
     try {
-      if (this.context.secrets) {
-        await this.context.secrets.store(this._getApiSecretKey(provider), apiKey);
-      }
       await this._updateAiConfig(configKey, apiKey);
       // Verify the key was actually persisted
       const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
       const savedKey = cfg.get(configKey, "");
-      return !!savedKey;
+      const persisted = savedKey === apiKey;
+      if (persisted) {
+        this._storeApiSecretBestEffort(provider, apiKey);
+      }
+      return persisted;
     } catch (err) {
       console.error(`[CodeJanitor] _persistApiKey failed for ${provider}:`, err);
       return false;
     }
+  }
+
+  _storeApiSecretBestEffort(provider, apiKey) {
+    if (!this.context?.secrets?.store) return;
+    this.context.secrets
+      .store(this._getApiSecretKey(provider), apiKey)
+      .catch((err) => {
+        console.warn(
+          `[CodeJanitor] Secret storage failed for ${provider}; configuration value was still saved.`,
+          err
+        );
+      });
   }
 
   async _restoreApiKeys() {
@@ -3265,9 +3240,12 @@ ${trimmedText}`;
 
         const freshCfg = vscode.workspace.getConfiguration("codeJanitor.ai");
         const actualValue = freshCfg.get(key);
+        const isSecret = /apiKey/i.test(key);
+        const loggedValue = isSecret && value ? "[redacted]" : value;
+        const loggedActualValue = isSecret && actualValue ? "[redacted]" : actualValue;
 
         console.log(
-          `[CodeJanitor] Updated ${key} to ${value}, target=${target}, actual value: ${actualValue}`
+          `[CodeJanitor] Updated ${key} to ${loggedValue}, target=${target}, actual value: ${loggedActualValue}`
         );
 
         return { freshCfg, actualValue };
@@ -3287,7 +3265,10 @@ ${trimmedText}`;
       }
 
       if (actualValue !== value) {
-        console.warn(`[CodeJanitor] Config update may not have persisted. Expected ${value}, got ${actualValue}`);
+        const isSecret = /apiKey/i.test(key);
+        const loggedValue = isSecret && value ? "[redacted]" : value;
+        const loggedActualValue = isSecret && actualValue ? "[redacted]" : actualValue;
+        console.warn(`[CodeJanitor] Config update may not have persisted. Expected ${loggedValue}, got ${loggedActualValue}`);
       }
 
       return freshCfg;

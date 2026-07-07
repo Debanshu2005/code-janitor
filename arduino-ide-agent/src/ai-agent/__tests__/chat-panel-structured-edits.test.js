@@ -113,4 +113,32 @@ describe("Arduino ChatPanel structured edit helpers", () => {
       )
     ).toBe(false)
   })
+
+  test("API key persistence does not wait for secret storage acknowledgement", async () => {
+    const panel = Object.create(ChatPanel.prototype)
+    const savedConfig = {}
+    const get = jest.fn((key) => savedConfig[key] || "")
+
+    panel.context = {
+      secrets: {
+        store: jest.fn(() => new Promise(() => {}))
+      }
+    }
+    panel._updateAiConfig = jest.fn(async (key, value) => {
+      savedConfig[key] = value
+    })
+
+    vscode.workspace.getConfiguration.mockReturnValue({
+      get,
+      inspect: jest.fn(),
+      update: jest.fn()
+    })
+
+    await expect(panel._persistApiKey("groq", "gsk-test-key")).resolves.toBe(true)
+    expect(panel._updateAiConfig).toHaveBeenCalledWith("groqApiKey", "gsk-test-key")
+    expect(panel.context.secrets.store).toHaveBeenCalledWith(
+      "codeJanitor.ai.groq.apiKey",
+      "gsk-test-key"
+    )
+  })
 })
