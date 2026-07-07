@@ -62,10 +62,19 @@ function activate(context) {
     }
   )
 
+  const espDoctorCommand = vscode.commands.registerCommand(
+    "codeJanitorArduino.espDoctor",
+    () => {
+      console.log("[Code Janitor Arduino] espDoctor command triggered")
+      return chatPanel.runEspDoctor()
+    }
+  )
+
   context.subscriptions.push(openWelcomeCommand)
   context.subscriptions.push(openChatCommand)
   context.subscriptions.push(openGitCommand)
   context.subscriptions.push(openGraphifyCommand)
+  context.subscriptions.push(espDoctorCommand)
 
   // Keep older command ids working so stale keybindings or UI actions in VS Code
   // continue to open the Arduino panels after the command namespace change.
@@ -76,9 +85,12 @@ function activate(context) {
   registerLegacyAlias(context, "codeJanitor.openGraphify", () =>
     graphifyPanel.show()
   )
+  registerLegacyAlias(context, "codeJanitor.espDoctor", () =>
+    chatPanel.runEspDoctor()
+  )
 
   const uriHandler = vscode.window.registerUriHandler({
-    handleUri(uri) {
+    async handleUri(uri) {
       console.log("[Code Janitor Arduino] URI handler triggered:", uri.path)
       if (uri.path === "/open-welcome") {
         chatPanel.showWelcome()
@@ -88,6 +100,8 @@ function activate(context) {
         gitPanel.show()
       } else if (uri.path === "/open-graphify") {
         graphifyPanel.show()
+      } else if (uri.path === "/esp-doctor") {
+        await chatPanel.runEspDoctor()
       }
     }
   })
@@ -107,9 +121,11 @@ function activate(context) {
   console.log("  - codeJanitorArduino.openChat")
   console.log("  - codeJanitorArduino.openSourceControl")
   console.log("  - codeJanitorArduino.openGraphify")
+  console.log("  - codeJanitorArduino.espDoctor")
   console.log("  - codeJanitor.openChat (legacy alias)")
   console.log("  - codeJanitor.openSourceControl (legacy alias)")
   console.log("  - codeJanitor.openGraphify (legacy alias)")
+  console.log("  - codeJanitor.espDoctor (legacy alias)")
   console.log("[Code Janitor Arduino] Use Ctrl+Alt+A to open the welcome screen")
 }
 

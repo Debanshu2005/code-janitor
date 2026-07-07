@@ -123,6 +123,11 @@
         "command": "codeJanitorArduino.openGraphify",
         "title": "Visualize Project Graph",
         "category": "Code Janitor Arduino"
+      },
+      {
+        "command": "codeJanitorArduino.espDoctor",
+        "title": "Run ESP Board Doctor",
+        "category": "Code Janitor Arduino"
       }
     ],
     "menus": {
@@ -138,6 +143,9 @@
         },
         {
           "command": "codeJanitorArduino.openGraphify"
+        },
+        {
+          "command": "codeJanitorArduino.espDoctor"
         }
       ]
     },

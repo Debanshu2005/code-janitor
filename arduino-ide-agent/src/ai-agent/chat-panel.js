@@ -282,6 +282,13 @@ class ChatPanel {
     this.panel.onDidDispose(() => { this.panel = null; });
   }
 
+  async runEspDoctor() {
+    await this.show();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    await this._runEspBoardDoctor(workspaceFolder);
+  }
+
   async _runSyntaxScanLegacy(workspaceFolder, specificFiles) {
     if (!workspaceFolder) {
       this._postMessage({ type: "status", text: "No workspace open." });
@@ -3084,7 +3091,7 @@ ${trimmedText}`;
       const models = await this.agent.getAvailableModelsForProvider(provider, {
         forceRefresh: provider === "nvidia"
       });
-      if (models.length > 0 && this.panel) {
+      if (models.length > 0) {
         this._postMessage({
           type: "setModelOptions",
           models,
@@ -3096,34 +3103,28 @@ ${trimmedText}`;
         });
         return;
       }
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text:
-            provider === "nvidia"
-              ? "NVIDIA model discovery failed. Showing fallback models."
-              : "Ollama responded, but no local models were reported."
-        });
-      }
-    } catch (error) {
-      if (this.panel) {
-        this._postMessage({
-          type: "status",
-          text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model discovery failed: ${error.message}`
-        });
-      }
-    }
-    // Ollama unreachable or no models — show defaults
-    if (this.panel) {
       this._postMessage({
-        type: "setModelOptions",
-        models:
+        type: "status",
+        text:
           provider === "nvidia"
-            ? MODELS_BY_PROVIDER.nvidia
-            : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-        provider
+            ? "NVIDIA model discovery failed. Showing fallback models."
+            : "Ollama responded, but no local models were reported."
+      });
+    } catch (error) {
+      this._postMessage({
+        type: "status",
+        text: `${provider === "nvidia" ? "NVIDIA" : "Ollama"} model discovery failed: ${error.message}`
       });
     }
+    // Ollama unreachable or no models — show defaults
+    this._postMessage({
+      type: "setModelOptions",
+      models:
+        provider === "nvidia"
+          ? MODELS_BY_PROVIDER.nvidia
+          : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
+      provider
+    });
   }
 
   _getDefaultModelForProvider(provider) {
@@ -3212,6 +3213,47 @@ ${trimmedText}`;
     return target === vscode.ConfigurationTarget.Workspace
       ? vscode.ConfigurationTarget.Global
       : vscode.ConfigurationTarget.Workspace;
+  }
+
+  _getApiKeyConfigKey(provider) {
+    switch (String(provider || "").toLowerCase()) {
+      case "groq":        return "groqApiKey";
+      case "openrouter":  return "openrouterApiKey";
+      case "anthropic":   return "anthropicApiKey";
+      case "nvidia":      return "nvidiaApiKey";
+      default:            return null;
+    }
+  }
+
+  async _persistApiKey(provider, apiKey) {
+    const configKey = this._getApiKeyConfigKey(provider);
+    if (!configKey) {
+      console.warn(`[CodeJanitor] _persistApiKey: unknown provider "${provider}"`);
+      return false;
+    }
+    try {
+      if (this.context.secrets) {
+        await this.context.secrets.store(this._getApiSecretKey(provider), apiKey);
+      }
+      await this._updateAiConfig(configKey, apiKey);
+      // Verify the key was actually persisted
+      const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+      const savedKey = cfg.get(configKey, "");
+      return !!savedKey;
+    } catch (err) {
+      console.error(`[CodeJanitor] _persistApiKey failed for ${provider}:`, err);
+      return false;
+    }
+  }
+
+  async _restoreApiKeys() {
+    const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+    return {
+      groq:        !!cfg.get("groqApiKey", ""),
+      openrouter:  !!cfg.get("openrouterApiKey", ""),
+      anthropic:   !!cfg.get("anthropicApiKey", ""),
+      nvidia:      !!cfg.get("nvidiaApiKey", "")
+    };
   }
 
   async _updateAiConfig(key, value) {
@@ -4250,7 +4292,7 @@ ${trimmedText}`;
           // Save API key FIRST if provided (before updating provider)
           if (message.apiKey) {
             console.log(`[CodeJanitor] Saving API key for ${message.provider}`);
-            await this._persistApiKey(message.provider, message.apiKey);
+            const apiKeySaved = await this._persistApiKey(message.provider, message.apiKey);
             
             // Verify the key was saved
             const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
@@ -4258,16 +4300,19 @@ ${trimmedText}`;
             const savedKey = cfg.get(configKey, "");
             console.log(`[CodeJanitor] API key verification - saved: ${!!savedKey}`);
             
-            if (!savedKey) {
+            if (!apiKeySaved || !savedKey) {
               console.error(`[CodeJanitor] API key failed to persist for ${message.provider}`);
-              if (this.panel) {
-                this._postMessage({
-                  type: "error",
-                  text: `Failed to save API key for ${message.provider}. Please try again.`
-                });
-              }
+              this._postMessage({
+                type: "error",
+                text: `Failed to save API key for ${message.provider}. Please try again.`
+              });
               return;
             }
+
+            this._postMessage({
+              type: "apiKeySaved",
+              provider: message.provider
+            });
           }
 
           await this._updateAiConfig("provider", message.provider);
@@ -4282,12 +4327,10 @@ ${trimmedText}`;
           
           if (actualProvider !== message.provider) {
             console.error(`[CodeJanitor] Provider failed to persist`);
-            if (this.panel) {
-              this._postMessage({
-                type: "error",
-                text: `Failed to switch to ${message.provider}. Current provider: ${actualProvider}`
-              });
-            }
+            this._postMessage({
+              type: "error",
+              text: `Failed to switch to ${message.provider}. Current provider: ${actualProvider}`
+            });
             return;
           }
 
@@ -4332,17 +4375,15 @@ ${trimmedText}`;
           
           // Send updated state to UI
           const restoredKeys = await this._restoreApiKeys();
-          if (this.panel) {
-            this._postMessage({
-              type: "providerSwitched",
-              provider: effectiveConfig.provider,
-              model: effectiveConfig.model,
-              hasGroqKey: restoredKeys.groq,
-              hasOpenrouterKey: restoredKeys.openrouter,
-              hasAnthropicKey: restoredKeys.anthropic,
-              hasNvidiaKey: restoredKeys.nvidia
-            });
-          }
+          this._postMessage({
+            type: "providerSwitched",
+            provider: effectiveConfig.provider,
+            model: effectiveConfig.model,
+            hasGroqKey: restoredKeys.groq,
+            hasOpenrouterKey: restoredKeys.openrouter,
+            hasAnthropicKey: restoredKeys.anthropic,
+            hasNvidiaKey: restoredKeys.nvidia
+          });
           
           // Fetch models for providers that support runtime discovery.
           if (
@@ -4353,12 +4394,10 @@ ${trimmedText}`;
           }
         } catch (error) {
           console.error(`[CodeJanitor] Error switching provider:`, error);
-          if (this.panel) {
-            this._postMessage({
-              type: "error",
-              text: `Failed to switch provider: ${error.message}`
-            });
-          }
+          this._postMessage({
+            type: "error",
+            text: `Failed to switch provider: ${error.message}`
+          });
         }
       } else if (message.type === "openGit") {
         vscode.commands.executeCommand("codeJanitorArduino.openSourceControl");
