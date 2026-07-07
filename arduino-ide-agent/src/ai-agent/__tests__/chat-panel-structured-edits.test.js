@@ -141,4 +141,51 @@ describe("Arduino ChatPanel structured edit helpers", () => {
       "gsk-test-key"
     )
   })
+
+  test("NVIDIA model options select the resolved NVIDIA model", async () => {
+    const panel = Object.create(ChatPanel.prototype)
+    const messages = []
+
+    panel.context = {
+      globalState: {
+        get: jest.fn(() => "")
+      }
+    }
+    panel.agent = {
+      getConfig: jest.fn(() => ({
+        provider: "nvidia",
+        model: "meta/llama-3.1-8b-instruct"
+      })),
+      getAvailableModelsForProvider: jest.fn(async () => [
+        "meta/llama-3.1-8b-instruct",
+        "nvidia/nvidia-nemotron-nano-9b-v2"
+      ]),
+      _sanitizeNvidiaModel: jest.fn((model) =>
+        model && String(model).includes("/")
+          ? model
+          : "meta/llama-3.1-8b-instruct"
+      )
+    }
+    panel._postMessage = jest.fn((message) => messages.push(message))
+
+    vscode.workspace.getConfiguration.mockReturnValue({
+      get: jest.fn((key) => {
+        if (key === "model") return "qwen2.5-coder:1.5b"
+        if (key === "nvidiaModel") return "meta/llama-3.1-8b-instruct"
+        return ""
+      }),
+      inspect: jest.fn(),
+      update: jest.fn()
+    })
+
+    await panel._fetchAndSendModels()
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "setModelOptions",
+        provider: "nvidia",
+        model: "meta/llama-3.1-8b-instruct"
+      })
+    )
+  })
 })

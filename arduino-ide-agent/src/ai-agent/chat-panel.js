@@ -3048,6 +3048,7 @@ ${trimmedText}`;
     const config = this.agent.getConfig();
     const provider = config.provider;
     if (provider !== "ollama" && provider !== "nvidia") return;
+    const selectedModel = this._resolvePreferredModelForProvider(provider);
     // Only needed for Ollama — other providers populate models client-side
     try {
       const models = await this.agent.getAvailableModelsForProvider(provider, {
@@ -3057,7 +3058,8 @@ ${trimmedText}`;
         this._postMessage({
           type: "setModelOptions",
           models,
-          provider
+          provider,
+          model: models.includes(selectedModel) ? selectedModel : models[0]
         });
         this._postMessage({
           type: "status",
@@ -3085,7 +3087,8 @@ ${trimmedText}`;
         provider === "nvidia"
           ? MODELS_BY_PROVIDER.nvidia
           : ["qwen2.5-coder:1.5b", "codellama:latest", "llama3:latest"],
-      provider
+      provider,
+      model: selectedModel
     });
   }
 

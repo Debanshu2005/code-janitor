@@ -1588,7 +1588,7 @@
         <option value="anthropic">🤖 Anthropic (Claude)</option>
       </select>
       <select id="model-select" title="Switch model">
-        <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b</option>
+        <option value="" disabled selected>Loading models...</option>
       </select>
       <button class="pill-btn active" id="btn-fast" title="Fast mode">
         Fast
@@ -3638,14 +3638,18 @@
         suppressProviderModelEvents = true;
         var sel = modelSelect;
         var current = sel.value;
+        var selectedModel = msg.model || current;
         sel.innerHTML = "";
         msg.models.forEach(function (m) {
           var opt = document.createElement("option");
           opt.value = m;
           opt.textContent = m;
-          if (m === current) opt.selected = true;
+          if (m === selectedModel) opt.selected = true;
           sel.appendChild(opt);
         });
+        if (sel.selectedIndex < 0 && sel.options.length > 0) {
+          sel.selectedIndex = 0;
+        }
         setTimeout(function () {
           suppressProviderModelEvents = false;
         }, 0);
