@@ -8,7 +8,9 @@ const {
   createDefaultIo,
   getDefaultModelForProvider,
   isLikelyNvidiaModel,
-  normalizeIo
+  normalizeIo,
+  resolveModelShortcut,
+  validateRuntimeCredentials
 } = require("./cli-runtime");
 
 function getReadOnlyOverlay() {
@@ -32,7 +34,8 @@ function getChatHelpText() {
     "  /exit                 Leave the session",
     "",
     "Shortcuts:",
-    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter"
+    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter",
+    "  /mistral-nemotron  /nemotron  /minimax  /llama-3.1-8b"
   ].join("\n");
 }
 
@@ -81,6 +84,12 @@ async function runSingleChatTurn(agent, message, options = {}, io = createDefaul
   let streamedAny = false;
   const workspaceFolder = options.workspaceFolder || process.cwd();
   const runtimeConfig = buildChatRuntimeConfig(options);
+  const credentials = validateRuntimeCredentials(runtimeConfig);
+  if (!credentials.valid) {
+    normalizedIo.error(credentials.error);
+    return 2;
+  }
+
   const response = await agent.chat(
     message,
     workspaceFolder,
@@ -219,6 +228,15 @@ async function runInteractiveChat(options = {}, io = createDefaultIo()) {
       if (/^\/(anthropic|groq|nvidia|ollama|openrouter)$/i.test(trimmed)) {
         provider = trimmed.slice(1).toLowerCase();
         model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
+        rl.prompt();
+        return;
+      }
+
+      const modelShortcut = resolveModelShortcut(trimmed);
+      if (modelShortcut) {
+        provider = modelShortcut.provider;
+        model = modelShortcut.model;
         normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
         rl.prompt();
         return;

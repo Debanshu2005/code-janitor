@@ -6,7 +6,8 @@ const path = require("path");
 const {
   getCliConfigCandidates,
   loadCliConfig,
-  resolveCliAiConfig
+  resolveCliAiConfig,
+  writeCliAiConfigPatch
 } = require("../utils/cli-config");
 
 function createTempDir() {
@@ -154,6 +155,52 @@ describe("cli config", () => {
     expect(resolveCliAiConfig({ cwd: workspace })).toMatchObject({
       provider: "ollama",
       model: "qwen2.5-coder:14b"
+    });
+  });
+
+  test("writes a merge-safe CLI AI config patch", () => {
+    const workspace = createTempDir();
+    tempDirs.push(workspace);
+    const configPath = path.join(workspace, "config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        theme: "keep-me",
+        ai: {
+          provider: "ollama",
+          ollamaUrl: "http://localhost:11434",
+          groqApiKey: "existing-groq"
+        }
+      }),
+      "utf8"
+    );
+
+    const result = writeCliAiConfigPatch(
+      {
+        provider: "nvidia",
+        model: "mistralai/mistral-nemotron",
+        nvidiaModel: "mistralai/mistral-nemotron",
+        nvidiaApiKey: "secret-nvidia"
+      },
+      configPath
+    );
+    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+    expect(result.path).toBe(configPath);
+    expect(raw.theme).toBe("keep-me");
+    expect(raw.ai).toMatchObject({
+      provider: "nvidia",
+      model: "mistralai/mistral-nemotron",
+      nvidiaModel: "mistralai/mistral-nemotron",
+      nvidiaApiKey: "secret-nvidia",
+      groqApiKey: "existing-groq",
+      ollamaUrl: "http://localhost:11434"
+    });
+    process.env.CODE_JANITOR_CONFIG = configPath;
+    expect(resolveCliAiConfig({ cwd: workspace })).toMatchObject({
+      provider: "nvidia",
+      model: "mistralai/mistral-nemotron",
+      nvidiaApiKey: "secret-nvidia"
     });
   });
 });

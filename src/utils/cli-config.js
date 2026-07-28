@@ -130,6 +130,82 @@ function loadCliConfig(cwd = process.cwd()) {
   };
 }
 
+function mergeDefined(target, source, keys) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      continue;
+    }
+
+    const value = source[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) {
+        target[key] = trimmed;
+      }
+      continue;
+    }
+
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      target[key] = value;
+    }
+  }
+}
+
+function writeCliAiConfigPatch(updates = {}, configPath = getDefaultCliConfigPath()) {
+  const targetPath = path.resolve(configPath || getDefaultCliConfigPath());
+  let existing = {};
+
+  if (fs.existsSync(targetPath)) {
+    try {
+      existing = readObject(JSON.parse(fs.readFileSync(targetPath, "utf8")));
+    } catch {
+      existing = {};
+    }
+  }
+
+  const nextAi = {
+    ...readObject(existing.ai)
+  };
+
+  mergeDefined(nextAi, updates, [
+    "provider",
+    "model",
+    "nvidiaModel",
+    "ollamaUrl",
+    "timeout",
+    "anthropicApiKey",
+    "groqApiKey",
+    "nvidiaApiKey",
+    "openrouterApiKey"
+  ]);
+
+  const nextConfig = {
+    ...existing,
+    ai: nextAi
+  };
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${JSON.stringify(nextConfig, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+
+  try {
+    fs.chmodSync(targetPath, 0o600);
+  } catch {
+    // Best effort on Windows and filesystems that do not support POSIX modes.
+  }
+
+  return {
+    path: targetPath,
+    config: normalizeCliConfig(nextConfig)
+  };
+}
+
 function resolveCliAiConfig(options = {}) {
   const cwd = options.workspaceFolder || options.cwd || process.cwd();
   const loaded = loadCliConfig(cwd);
@@ -184,5 +260,6 @@ module.exports = {
   getDefaultCliConfigPath,
   loadCliConfig,
   normalizeCliConfig,
-  resolveCliAiConfig
+  resolveCliAiConfig,
+  writeCliAiConfigPatch
 };

@@ -1,4 +1,7 @@
-const { resolveCliAiConfig } = require("./utils/cli-config");
+const {
+  getDefaultCliConfigPath,
+  resolveCliAiConfig
+} = require("./utils/cli-config");
 
 const DEFAULT_MODELS_BY_PROVIDER = {
   anthropic: "claude-sonnet-4-5",
@@ -16,6 +19,37 @@ const BUILT_IN_PROVIDERS = new Set([
   "openrouter"
 ]);
 
+const PROVIDER_API_KEY_FIELDS = {
+  anthropic: "anthropicApiKey",
+  groq: "groqApiKey",
+  nvidia: "nvidiaApiKey",
+  openrouter: "openrouterApiKey"
+};
+const PROVIDER_API_KEY_ENV = {
+  anthropic: "CODE_JANITOR_ANTHROPIC_API_KEY",
+  groq: "CODE_JANITOR_GROQ_API_KEY",
+  nvidia: "CODE_JANITOR_NVIDIA_API_KEY or NVIDIA_API_KEY",
+  openrouter: "CODE_JANITOR_OPENROUTER_API_KEY"
+};
+const MODEL_SHORTCUTS = {
+  "llama-3.1-8b": {
+    provider: "nvidia",
+    model: "meta/llama-3.1-8b-instruct"
+  },
+  minimax: {
+    provider: "nvidia",
+    model: "minimaxai/minimax-m2.7"
+  },
+  "mistral-nemotron": {
+    provider: "nvidia",
+    model: "mistralai/mistral-nemotron"
+  },
+  nemotron: {
+    provider: "nvidia",
+    model: "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+  }
+};
+
 function normalizeProvider(provider) {
   const normalized = String(provider || "").trim().toLowerCase();
   return BUILT_IN_PROVIDERS.has(normalized) ? normalized : "ollama";
@@ -26,7 +60,11 @@ function buildChatRuntimeConfig(options = {}) {
   const provider = normalizeProvider(resolved.provider || "ollama");
   const runtimeConfig = {
     enabled: true,
-    provider
+    provider,
+    anthropicApiKey: "",
+    groqApiKey: "",
+    nvidiaApiKey: "",
+    openrouterApiKey: ""
   };
 
   if (resolved.model) {
@@ -41,20 +79,29 @@ function buildChatRuntimeConfig(options = {}) {
     runtimeConfig.timeout = resolved.timeout;
   }
 
-  if (resolved.nvidiaApiKey) {
-    runtimeConfig.nvidiaApiKey = resolved.nvidiaApiKey;
-  }
-  if (resolved.groqApiKey) {
-    runtimeConfig.groqApiKey = resolved.groqApiKey;
-  }
-  if (resolved.openrouterApiKey) {
-    runtimeConfig.openrouterApiKey = resolved.openrouterApiKey;
-  }
-  if (resolved.anthropicApiKey) {
-    runtimeConfig.anthropicApiKey = resolved.anthropicApiKey;
-  }
+  runtimeConfig.nvidiaApiKey = resolved.nvidiaApiKey || "";
+  runtimeConfig.groqApiKey = resolved.groqApiKey || "";
+  runtimeConfig.openrouterApiKey = resolved.openrouterApiKey || "";
+  runtimeConfig.anthropicApiKey = resolved.anthropicApiKey || "";
 
   return runtimeConfig;
+}
+
+function validateRuntimeCredentials(runtimeConfig = {}) {
+  const provider = normalizeProvider(runtimeConfig.provider);
+  if (provider === "ollama") {
+    return { valid: true, error: "" };
+  }
+
+  const apiKeyField = PROVIDER_API_KEY_FIELDS[provider];
+  if (!apiKeyField || String(runtimeConfig[apiKeyField] || "").trim()) {
+    return { valid: true, error: "" };
+  }
+
+  return {
+    valid: false,
+    error: `${provider} is selected, but its API key is not configured. Set ${PROVIDER_API_KEY_ENV[provider]} or add the key to ${getDefaultCliConfigPath()}.`
+  };
 }
 
 function createDefaultIo() {
@@ -94,6 +141,14 @@ function isLikelyNvidiaModel(model) {
   return /^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(String(model || "").trim());
 }
 
+function resolveModelShortcut(command) {
+  const shortcut = String(command || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .toLowerCase();
+  return MODEL_SHORTCUTS[shortcut] || null;
+}
+
 module.exports = {
   BUILT_IN_PROVIDERS,
   buildChatRuntimeConfig,
@@ -101,5 +156,7 @@ module.exports = {
   getDefaultModelForProvider,
   isLikelyNvidiaModel,
   normalizeIo,
-  normalizeProvider
+  normalizeProvider,
+  resolveModelShortcut,
+  validateRuntimeCredentials
 };

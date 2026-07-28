@@ -16,6 +16,7 @@ const {
 const GraphifyPanel = require("./graphify/graphify-panel");
 const { loadGraphContextForFile } = require("./graphify/graph-loader");
 const { computeMinimalReplacement } = require("./utils/minimal-diff");
+const { writeCliAiConfigPatch } = require("./utils/cli-config");
 const { MCPClientManager } = require("./services/mcp");
 const path = require("path");
 
@@ -494,6 +495,7 @@ async function restorePersistedApiKeys(context) {
 
   const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
   const providers = ["groq", "openrouter", "anthropic", "nvidia"];
+  const cliConfigPatch = {};
 
   for (const provider of providers) {
     const configKey = getApiKeyConfigKey(provider);
@@ -510,9 +512,27 @@ async function restorePersistedApiKeys(context) {
       await context.secrets.store(getApiSecretKey(provider), configValue);
     }
 
+    const effectiveValue = secretValue || configValue;
+    if (effectiveValue) {
+      cliConfigPatch[configKey] = effectiveValue;
+    }
+
     if (configValue) {
       const target = getConfigTargetForKey("codeJanitor.ai", configKey);
       await cfg.update(configKey, "", target);
+    }
+  }
+
+  if (Object.keys(cliConfigPatch).length > 0) {
+    try {
+      writeCliAiConfigPatch({
+        provider: String(cfg.get("provider", "") || "").trim(),
+        model: String(cfg.get("model", "") || "").trim(),
+        nvidiaModel: String(cfg.get("nvidiaModel", "") || "").trim(),
+        ...cliConfigPatch
+      });
+    } catch (error) {
+      console.warn("[Extension] Failed to sync AI settings for CLI:", error);
     }
   }
 }

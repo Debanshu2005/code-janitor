@@ -1,4 +1,8 @@
 /* eslint-env jest */
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
 const {
   buildPatchedContent,
   createNarrationStream,
@@ -89,5 +93,39 @@ CMD: npm test
     });
     expect(agent.chat.mock.calls[1][0]).toContain("Tool results:");
     expect(io.log).toHaveBeenCalledWith("[tool] READ src/app.js");
+  });
+
+  test("runSingleAgentTask does not call cloud providers when the API key is missing", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "code-janitor-agent-missing-key-"));
+    fs.writeFileSync(
+      path.join(workspace, ".code-janitor.json"),
+      JSON.stringify({ ai: { provider: "nvidia" } }),
+      "utf8"
+    );
+    const io = createIo();
+    const agent = {
+      chat: jest.fn()
+    };
+
+    try {
+      const exitCode = await runSingleAgentTask(
+        agent,
+        "Inspect the app",
+        {
+          provider: "nvidia",
+          model: "meta/llama-3.1-8b-instruct",
+          workspaceFolder: workspace
+        },
+        io
+      );
+
+      expect(exitCode).toBe(2);
+      expect(agent.chat).not.toHaveBeenCalled();
+      expect(io.error).toHaveBeenCalledWith(
+        expect.stringContaining("nvidia is selected, but its API key is not configured")
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

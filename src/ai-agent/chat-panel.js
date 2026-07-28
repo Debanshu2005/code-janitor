@@ -17,6 +17,7 @@ const { analyzeFile } = require("./review-quality-analyzer");
 const { buildFixInsights } = require("../core/fix-insights");
 const FrontendValidator = require("../core/frontend-validator");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
+const { writeCliAiConfigPatch } = require("../utils/cli-config");
 const { createOptimizedChatPanel } = require("./optimizer-integration");
 const { applyDiffToContent, validateSyntax } = require("./tools/apply-diff");
 const { insertContentIntoText } = require("./tools/insert-content");
@@ -2787,6 +2788,14 @@ ${fileContent}
     return this._getImmediateProviderPresence();
   }
 
+  _syncCliAiConfigPatch(patch = {}) {
+    try {
+      writeCliAiConfigPatch(patch);
+    } catch (error) {
+      console.warn("[ChatPanel] Failed to sync AI settings for CLI:", error);
+    }
+  }
+
   _buildProviderCatalog() {
     return [
       { id: "ollama", name: "Ollama", builtin: true, requiresKey: false, models: [] },
@@ -3031,6 +3040,11 @@ ${fileContent}
         return;
       }
 
+      this._syncCliAiConfigPatch({
+        provider,
+        [configKey]: sanitized
+      });
+
       const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
 
       try {
@@ -3052,6 +3066,7 @@ ${fileContent}
   async _restoreApiKeys() {
     const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
     const providers = ["groq", "openrouter", "anthropic", "nvidia"];
+    const cliConfigPatch = {};
     const presence = {
       groq: false,
       openrouter: false,
@@ -3074,6 +3089,10 @@ ${fileContent}
         effectiveValue = configValue;
       }
 
+      if (effectiveValue) {
+        cliConfigPatch[configKey] = effectiveValue;
+      }
+
       if (configValue) {
         try {
           const target = this._getConfigTargetForKey(configKey);
@@ -3084,6 +3103,18 @@ ${fileContent}
       }
 
       presence[provider] = !!effectiveValue;
+    }
+
+    if (Object.keys(cliConfigPatch).length > 0) {
+      const provider = String(cfg.get("provider", "") || "").trim();
+      const model = String(cfg.get("model", "") || "").trim();
+      const nvidiaModel = String(cfg.get("nvidiaModel", "") || "").trim();
+      this._syncCliAiConfigPatch({
+        provider,
+        model,
+        nvidiaModel,
+        ...cliConfigPatch
+      });
     }
 
     return presence;
@@ -6562,6 +6593,11 @@ ${trimmedText}`;
 
       // Keep the generic model in sync so status UI and older code paths stay aligned.
       await this._updateAiConfig("model", nextModel);
+      this._syncCliAiConfigPatch({
+        provider,
+        model: nextModel,
+        nvidiaModel: provider === "nvidia" ? nextModel : ""
+      });
     }
 
     this._saveProviderModel(provider, nextModel);

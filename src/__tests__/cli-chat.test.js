@@ -13,6 +13,7 @@ const {
   normalizeIo,
   runSingleChatTurn
 } = require("../cli-chat");
+const { resolveModelShortcut } = require("../cli-runtime");
 
 describe("cli chat", () => {
   beforeEach(() => {
@@ -107,6 +108,58 @@ describe("cli chat", () => {
     );
     expect(io.log).toHaveBeenCalledWith("Hello from chat.");
     expect(writes).toEqual([]);
+  });
+
+  test("does not call cloud providers when the CLI API key is missing", async () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "code-janitor-missing-key-"));
+    fs.writeFileSync(
+      path.join(workspace, ".code-janitor.json"),
+      JSON.stringify({ ai: { provider: "nvidia" } }),
+      "utf8"
+    );
+    const io = {
+      log: jest.fn(),
+      error: jest.fn(),
+      write: jest.fn()
+    };
+
+    try {
+      const exitCode = await runSingleChatTurn(
+        { chat: mockChat },
+        "hi",
+        {
+          workspaceFolder: workspace,
+          provider: "nvidia",
+          model: "meta/llama-3.1-8b-instruct"
+        },
+        io
+      );
+
+      expect(exitCode).toBe(2);
+      expect(mockChat).not.toHaveBeenCalled();
+      expect(io.error).toHaveBeenCalledWith(
+        expect.stringContaining("nvidia is selected, but its API key is not configured")
+      );
+      expect(io.error).toHaveBeenCalledWith(
+        expect.stringContaining("CODE_JANITOR_NVIDIA_API_KEY")
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves NVIDIA model slash shortcuts", () => {
+    expect(resolveModelShortcut("/mistral-nemotron")).toEqual({
+      provider: "nvidia",
+      model: "mistralai/mistral-nemotron"
+    });
+    expect(resolveModelShortcut("/minimax")).toEqual({
+      provider: "nvidia",
+      model: "minimaxai/minimax-m2.7"
+    });
   });
 
   test("normalizes console-style io for streamed responses", async () => {

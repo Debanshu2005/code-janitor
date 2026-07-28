@@ -10,7 +10,9 @@ const {
   createDefaultIo,
   getDefaultModelForProvider,
   isLikelyNvidiaModel,
-  normalizeIo
+  normalizeIo,
+  resolveModelShortcut,
+  validateRuntimeCredentials
 } = require("./cli-runtime");
 const {
   getDefaultCliConfigPath,
@@ -45,7 +47,8 @@ function getAgentHelpText() {
     "  /exit                 Leave the session",
     "",
     "Shortcuts:",
-    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter"
+    "  /fast  /heavy  /deep  /anthropic  /groq  /nvidia  /ollama  /openrouter",
+    "  /mistral-nemotron  /nemotron  /minimax  /llama-3.1-8b"
   ].join("\n");
 }
 
@@ -572,6 +575,12 @@ async function runSingleAgentTask(
   const normalizedIo = normalizeIo(io);
   const workspaceFolder = options.workspaceFolder || process.cwd();
   const runtimeConfig = buildChatRuntimeConfig(options);
+  const credentials = validateRuntimeCredentials(runtimeConfig);
+  if (!credentials.valid) {
+    normalizedIo.error(credentials.error);
+    return 2;
+  }
+
   const executeAction =
     typeof dependencies.executeAction === "function"
       ? dependencies.executeAction
@@ -737,6 +746,15 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
       if (/^\/(anthropic|groq|nvidia|ollama|openrouter)$/i.test(trimmed)) {
         provider = trimmed.slice(1).toLowerCase();
         model = pickModelForProvider(provider, model);
+        normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
+        rl.prompt();
+        return;
+      }
+
+      const modelShortcut = resolveModelShortcut(trimmed);
+      if (modelShortcut) {
+        provider = modelShortcut.provider;
+        model = modelShortcut.model;
         normalizedIo.log(buildProviderSwitchMessage(provider, model, options));
         rl.prompt();
         return;

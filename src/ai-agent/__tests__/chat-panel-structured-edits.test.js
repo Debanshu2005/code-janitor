@@ -633,6 +633,7 @@ describe("ChatPanel structured edit helpers", () => {
     panel._getApiSecretKey = ChatPanel.prototype._getApiSecretKey;
     panel._sanitizeApiKey = ChatPanel.prototype._sanitizeApiKey;
     panel._getConfigTargetForKey = jest.fn(() => vscode.ConfigurationTarget.Global);
+    panel._syncCliAiConfigPatch = jest.fn();
 
     const update = jest.fn().mockResolvedValue(undefined);
     vscode.workspace.getConfiguration.mockReturnValue({
@@ -643,6 +644,10 @@ describe("ChatPanel structured edit helpers", () => {
     await panel._persistApiKey("nvidia", "secret-value");
 
     expect(panel.context.secrets.store).toHaveBeenCalled();
+    expect(panel._syncCliAiConfigPatch).toHaveBeenCalledWith({
+      provider: "nvidia",
+      nvidiaApiKey: "secret-value"
+    });
     expect(panel._getImmediateProviderPresence()).toMatchObject({
       ollama: true,
       nvidia: true
