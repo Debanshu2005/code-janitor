@@ -2,6 +2,21 @@
 
 All notable changes to Code Janitor are documented here.
 
+## [1.0.4] - 2026-07-28
+
+### Added
+
+- Added configurable cloud AI rate limiting to reduce provider quota errors during chat, retry, and repair flows.
+- Added rate-limit settings for enabling throttling, sustained requests per minute, burst size, and maximum queue wait.
+- Added multi-file static HTML preview support for linked CSS, JavaScript, images, `srcset`, media, manifests, preload links, and root-relative assets.
+- Added package-app preview support that starts the nearest `package.json` dev script and opens the local URL in VS Code's Simple Browser editor tab.
+
+### Changed
+
+- Code Janitor now honors provider cooldown headers such as `Retry-After` and `x-ratelimit-reset` after `429` responses.
+- Local Ollama requests remain unthrottled; cloud and custom OpenAI-compatible providers are throttled by default.
+- Live Preview now refreshes when related static site files are saved and avoids iframe-origin issues for frameworks such as Next.js by using Simple Browser for dev-server previews.
+
 ## [1.0.1] - 2026-07-05
 
 ### Added

@@ -52,7 +52,7 @@ Supported targets: one file or one directory. Supported extensions currently inc
 1. **Code Formatting**: Format your code according to specified style guides or rules
 2. **Manual Fixing**: Run manual fixing from Command Palette with `Code Janitor: Format Code`
 3. **Auto-Correction**: Apply real-time auto-correction while typing for supported languages
-4. **Live Preview**: Preview HTML, React, Markdown, CSS, JSON, SVG, Vue, Svelte and more in a live webview
+4. **Live Preview**: Preview HTML, multi-file static sites, package-based web apps, React, Markdown, CSS, JSON, SVG, Vue, Svelte and more
 5. **Frontend Dependency Validation**: Validate frontend dependencies for HTML, CSS, and JavaScript files
 6. **AI Chat Panel**: Interact with the Code Janitor AI assistant
 7. **Self-Healing Performance**: Automatically detects slow AI responses and optimizes settings
@@ -65,6 +65,7 @@ Supported targets: one file or one directory. Supported extensions currently inc
 14. **TODO List Management**: Track and manage TODO comments across your codebase with an interactive panel
 15. **Shared Workspace Memory**: Persistent workspace context mirrored to `workspacememory.md` plus a machine-readable `workspace.json` manifest for multi-agent handoff
 16. **Project Planner**: Time-based todo list with progress tracking, deadline monitoring, and stagnation rescue
+17. **Cloud AI Rate Limiting**: Queues bursty cloud AI calls and honors provider cooldowns to reduce `429` errors
 
 ### Installation
 
@@ -127,6 +128,7 @@ Supported targets: one file or one directory. Supported extensions currently inc
 - Code generation and refactoring with production-grade quality
 - Bug fixing and debugging assistance
 - Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
+- **Cloud AI Rate Limiting**: Queues non-Ollama AI requests so retries and repair flows do not overwhelm provider quotas
 - **Web Search**: Search the web with DuckDuckGo (no API key required)
 - **YouTube Search**: Search and watch YouTube videos directly in chat (no API key required)
   - Unlimited free searches
@@ -177,6 +179,56 @@ Supported targets: one file or one directory. Supported extensions currently inc
   - Separate provider for edge-case generation
   - Dedicated provider for test report review notes
   - Supports all configured providers including custom ones
+
+### Live Preview
+
+Code Janitor supports both static-file previews and dev-server previews.
+
+For plain HTML projects, open the entry HTML file and run `Code Janitor: Live Preview`. CJ rewrites local resources so split files load correctly from the webview, including:
+
+- CSS links
+- JavaScript scripts
+- images and `srcset`
+- media sources, posters, icons, manifests, and preload links
+- root-relative assets such as `/assets/logo.png`
+
+CJ also refreshes the preview when related files are saved, so changes in sibling CSS, JS, or asset files can appear without reopening the preview.
+
+For package-based apps such as Next.js, Vite, React, Vue, Svelte, Astro, Parcel, and Webpack projects, open `package.json` or a source file and run `Code Janitor: Live Preview`. CJ finds the nearest `package.json`, picks a `dev`, `start`, `serve`, or `preview` script, starts it in a VS Code terminal, and opens the local URL in VS Code's Simple Browser editor tab.
+
+Common inferred dev-server ports:
+
+- Vite: `http://localhost:5173`
+- Next.js / Create React App: `http://localhost:3000`
+- Astro: `http://localhost:4321`
+- Parcel: `http://localhost:1234`
+- Webpack: `http://localhost:8080`
+
+If the Simple Browser opens before the dev server is ready, wait for the terminal to show that the server is ready, then refresh the browser tab. If dependencies are missing, run `npm install`, `pnpm install`, or `yarn install` first.
+
+### AI Provider Rate Limiting
+
+Code Janitor includes client-side rate limiting for cloud AI providers. It is designed for reliability rather than speed: normal single requests are sent immediately, while bursty retries are queued to avoid provider `429 Too Many Requests` errors.
+
+By default, rate limiting applies to Groq, OpenRouter, Anthropic, NVIDIA NIM, and custom OpenAI-compatible providers. Local Ollama requests are not throttled.
+
+Default settings:
+
+```json
+{
+  "codeJanitor.ai.rateLimit.enabled": true,
+  "codeJanitor.ai.rateLimit.requestsPerMinute": 20,
+  "codeJanitor.ai.rateLimit.burst": 3,
+  "codeJanitor.ai.rateLimit.maxWaitMs": 120000
+}
+```
+
+- `enabled`: Turn cloud AI throttling on or off.
+- `requestsPerMinute`: Maximum sustained request rate per provider.
+- `burst`: Number of immediate requests allowed before CJ starts spacing calls out.
+- `maxWaitMs`: Maximum time CJ will wait for a rate-limit slot before showing an error. Use `0` to wait without a cap.
+
+CJ also honors provider cooldown headers such as `Retry-After` and `x-ratelimit-reset` after a `429` response. If you use a local OpenAI-compatible server as a custom provider, increase these limits or disable rate limiting for faster local iteration.
 
 ---
 
