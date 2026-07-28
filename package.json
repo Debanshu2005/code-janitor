@@ -183,6 +183,32 @@
           "default": 0,
           "description": "AI request timeout in milliseconds. Set to 0 to disable the timeout (default), or increase it if using slow models like MiniMax M2.7."
         },
+        "codeJanitor.ai.rateLimit.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Throttle cloud AI provider requests to avoid provider rate-limit errors. Local Ollama requests are not throttled."
+        },
+        "codeJanitor.ai.rateLimit.requestsPerMinute": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 600,
+          "description": "Maximum cloud AI requests per minute before Code Janitor queues requests."
+        },
+        "codeJanitor.ai.rateLimit.burst": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Number of cloud AI requests Code Janitor can send immediately before spacing requests out."
+        },
+        "codeJanitor.ai.rateLimit.maxWaitMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 0,
+          "maximum": 600000,
+          "description": "Maximum time in milliseconds Code Janitor will wait for a cloud AI rate-limit slot. Set to 0 to wait without a cap."
+        },
         "codeJanitor.ai.showParsedActionsDebug": {
           "type": "boolean",
           "default": false,

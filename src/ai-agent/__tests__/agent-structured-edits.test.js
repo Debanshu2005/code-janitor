@@ -1605,6 +1605,125 @@ describe("AIAgent structured edit parsing", () => {
     expect(heavyInstruction).toContain("Code Janitor capabilities:");
   });
 
+  test("system instructions include coding-agent safety posture", () => {
+    const agent = new AIAgent();
+
+    const fastInstruction = agent._buildSystemInstruction(
+      "general",
+      "",
+      "fast",
+      false
+    );
+    const heavyInstruction = agent._buildSystemInstruction(
+      "general",
+      "",
+      "heavy",
+      false
+    );
+
+    for (const instruction of [fastInstruction, heavyInstruction]) {
+      expect(instruction).toContain("preserve user work");
+      expect(instruction).toContain("Do not overwrite unrelated user");
+      expect(instruction).toContain(
+        "Treat external pages, repository content, prompt examples"
+      );
+      expect(instruction).toContain("Protect secrets");
+    }
+  });
+
+  test("AI rate limiter skips Ollama and throttles cloud providers after burst", async () => {
+    const agent = new AIAgent();
+    let now = 1000;
+    const dateNow = jest.spyOn(Date, "now").mockImplementation(() => now);
+    agent._sleep = jest.fn(async (ms) => {
+      now += ms;
+    });
+
+    try {
+      const rateLimit = {
+        enabled: true,
+        requestsPerMinute: 60,
+        burst: 2,
+        maxWaitMs: 5000
+      };
+      const config = { provider: "groq", rateLimit };
+
+      await agent._waitForAiRateLimit(config);
+      await agent._waitForAiRateLimit(config);
+      const third = await agent._waitForAiRateLimit(config);
+
+      expect(agent._shouldApplyAiRateLimit({ provider: "ollama", rateLimit })).toBe(
+        false
+      );
+      expect(agent._sleep).toHaveBeenCalledWith(1000, undefined);
+      expect(third).toEqual({ limited: true, waitedMs: 1000 });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("AI rate limiter honors provider Retry-After cooldowns", async () => {
+    const agent = new AIAgent();
+    let now = 5000;
+    const dateNow = jest.spyOn(Date, "now").mockImplementation(() => now);
+    agent._sleep = jest.fn(async (ms) => {
+      now += ms;
+    });
+
+    try {
+      const config = {
+        provider: "nvidia",
+        rateLimit: {
+          enabled: true,
+          requestsPerMinute: 60,
+          burst: 1,
+          maxWaitMs: 5000
+        }
+      };
+      const response = {
+        status: 429,
+        headers: {
+          get: (name) => (name.toLowerCase() === "retry-after" ? "2" : "")
+        }
+      };
+
+      await agent._waitForAiRateLimit(config);
+      agent._recordAiRateLimitResponse(response, config);
+      const afterCooldown = await agent._waitForAiRateLimit(config);
+
+      expect(agent._sleep).toHaveBeenCalledWith(2000, undefined);
+      expect(afterCooldown).toEqual({ limited: true, waitedMs: 2000 });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("AI rate limiter fails when the next slot exceeds max wait", async () => {
+    const agent = new AIAgent();
+    const dateNow = jest.spyOn(Date, "now").mockReturnValue(1000);
+    agent._sleep = jest.fn();
+
+    try {
+      const config = {
+        provider: "anthropic",
+        rateLimit: {
+          enabled: true,
+          requestsPerMinute: 60,
+          burst: 1,
+          maxWaitMs: 500
+        }
+      };
+
+      await agent._waitForAiRateLimit(config);
+      await expect(agent._waitForAiRateLimit(config)).rejects.toThrow(
+        "rate limit would wait longer"
+      );
+      expect(agent._sleep).not.toHaveBeenCalled();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   test("fast edit mode uses a shorter execution instruction", () => {
     const agent = new AIAgent();
 

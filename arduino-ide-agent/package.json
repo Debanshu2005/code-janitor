@@ -2,7 +2,7 @@
   "name": "code-janitor-arduino-ai-agent",
   "displayName": "Code Janitor Arduino AI Agent",
   "description": "Arduino-focused AI coding assistant from Code Janitor for Arduino IDE 2.x (VSIX plugin).",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "publisher": "Debanshu2005",
   "repository": {
     "type": "git",

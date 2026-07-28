@@ -3725,7 +3725,9 @@ Continue from the real MCP evidence above:
     const normalized = this._normalizeCustomProvider(definition);
     const sanitizedKey = this._sanitizeApiKey(apiKey);
     if (!normalized) {
-      throw new Error("Provider name, base URL, and default model are required.");
+      throw new Error(
+        "Provider name, OpenAI-compatible base URL, and default model are required. Look for a Chat Completions, API base, or OpenAI-compatible base URL in the provider docs. If the provider does not publish one, CJ needs a dedicated adapter for that API."
+      );
     }
     if (!sanitizedKey) {
       throw new Error("An API key is required for a custom provider.");

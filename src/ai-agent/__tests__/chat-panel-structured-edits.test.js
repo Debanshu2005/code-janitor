@@ -79,6 +79,27 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel.agent._detectIntent).toHaveBeenCalledWith("fix src/app.js");
   });
 
+  test("custom provider setup requires an OpenAI-compatible base URL", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+
+    expect(
+      panel._normalizeCustomProvider({
+        name: "Mystery API",
+        defaultModel: "mystery-chat"
+      })
+    ).toBeNull();
+
+    await expect(
+      panel._addCustomProvider(
+        {
+          name: "Mystery API",
+          defaultModel: "mystery-chat"
+        },
+        "secret"
+      )
+    ).rejects.toThrow("OpenAI-compatible base URL");
+  });
+
   test("syntax scan checks dirty HTML buffers through the shared syntax validator", async () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._postMessage = jest.fn();
