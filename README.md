@@ -65,7 +65,6 @@ Supported targets: one file or one directory. Supported extensions currently inc
 14. **TODO List Management**: Track and manage TODO comments across your codebase with an interactive panel
 15. **Shared Workspace Memory**: Persistent workspace context mirrored to `workspacememory.md` plus a machine-readable `workspace.json` manifest for multi-agent handoff
 16. **Project Planner**: Time-based todo list with progress tracking, deadline monitoring, and stagnation rescue
-17. **Cloud AI Rate Limiting**: Queues bursty cloud AI calls and honors provider cooldowns to reduce `429` errors
 
 ### Installation
 
@@ -128,14 +127,12 @@ Supported targets: one file or one directory. Supported extensions currently inc
 - Code generation and refactoring with production-grade quality
 - Bug fixing and debugging assistance
 - Multiple AI providers: Ollama (local), Groq (fast, free), OpenRouter, Anthropic, NVIDIA
-- **Cloud AI Rate Limiting**: Queues non-Ollama AI requests so retries and repair flows do not overwhelm provider quotas
 - **Web Search**: Search the web with DuckDuckGo (no API key required)
 - **YouTube Search**: Search and watch YouTube videos directly in chat (no API key required)
   - Unlimited free searches
   - Videos embed and play inline
   - Powered by DuckDuckGo
 - **Self-Healing**: Automatically detects slow models and switches to faster alternatives
-- **Self-Diagnosing Errors**: Automatically detects FILE operation failures and attempts to fix them
 - **Improved File Operations**: Enhanced FILE action processing with detailed logging and double-apply prevention
 - **Performance Monitoring**: View AI performance metrics with `Code Janitor: Show AI Performance Report`
    - Track response times
