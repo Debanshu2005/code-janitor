@@ -14,6 +14,7 @@ jest.mock(
     },
     window: {
       activeTextEditor: null,
+      createTerminal: jest.fn(),
       createWebviewPanel: jest.fn(),
       showInformationMessage: jest.fn(),
       showWarningMessage: jest.fn()
@@ -99,6 +100,62 @@ describe("live preview multi-file HTML resources", () => {
     ).toBe(true);
     expect(
       livePreviewer._test.isRelatedPreviewDocument(outsidePath, indexPath)
+    ).toBe(false);
+  });
+
+  test("detects package apps without an index file as dev-server preview candidates", () => {
+    const packageJson = {
+      scripts: {
+        dev: "vite --host 0.0.0.0 --port 5174"
+      },
+      dependencies: {
+        react: "^18.0.0",
+        vite: "^5.0.0"
+      }
+    };
+    const packagePath = path.join(tmpDir, "package.json");
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson), "utf8");
+
+    expect(livePreviewer._test.pickPreviewScript(packageJson)).toEqual({
+      name: "dev",
+      command: "vite --host 0.0.0.0 --port 5174"
+    });
+    expect(
+      livePreviewer._test.isPackagePreviewCandidate(
+        { fileName: packagePath },
+        packageJson,
+        tmpDir
+      )
+    ).toBe(true);
+    expect(
+      livePreviewer._test.detectPreviewPort(packageJson.scripts.dev, packageJson)
+    ).toBe(5174);
+  });
+
+  test("prefers dev-server preview for framework apps but not plain static packages", () => {
+    const indexPath = path.join(tmpDir, "index.html");
+    fs.writeFileSync(indexPath, "<div id=\"root\"></div>", "utf8");
+
+    expect(
+      livePreviewer._test.isPackagePreviewCandidate(
+        { fileName: path.join(tmpDir, "src", "App.jsx") },
+        {
+          scripts: { dev: "vite" },
+          dependencies: { react: "^18.0.0", vite: "^5.0.0" }
+        },
+        tmpDir
+      )
+    ).toBe(true);
+
+    expect(
+      livePreviewer._test.isPackagePreviewCandidate(
+        { fileName: path.join(tmpDir, "package.json") },
+        {
+          scripts: { dev: "http-server ." },
+          devDependencies: { "http-server": "^14.0.0" }
+        },
+        tmpDir
+      )
     ).toBe(false);
   });
 });

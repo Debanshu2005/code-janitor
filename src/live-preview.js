@@ -19,6 +19,8 @@ let currentChangeListener;
 let currentSaveListener;
 let currentMessageListener;
 let currentPreviewState;
+let currentDevServerTerminal;
+let currentDevServerKey = "";
 
 function clonePreviewDiagnostics(diagnostics) {
   return diagnostics ? JSON.parse(JSON.stringify(diagnostics)) : null;
@@ -763,6 +765,233 @@ function getLocalResourceRoots(documentPath) {
   return roots;
 }
 
+function findNearestPackageJson(startPath) {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    ? path.resolve(vscode.workspace.workspaceFolders[0].uri.fsPath)
+    : "";
+  let currentDir = fs.existsSync(startPath) && fs.statSync(startPath).isDirectory()
+    ? path.resolve(startPath)
+    : path.dirname(path.resolve(startPath));
+
+  while (currentDir && currentDir !== path.dirname(currentDir)) {
+    const packageJsonPath = path.join(currentDir, "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      return packageJsonPath;
+    }
+
+    if (workspaceRoot && currentDir === workspaceRoot) {
+      break;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+
+  return "";
+}
+
+function readPackageJson(packageJsonPath) {
+  if (!packageJsonPath) return null;
+  try {
+    return JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function hasStaticHtmlEntry(projectDir) {
+  return ["index.html", "public/index.html", "dist/index.html"].some((entry) =>
+    fs.existsSync(path.join(projectDir, entry))
+  );
+}
+
+function hasWebAppSignals(packageJson = {}, projectDir = "") {
+  const combinedDeps = {
+    ...(packageJson.dependencies || {}),
+    ...(packageJson.devDependencies || {})
+  };
+  const depNames = Object.keys(combinedDeps);
+  const hasKnownWebDependency = depNames.some((dep) =>
+    /^(vite|next|react|react-dom|@vitejs\/|vue|svelte|astro|parcel|webpack|@angular\/core|@remix-run\/)/i.test(dep)
+  );
+  const hasKnownConfig = [
+    "vite.config.js",
+    "vite.config.ts",
+    "next.config.js",
+    "next.config.mjs",
+    "astro.config.mjs",
+    "svelte.config.js"
+  ].some((configFile) =>
+    fs.existsSync(path.join(projectDir, configFile))
+  );
+
+  return hasKnownWebDependency || hasKnownConfig;
+}
+
+function pickPreviewScript(packageJson = {}) {
+  const scripts = packageJson.scripts || {};
+  for (const name of ["dev", "start", "serve", "preview"]) {
+    if (typeof scripts[name] === "string" && scripts[name].trim()) {
+      return { name, command: scripts[name].trim() };
+    }
+  }
+  return null;
+}
+
+function detectPreviewPort(scriptCommand = "", packageJson = {}) {
+  const explicitPort =
+    scriptCommand.match(/(?:--port|-p)\s+([0-9]{2,5})/) ||
+    scriptCommand.match(/PORT=([0-9]{2,5})/i) ||
+    scriptCommand.match(/\blocalhost:([0-9]{2,5})\b/i);
+  if (explicitPort) return Number(explicitPort[1]);
+
+  const command = String(scriptCommand || "").toLowerCase();
+  const deps = {
+    ...(packageJson.dependencies || {}),
+    ...(packageJson.devDependencies || {})
+  };
+  if (command.includes("vite") || deps.vite) return 5173;
+  if (command.includes("astro") || deps.astro) return 4321;
+  if (command.includes("parcel") || deps.parcel) return 1234;
+  if (command.includes("next") || deps.next) return 3000;
+  if (command.includes("react-scripts") || deps["react-scripts"]) return 3000;
+  if (command.includes("webpack") || deps.webpack) return 8080;
+  return 3000;
+}
+
+function detectPackageManager(projectDir) {
+  if (fs.existsSync(path.join(projectDir, "pnpm-lock.yaml"))) return "pnpm";
+  if (fs.existsSync(path.join(projectDir, "yarn.lock"))) return "yarn";
+  return "npm";
+}
+
+function getRunScriptCommand(projectDir, scriptName) {
+  const manager = detectPackageManager(projectDir);
+  if (manager === "yarn") return `yarn ${scriptName}`;
+  if (manager === "pnpm") return `pnpm ${scriptName}`;
+  return `npm run ${scriptName}`;
+}
+
+function isPackagePreviewCandidate(document, packageJson, projectDir) {
+  if (!document || !packageJson) {
+    return false;
+  }
+
+  const fileName = path.basename(document.fileName || "").toLowerCase();
+  const ext = path.extname(fileName).toLowerCase();
+  const hasStaticEntry = hasStaticHtmlEntry(projectDir);
+  const isFrameworkApp = hasWebAppSignals(packageJson, projectDir);
+
+  if (fileName === "package.json") return !hasStaticEntry || isFrameworkApp;
+  if (ext === ".html") return isFrameworkApp;
+  if ([".jsx", ".tsx", ".vue", ".svelte", ".astro"].includes(ext)) return true;
+  if (
+    [".js", ".ts", ".css", ".scss", ".sass", ".less"].includes(ext) &&
+    isFrameworkApp
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function getDevServerPreviewHtml({ url, projectDir, scriptName, command }) {
+  const safeUrl = escapeHTML(url);
+  const safeProject = escapeHTML(projectDir);
+  const safeScript = escapeHTML(scriptName);
+  const safeCommand = escapeHTML(command);
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src http://localhost:* http://127.0.0.1:*; style-src 'unsafe-inline';">
+    <style>
+      body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: "Segoe UI", sans-serif; }
+      .bar { height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 12px; }
+      .bar strong { color: #f0f6fc; }
+      .bar code { color: #79c0ff; }
+      iframe { width: 100vw; height: calc(100vh - 38px); border: 0; background: white; }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <strong>Dev server preview</strong>
+      <span>${safeProject}</span>
+      <code>${safeCommand}</code>
+      <span>script: ${safeScript}</span>
+    </div>
+    <iframe src="${safeUrl}" title="Code Janitor dev server preview"></iframe>
+  </body>
+</html>`;
+}
+
+function startDevServerPreview(context, { document, packageJsonPath, packageJson }) {
+  const projectDir = path.dirname(packageJsonPath);
+  const script = pickPreviewScript(packageJson);
+  if (!script) {
+    vscode.window.showWarningMessage(
+      "No dev/start/serve/preview script found in package.json. Add one to preview this app."
+    );
+    return null;
+  }
+
+  const port = detectPreviewPort(script.command, packageJson);
+  const url = `http://localhost:${port}`;
+  const command = getRunScriptCommand(projectDir, script.name);
+  const serverKey = `${projectDir}:${script.name}:${port}`;
+
+  if (!currentDevServerTerminal || currentDevServerKey !== serverKey) {
+    currentDevServerTerminal = vscode.window.createTerminal({
+      name: `Code Janitor Preview: ${path.basename(projectDir)}`,
+      cwd: projectDir
+    });
+    currentDevServerTerminal.sendText(command);
+    currentDevServerKey = serverKey;
+  }
+  currentDevServerTerminal.show(false);
+
+  if (currentPanel) {
+    currentPanel.reveal(vscode.ViewColumn.Beside);
+  } else {
+    currentPanel = vscode.window.createWebviewPanel(
+      "livePreview",
+      `Live Preview: ${path.basename(projectDir)}`,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.file(projectDir)]
+      }
+    );
+    currentPanel.onDidDispose(
+      () => {
+        currentPanel = undefined;
+        currentPreviewState = undefined;
+      },
+      null,
+      context.subscriptions
+    );
+  }
+
+  currentPanel.title = `Live Preview: ${path.basename(projectDir)}`;
+  currentPanel.webview.html = getDevServerPreviewHtml({
+    url,
+    projectDir,
+    scriptName: script.name,
+    command
+  });
+  vscode.window.showInformationMessage(
+    `Starting ${script.name} for preview. If the panel is blank, wait for the dev server to finish booting and refresh the preview.`
+  );
+
+  return {
+    success: true,
+    devServer: true,
+    url,
+    projectDir,
+    script: script.name,
+    documentPath: document.fileName
+  };
+}
+
 async function livePreviewer(context, options = {}) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
@@ -773,6 +1002,20 @@ async function livePreviewer(context, options = {}) {
 
   const document = editor.document;
   const languageId = document.languageId;
+  const packageJsonPath = findNearestPackageJson(document.fileName);
+  const packageJson = readPackageJson(packageJsonPath);
+  if (
+    packageJsonPath &&
+    pickPreviewScript(packageJson) &&
+    isPackagePreviewCandidate(document, packageJson, path.dirname(packageJsonPath))
+  ) {
+    return startDevServerPreview(context, {
+      document,
+      packageJsonPath,
+      packageJson
+    });
+  }
+
   const supportedLanguages = [
     "html",
     "javascript",
@@ -1000,7 +1243,11 @@ livePreviewer.getLastDiagnostics = function () {
 
 livePreviewer._test = {
   convertLocalPathsToWebviewUris,
+  detectPreviewPort,
+  getRunScriptCommand,
+  isPackagePreviewCandidate,
   isRelatedPreviewDocument,
+  pickPreviewScript,
   resolveLocalPath
 };
 
