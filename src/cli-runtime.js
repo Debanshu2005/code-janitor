@@ -2,6 +2,10 @@ const {
   getDefaultCliConfigPath,
   resolveCliAiConfig
 } = require("./utils/cli-config");
+const {
+  resolveCustomProviderChatUrl,
+  sanitizeApiKey
+} = require("./ai-agent/provider-utils");
 
 const DEFAULT_MODELS_BY_PROVIDER = {
   anthropic: "claude-sonnet-4-5",
@@ -50,14 +54,60 @@ const MODEL_SHORTCUTS = {
   }
 };
 
-function normalizeProvider(provider) {
+function isCustomProviderId(provider) {
+  return /^custom:[a-z0-9._-]+$/i.test(String(provider || "").trim());
+}
+
+function getConfiguredCustomProvider(customProviders = [], provider = "") {
   const normalized = String(provider || "").trim().toLowerCase();
-  return BUILT_IN_PROVIDERS.has(normalized) ? normalized : "ollama";
+  if (!normalized) return null;
+
+  return (
+    customProviders.find(
+      (customProvider) =>
+        String(customProvider?.id || "").trim().toLowerCase() === normalized
+    ) || null
+  );
+}
+
+function isKnownProvider(provider, customProviders = []) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  return (
+    BUILT_IN_PROVIDERS.has(normalized) ||
+    !!getConfiguredCustomProvider(customProviders, normalized)
+  );
+}
+
+function isProviderNameAllowed(provider) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  return BUILT_IN_PROVIDERS.has(normalized) || isCustomProviderId(normalized);
+}
+
+function formatProviderList(customProviders = []) {
+  return Array.from(
+    new Set([
+      ...Array.from(BUILT_IN_PROVIDERS),
+      ...customProviders.map((provider) => provider.id).filter(Boolean)
+    ])
+  )
+    .sort()
+    .join(", ");
+}
+
+function normalizeProvider(provider, customProviders = []) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (BUILT_IN_PROVIDERS.has(normalized)) return normalized;
+  if (getConfiguredCustomProvider(customProviders, normalized)) return normalized;
+  return isCustomProviderId(normalized) ? normalized : "ollama";
 }
 
 function buildChatRuntimeConfig(options = {}) {
   const resolved = resolveCliAiConfig(options);
-  const provider = normalizeProvider(resolved.provider || "ollama");
+  const customProviders = Array.isArray(resolved.customProviders)
+    ? resolved.customProviders
+    : [];
+  const provider = normalizeProvider(resolved.provider || "ollama", customProviders);
+  const customProvider = getConfiguredCustomProvider(customProviders, provider);
   const runtimeConfig = {
     enabled: true,
     provider,
@@ -67,7 +117,15 @@ function buildChatRuntimeConfig(options = {}) {
     openrouterApiKey: ""
   };
 
-  if (resolved.model) {
+  if (customProvider) {
+    runtimeConfig.model = resolved.model || customProvider.defaultModel;
+    runtimeConfig.customProvider = {
+      ...customProvider,
+      protocol: customProvider.protocol || "openai",
+      apiKey: sanitizeApiKey(customProvider.apiKey),
+      chatCompletionsUrl: resolveCustomProviderChatUrl(customProvider.baseUrl)
+    };
+  } else if (resolved.model) {
     runtimeConfig.model = resolved.model;
   }
 
@@ -91,6 +149,24 @@ function validateRuntimeCredentials(runtimeConfig = {}) {
   const provider = normalizeProvider(runtimeConfig.provider);
   if (provider === "ollama") {
     return { valid: true, error: "" };
+  }
+
+  if (isCustomProviderId(provider)) {
+    if (!runtimeConfig.customProvider) {
+      return {
+        valid: false,
+        error: `${provider} is selected, but its provider definition is not synced to ${getDefaultCliConfigPath()}. Save it again from the Code Janitor chat provider dialog.`
+      };
+    }
+
+    if (String(runtimeConfig.customProvider.apiKey || "").trim()) {
+      return { valid: true, error: "" };
+    }
+
+    return {
+      valid: false,
+      error: `${runtimeConfig.customProvider.name || provider} is selected, but its API key is not configured. Save the key from the Code Janitor chat provider dialog or add it to ${getDefaultCliConfigPath()}.`
+    };
   }
 
   const apiKeyField = PROVIDER_API_KEY_FIELDS[provider];
@@ -131,6 +207,10 @@ function normalizeIo(io = null) {
 }
 
 function getDefaultModelForProvider(provider) {
+  if (isCustomProviderId(provider)) {
+    return "";
+  }
+
   return (
     DEFAULT_MODELS_BY_PROVIDER[normalizeProvider(provider)] ||
     DEFAULT_MODELS_BY_PROVIDER.ollama
@@ -153,8 +233,12 @@ module.exports = {
   BUILT_IN_PROVIDERS,
   buildChatRuntimeConfig,
   createDefaultIo,
+  formatProviderList,
+  getConfiguredCustomProvider,
   getDefaultModelForProvider,
   isLikelyNvidiaModel,
+  isKnownProvider,
+  isProviderNameAllowed,
   normalizeIo,
   normalizeProvider,
   resolveModelShortcut,

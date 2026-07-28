@@ -147,6 +147,23 @@ describe("cli", () => {
     });
   });
 
+  test("parses saved custom provider ids", () => {
+    expect(
+      parseArgs([
+        "chat",
+        "hello",
+        "--provider",
+        "custom:local-ai",
+        "--model",
+        "coder-pro"
+      ])
+    ).toMatchObject({
+      command: "chat",
+      provider: "custom:local-ai",
+      model: "coder-pro"
+    });
+  });
+
   test("returns check failure when files would change", async () => {
     const io = createIo();
     mockAnalyzeTarget.mockResolvedValue({

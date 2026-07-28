@@ -66,6 +66,47 @@ describe("cli chat", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
+  test("builds custom provider runtime config from synced chat settings", () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "code-janitor-custom-config-"));
+    const configPath = path.join(workspace, ".code-janitor.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ai: {
+          provider: "custom:local-ai",
+          model: "coder-pro",
+          customProviders: [
+            {
+              id: "custom:local-ai",
+              name: "Local AI",
+              baseUrl: "http://localhost:1234/v1",
+              defaultModel: "coder-pro",
+              protocol: "openai",
+              apiKey: "custom-secret"
+            }
+          ]
+        }
+      }),
+      "utf8"
+    );
+
+    expect(buildChatRuntimeConfig({ cwd: workspace })).toMatchObject({
+      enabled: true,
+      provider: "custom:local-ai",
+      model: "coder-pro",
+      customProvider: {
+        id: "custom:local-ai",
+        apiKey: "custom-secret",
+        chatCompletionsUrl: "http://localhost:1234/v1/chat/completions"
+      }
+    });
+
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
   test("uses read-only overlay for chat turns", async () => {
     const writes = [];
     const io = {

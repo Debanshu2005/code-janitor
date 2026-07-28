@@ -654,6 +654,50 @@ describe("ChatPanel structured edit helpers", () => {
     });
   });
 
+  test("persisting a custom provider API key syncs its CLI provider definition", async () => {
+    const panel = Object.create(ChatPanel.prototype);
+    panel._lastKnownProviderPresence = {
+      ollama: true
+    };
+    panel.context = {
+      secrets: {
+        store: jest.fn().mockResolvedValue(undefined)
+      }
+    };
+    panel._getImmediateProviderPresence = ChatPanel.prototype._getImmediateProviderPresence;
+    panel._rememberProviderPresence = ChatPanel.prototype._rememberProviderPresence;
+    panel._getApiKeyConfigKey = ChatPanel.prototype._getApiKeyConfigKey;
+    panel._getApiSecretKey = ChatPanel.prototype._getApiSecretKey;
+    panel._sanitizeApiKey = ChatPanel.prototype._sanitizeApiKey;
+    panel._getSavedProviderModel = jest.fn(() => "coder-pro");
+    panel._getCustomProviderById = jest.fn(() => ({
+      id: "custom:local-ai",
+      name: "Local AI",
+      baseUrl: "http://localhost:1234/v1",
+      defaultModel: "coder-lite",
+      models: ["coder-lite", "coder-pro"],
+      protocol: "openai"
+    }));
+    panel._syncCliAiConfigPatch = jest.fn();
+
+    await panel._persistApiKey("custom:local-ai", "custom-secret");
+
+    expect(panel.context.secrets.store).toHaveBeenCalledWith(
+      "codeJanitor.ai.custom:local-ai.apiKey",
+      "custom-secret"
+    );
+    expect(panel._syncCliAiConfigPatch).toHaveBeenCalledWith({
+      provider: "custom:local-ai",
+      model: "coder-pro",
+      customProviders: [
+        expect.objectContaining({
+          id: "custom:local-ai",
+          apiKey: "custom-secret"
+        })
+      ]
+    });
+  });
+
   test("sanitized external URLs block non-HTTPS navigation and restrict HTTP provider endpoints to loopback", () => {
     const panel = Object.create(ChatPanel.prototype);
     panel._isLoopbackHost = ChatPanel.prototype._isLoopbackHost;

@@ -203,4 +203,43 @@ describe("cli config", () => {
       nvidiaApiKey: "secret-nvidia"
     });
   });
+
+  test("writes and resolves custom providers for the CLI", () => {
+    const workspace = createTempDir();
+    tempDirs.push(workspace);
+    const configPath = path.join(workspace, "config.json");
+
+    const result = writeCliAiConfigPatch(
+      {
+        provider: "custom:local-ai",
+        model: "coder-pro",
+        customProviders: [
+          {
+            id: "custom:local-ai",
+            name: "Local AI",
+            baseUrl: "http://localhost:1234/v1",
+            defaultModel: "coder-pro",
+            models: ["coder-pro", "coder-lite"],
+            protocol: "openai",
+            apiKey: "custom-secret"
+          }
+        ]
+      },
+      configPath
+    );
+
+    expect(result.config.customProviders).toHaveLength(1);
+    process.env.CODE_JANITOR_CONFIG = configPath;
+    expect(resolveCliAiConfig({ cwd: workspace })).toMatchObject({
+      provider: "custom:local-ai",
+      model: "coder-pro",
+      customProviders: [
+        expect.objectContaining({
+          id: "custom:local-ai",
+          baseUrl: "http://localhost:1234/v1",
+          apiKey: "custom-secret"
+        })
+      ]
+    });
+  });
 });

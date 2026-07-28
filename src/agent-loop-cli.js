@@ -5,11 +5,12 @@ const readline = require("readline");
 const AIAgent = require("./ai-agent/agent");
 const { extractReadableContent } = require("./ai-agent/web-content-utils");
 const {
-  BUILT_IN_PROVIDERS,
   buildChatRuntimeConfig,
   createDefaultIo,
+  formatProviderList,
   getDefaultModelForProvider,
   isLikelyNvidiaModel,
+  isKnownProvider,
   normalizeIo,
   resolveModelShortcut,
   validateRuntimeCredentials
@@ -62,11 +63,21 @@ function buildProviderSwitchMessage(provider, model, options = {}) {
     model,
     provider
   });
+  const runtimeConfig = buildChatRuntimeConfig({
+    ...options,
+    model,
+    provider
+  });
+  const credentials = validateRuntimeCredentials(runtimeConfig);
   const missingKey =
     (provider === "anthropic" && !activeConfig.anthropicApiKey) ||
     (provider === "groq" && !activeConfig.groqApiKey) ||
     (provider === "nvidia" && !activeConfig.nvidiaApiKey) ||
     (provider === "openrouter" && !activeConfig.openrouterApiKey);
+
+  if (!credentials.valid) {
+    return `Provider switched to ${provider}. ${credentials.error}`;
+  }
 
   if (missingKey) {
     return `Provider switched to ${provider}. Add the API key in env vars or ${getDefaultCliConfigPath()}.`;
@@ -643,6 +654,7 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
   const normalizedIo = normalizeIo(io);
   let mode = options.mode || "fast";
   const initialConfig = resolveCliAiConfig(options);
+  const customProviders = initialConfig.customProviders || [];
   let provider = initialConfig.provider || "ollama";
   let model = initialConfig.model || getDefaultModelForProvider(provider);
   let agent = new AIAgent();
@@ -715,14 +727,12 @@ async function runInteractiveAgentCli(options = {}, io = createDefaultIo()) {
         return;
       }
 
-      const providerMatch = trimmed.match(/^\/provider\s+([a-z0-9._-]+)$/i);
+      const providerMatch = trimmed.match(/^\/provider\s+([a-z0-9._:-]+)$/i);
       if (providerMatch) {
         const nextProvider = providerMatch[1].toLowerCase();
-        if (!BUILT_IN_PROVIDERS.has(nextProvider)) {
+        if (!isKnownProvider(nextProvider, customProviders)) {
           normalizedIo.error(
-            `Unknown provider "${nextProvider}". Choose one of: ${Array.from(BUILT_IN_PROVIDERS)
-              .sort()
-              .join(", ")}.`
+            `Unknown provider "${nextProvider}". Choose one of: ${formatProviderList(customProviders)}.`
           );
           rl.prompt();
           return;

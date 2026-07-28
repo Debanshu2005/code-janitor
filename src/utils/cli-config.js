@@ -21,6 +21,19 @@ function toNonNegativeNumber(value) {
   return null;
 }
 
+function toStringArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => toTrimmedString(item))
+      .filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function normalizeProvider(value) {
   const provider = toTrimmedString(value).toLowerCase();
   return provider || "";
@@ -50,6 +63,40 @@ function getCliConfigCandidates(cwd = process.cwd()) {
 
 function readObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeCustomProvider(value) {
+  const raw = readObject(value);
+  const id = normalizeProvider(raw.id);
+  const baseUrl = toTrimmedString(raw.baseUrl);
+  const defaultModel =
+    toTrimmedString(raw.defaultModel) ||
+    toTrimmedString(raw.model);
+
+  if (!id || !baseUrl || !defaultModel) {
+    return null;
+  }
+
+  return {
+    id,
+    name: toTrimmedString(raw.name) || id,
+    baseUrl,
+    defaultModel,
+    models: Array.from(new Set(toStringArray(raw.models))),
+    apiKeyLink: toTrimmedString(raw.apiKeyLink),
+    protocol: toTrimmedString(raw.protocol) || "openai",
+    apiKey: toTrimmedString(raw.apiKey)
+  };
+}
+
+function normalizeCustomProviders(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((provider) => normalizeCustomProvider(provider))
+    .filter(Boolean);
 }
 
 function normalizeCliConfig(rawConfig) {
@@ -99,7 +146,8 @@ function normalizeCliConfig(rawConfig) {
       toTrimmedString(openrouter.apiKey),
     anthropicApiKey:
       toTrimmedString(base.anthropicApiKey) ||
-      toTrimmedString(anthropic.apiKey)
+      toTrimmedString(anthropic.apiKey),
+    customProviders: normalizeCustomProviders(base.customProviders)
   };
 }
 
@@ -155,6 +203,25 @@ function mergeDefined(target, source, keys) {
   }
 }
 
+function mergeCustomProviders(existing = [], updates = []) {
+  const byId = new Map();
+
+  for (const provider of normalizeCustomProviders(existing)) {
+    byId.set(provider.id, provider);
+  }
+
+  for (const provider of normalizeCustomProviders(updates)) {
+    const current = byId.get(provider.id) || {};
+    byId.set(provider.id, {
+      ...current,
+      ...provider,
+      apiKey: provider.apiKey || current.apiKey || ""
+    });
+  }
+
+  return Array.from(byId.values());
+}
+
 function writeCliAiConfigPatch(updates = {}, configPath = getDefaultCliConfigPath()) {
   const targetPath = path.resolve(configPath || getDefaultCliConfigPath());
   let existing = {};
@@ -183,6 +250,13 @@ function writeCliAiConfigPatch(updates = {}, configPath = getDefaultCliConfigPat
     "openrouterApiKey"
   ]);
 
+  if (Array.isArray(updates.customProviders)) {
+    nextAi.customProviders = mergeCustomProviders(
+      nextAi.customProviders,
+      updates.customProviders
+    );
+  }
+
   const nextConfig = {
     ...existing,
     ai: nextAi
@@ -210,16 +284,24 @@ function resolveCliAiConfig(options = {}) {
   const cwd = options.workspaceFolder || options.cwd || process.cwd();
   const loaded = loadCliConfig(cwd);
   const fileConfig = loaded.config || {};
+  const customProviders = Array.isArray(fileConfig.customProviders)
+    ? fileConfig.customProviders
+    : [];
 
   const requestedProvider =
     normalizeProvider(options.provider) ||
     normalizeProvider(process.env.CODE_JANITOR_PROVIDER) ||
     normalizeProvider(fileConfig.provider) ||
     "ollama";
+  const selectedCustomProvider =
+    customProviders.find((provider) => provider.id === requestedProvider) || null;
 
   const providerModel =
     requestedProvider === "nvidia"
       ? toTrimmedString(fileConfig.nvidiaModel) || toTrimmedString(fileConfig.model)
+      : selectedCustomProvider
+        ? toTrimmedString(fileConfig.model) ||
+          toTrimmedString(selectedCustomProvider.defaultModel)
       : toTrimmedString(fileConfig.model);
 
   return {
@@ -251,7 +333,8 @@ function resolveCliAiConfig(options = {}) {
       toTrimmedString(fileConfig.openrouterApiKey),
     anthropicApiKey:
       toTrimmedString(process.env.CODE_JANITOR_ANTHROPIC_API_KEY) ||
-      toTrimmedString(fileConfig.anthropicApiKey)
+      toTrimmedString(fileConfig.anthropicApiKey),
+    customProviders
   };
 }
 

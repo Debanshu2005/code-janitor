@@ -4,7 +4,7 @@ const path = require("path");
 
 const { runAgentCli } = require("./agent-loop-cli");
 const { runChatCli } = require("./cli-chat");
-const { BUILT_IN_PROVIDERS } = require("./cli-runtime");
+const { BUILT_IN_PROVIDERS, isProviderNameAllowed } = require("./cli-runtime");
 const { analyzeTarget } = require("./core/janitor");
 
 function parseArgs(argv) {
@@ -94,11 +94,11 @@ function parseArgs(argv) {
 
     if (arg === "--provider") {
       const provider = readValue("--provider").trim().toLowerCase();
-      if (!BUILT_IN_PROVIDERS.has(provider)) {
+      if (!isProviderNameAllowed(provider)) {
         throw new Error(
           `Option --provider must be one of: ${Array.from(BUILT_IN_PROVIDERS)
             .sort()
-            .join(", ")}.`
+            .join(", ")}, or a saved custom provider id like custom:my-provider.`
         );
       }
       options.provider = provider;

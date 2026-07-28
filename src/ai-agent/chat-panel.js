@@ -2796,6 +2796,27 @@ ${fileContent}
     }
   }
 
+  _syncCustomProviderForCli(provider, apiKey = "", model = "") {
+    const customProvider = this._getCustomProviderById(provider);
+    if (!customProvider) return;
+
+    const selectedModel =
+      String(model || "").trim() ||
+      this._getSavedProviderModel(provider) ||
+      customProvider.defaultModel;
+
+    this._syncCliAiConfigPatch({
+      provider,
+      model: selectedModel,
+      customProviders: [
+        {
+          ...customProvider,
+          apiKey: this._sanitizeApiKey(apiKey)
+        }
+      ]
+    });
+  }
+
   _buildProviderCatalog() {
     return [
       { id: "ollama", name: "Ollama", builtin: true, requiresKey: false, models: [] },
@@ -3037,6 +3058,7 @@ ${fileContent}
       await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
       this._rememberProviderPresence({ [provider]: true });
       if (!configKey) {
+        this._syncCustomProviderForCli(provider, sanitized);
         return;
       }
 
@@ -6598,6 +6620,8 @@ ${trimmedText}`;
         model: nextModel,
         nvidiaModel: provider === "nvidia" ? nextModel : ""
       });
+    } else {
+      this._syncCustomProviderForCli(provider, "", nextModel);
     }
 
     this._saveProviderModel(provider, nextModel);
