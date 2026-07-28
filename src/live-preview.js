@@ -16,6 +16,7 @@ try {
 
 let currentPanel;
 let currentChangeListener;
+let currentSaveListener;
 let currentMessageListener;
 let currentPreviewState;
 
@@ -164,39 +165,128 @@ function stripNodeWrappers(code) {
     .replace(/^\s*(['"])use strict\1;?\s*$/gm, "");
 }
 
+function isExternalOrSpecialResource(resource) {
+  return /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(resource || "");
+}
+
+function stripResourceSuffix(resource) {
+  return String(resource || "").split(/[?#]/, 1)[0];
+}
+
+function appendResourceSuffix(uri, resource) {
+  const suffixMatch = String(resource || "").match(/([?#].*)$/);
+  if (!suffixMatch) return uri;
+  const suffix = suffixMatch[1];
+  if (suffix.startsWith("?") && uri.includes("?")) {
+    return `${uri}&${suffix.slice(1)}`;
+  }
+  return `${uri}${suffix}`;
+}
+
 function resolveLocalPath(src, documentPath) {
-  if (!src || /^(https?:|data:|vscode-webview-resource:)/i.test(src)) {
+  if (!src || isExternalOrSpecialResource(src)) {
     return null;
   }
 
+  const cleanSrc = stripResourceSuffix(src);
+  if (!cleanSrc) return null;
+
   const documentDir = path.dirname(documentPath);
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const candidates = path.isAbsolute(src)
-    ? [src]
+  const candidates = cleanSrc.startsWith("/") && workspaceRoot
+    ? [path.resolve(workspaceRoot, cleanSrc.replace(/^\/+/, ""))]
+    : path.isAbsolute(cleanSrc)
+      ? [cleanSrc]
     : [
-        path.resolve(documentDir, src),
-        workspaceRoot ? path.resolve(workspaceRoot, src) : null
+        path.resolve(documentDir, cleanSrc),
+        workspaceRoot ? path.resolve(workspaceRoot, cleanSrc) : null
       ].filter(Boolean);
 
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
-function convertLocalPathsToWebviewUris(html, webview, documentPath) {
-  return html.replace(
-    /(<img[^>]+src=["'])([^"']+)(["'][^>]*>)/gi,
-    (match, prefix, src, suffix) => {
-      const fullPath = resolveLocalPath(src, documentPath);
-      if (!fullPath) {
-        return match;
-      }
+function getWebviewResourceUri(webview, resource, documentPath) {
+  const fullPath = resolveLocalPath(resource, documentPath);
+  if (!fullPath) {
+    return "";
+  }
 
-      return (
-        prefix +
-        webview.asWebviewUri(vscode.Uri.file(fullPath)).toString() +
-        suffix
-      );
+  const cacheBuster = (() => {
+    try {
+      return fs.statSync(fullPath).mtimeMs.toString(36);
+    } catch {
+      return Date.now().toString(36);
+    }
+  })();
+  const uri = `${webview.asWebviewUri(vscode.Uri.file(fullPath)).toString()}?v=${cacheBuster}`;
+  return appendResourceSuffix(uri, resource);
+}
+
+function rewriteHtmlResourceAttributes(html, webview, documentPath) {
+  const resourceAttributePattern =
+    /(<(?:img|script|source|video|audio|track|iframe|embed|object)\b[^>]*?\s(?:src|poster|data)=["'])([^"']+)(["'][^>]*>)/gi;
+  const linkHrefPattern =
+    /(<link\b(?=[^>]*?\b(?:rel=["'][^"']*(?:stylesheet|icon|preload|modulepreload|manifest)[^"']*["']|as=["'](?:style|script|image|font|fetch)["']))[^>]*?\shref=["'])([^"']+)(["'][^>]*>)/gi;
+
+  return html
+    .replace(resourceAttributePattern, (match, prefix, resource, suffix) => {
+      const uri = getWebviewResourceUri(webview, resource, documentPath);
+      return uri ? `${prefix}${uri}${suffix}` : match;
+    })
+    .replace(linkHrefPattern, (match, prefix, resource, suffix) => {
+      const uri = getWebviewResourceUri(webview, resource, documentPath);
+      return uri ? `${prefix}${uri}${suffix}` : match;
+    });
+}
+
+function rewriteSrcset(html, webview, documentPath) {
+  return html.replace(
+    /(\s(?:srcset|imagesrcset)=["'])([^"']+)(["'])/gi,
+    (match, prefix, srcset, suffix) => {
+      const rewritten = String(srcset)
+        .split(",")
+        .map((candidate) => {
+          const parts = candidate.trim().split(/\s+/);
+          if (!parts[0]) return "";
+          const uri = getWebviewResourceUri(webview, parts[0], documentPath);
+          return [uri || parts[0], ...parts.slice(1)].join(" ");
+        })
+        .filter(Boolean)
+        .join(", ");
+      return rewritten ? `${prefix}${rewritten}${suffix}` : match;
     }
   );
+}
+
+function convertLocalPathsToWebviewUris(html, webview, documentPath) {
+  return rewriteSrcset(
+    rewriteHtmlResourceAttributes(html, webview, documentPath),
+    webview,
+    documentPath
+  );
+}
+
+function isPathInside(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
+function isRelatedPreviewDocument(filePath, previewDocumentPath) {
+  if (!filePath || !previewDocumentPath) return false;
+  const normalizedFile = path.resolve(filePath);
+  const normalizedPreview = path.resolve(previewDocumentPath);
+  if (normalizedFile === normalizedPreview) return true;
+
+  const previewDir = path.dirname(normalizedPreview);
+  if (isPathInside(previewDir, normalizedFile)) return true;
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return workspaceRoot
+    ? isPathInside(path.resolve(workspaceRoot), normalizedFile)
+    : false;
 }
 
 async function formatCode(code, languageId, filePath) {
@@ -734,6 +824,10 @@ async function livePreviewer(context, options = {}) {
           currentChangeListener.dispose();
           currentChangeListener = undefined;
         }
+        if (currentSaveListener) {
+          currentSaveListener.dispose();
+          currentSaveListener = undefined;
+        }
         if (currentMessageListener) {
           currentMessageListener.dispose();
           currentMessageListener = undefined;
@@ -809,6 +903,11 @@ async function livePreviewer(context, options = {}) {
     currentChangeListener = undefined;
   }
 
+  if (currentSaveListener) {
+    currentSaveListener.dispose();
+    currentSaveListener = undefined;
+  }
+
   if (currentMessageListener) {
     currentMessageListener.dispose();
     currentMessageListener = undefined;
@@ -874,6 +973,17 @@ async function livePreviewer(context, options = {}) {
     }
   });
 
+  if (typeof vscode.workspace.onDidSaveTextDocument === "function") {
+    currentSaveListener = vscode.workspace.onDidSaveTextDocument((savedDocument) => {
+      if (
+        savedDocument?.uri?.scheme === "file" &&
+        isRelatedPreviewDocument(savedDocument.fileName, document.fileName)
+      ) {
+        updateWebview();
+      }
+    });
+  }
+
   if (!inspectMode) {
     return {
       success: true,
@@ -886,6 +996,12 @@ async function livePreviewer(context, options = {}) {
 
 livePreviewer.getLastDiagnostics = function () {
   return clonePreviewDiagnostics(currentPreviewState);
+};
+
+livePreviewer._test = {
+  convertLocalPathsToWebviewUris,
+  isRelatedPreviewDocument,
+  resolveLocalPath
 };
 
 module.exports = livePreviewer;
