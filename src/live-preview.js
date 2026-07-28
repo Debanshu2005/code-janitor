@@ -923,7 +923,21 @@ function getDevServerPreviewHtml({ url, projectDir, scriptName, command }) {
 </html>`;
 }
 
-function startDevServerPreview(context, { document, packageJsonPath, packageJson }) {
+async function openDevServerInEditor(url) {
+  if (typeof vscode.commands?.executeCommand !== "function") {
+    return false;
+  }
+
+  try {
+    await vscode.commands.executeCommand("simpleBrowser.show", url);
+    return true;
+  } catch (error) {
+    console.warn("Simple Browser preview failed:", error.message);
+    return false;
+  }
+}
+
+async function startDevServerPreview(context, { document, packageJsonPath, packageJson }) {
   const projectDir = path.dirname(packageJsonPath);
   const script = pickPreviewScript(packageJson);
   if (!script) {
@@ -947,6 +961,23 @@ function startDevServerPreview(context, { document, packageJsonPath, packageJson
     currentDevServerKey = serverKey;
   }
   currentDevServerTerminal.show(false);
+
+  const openedInEditor = await openDevServerInEditor(url);
+  if (openedInEditor) {
+    vscode.window.showInformationMessage(
+      `Starting ${script.name} for preview in the editor at ${url}. If it opens before the dev server is ready, refresh the Simple Browser tab.`
+    );
+
+    return {
+      success: true,
+      devServer: true,
+      inEditor: true,
+      url,
+      projectDir,
+      script: script.name,
+      documentPath: document.fileName
+    };
+  }
 
   if (currentPanel) {
     currentPanel.reveal(vscode.ViewColumn.Beside);
@@ -979,7 +1010,7 @@ function startDevServerPreview(context, { document, packageJsonPath, packageJson
     command
   });
   vscode.window.showInformationMessage(
-    `Starting ${script.name} for preview. If the panel is blank, wait for the dev server to finish booting and refresh the preview.`
+    `Starting ${script.name} for preview. Simple Browser was unavailable, so CJ used the webview fallback.`
   );
 
   return {
@@ -1247,7 +1278,17 @@ livePreviewer._test = {
   getRunScriptCommand,
   isPackagePreviewCandidate,
   isRelatedPreviewDocument,
+  openDevServerInEditor,
   pickPreviewScript,
+  resetState() {
+    currentPanel = undefined;
+    currentChangeListener = undefined;
+    currentSaveListener = undefined;
+    currentMessageListener = undefined;
+    currentPreviewState = undefined;
+    currentDevServerTerminal = undefined;
+    currentDevServerKey = "";
+  },
   resolveLocalPath
 };
 

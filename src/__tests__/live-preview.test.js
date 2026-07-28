@@ -23,6 +23,9 @@ jest.mock(
       workspaceFolders: [],
       onDidChangeTextDocument: jest.fn(),
       onDidSaveTextDocument: jest.fn()
+    },
+    commands: {
+      executeCommand: jest.fn()
     }
   }),
   { virtual: true }
@@ -53,6 +56,8 @@ describe("live preview multi-file HTML resources", () => {
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vscode.workspace.workspaceFolders = [];
+    vscode.window.activeTextEditor = null;
+    livePreviewer._test.resetState();
     jest.clearAllMocks();
   });
 
@@ -157,5 +162,54 @@ describe("live preview multi-file HTML resources", () => {
         tmpDir
       )
     ).toBe(false);
+  });
+
+  test("opens package app dev servers in the editor Simple Browser", async () => {
+    const packageJson = {
+      scripts: {
+        dev: "next dev --webpack"
+      },
+      dependencies: {
+        next: "^16.0.0",
+        react: "^19.0.0"
+      }
+    };
+    const packagePath = path.join(tmpDir, "package.json");
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson), "utf8");
+
+    const terminal = {
+      sendText: jest.fn(),
+      show: jest.fn()
+    };
+    vscode.window.createTerminal.mockReturnValue(terminal);
+    vscode.commands.executeCommand.mockResolvedValue(undefined);
+    vscode.window.activeTextEditor = {
+      document: {
+        fileName: packagePath,
+        languageId: "json",
+        uri: { scheme: "file" },
+        getText: () => JSON.stringify(packageJson)
+      }
+    };
+
+    const result = await livePreviewer({ subscriptions: [] });
+
+    expect(vscode.window.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: tmpDir
+      })
+    );
+    expect(terminal.sendText).toHaveBeenCalledWith("npm run dev");
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+      "simpleBrowser.show",
+      "http://localhost:3000"
+    );
+    expect(vscode.window.createWebviewPanel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      success: true,
+      devServer: true,
+      inEditor: true,
+      url: "http://localhost:3000"
+    });
   });
 });
