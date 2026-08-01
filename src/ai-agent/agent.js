@@ -66,8 +66,10 @@ const MAX_WORKSPACE_MEMORY_CONTEXT_CHARS = 2_400;
 const MAX_COMPACT_WORKSPACE_MEMORY_CONTEXT_CHARS = 1_200;
 const MAX_AGENTS_INSTRUCTIONS_CONTEXT_CHARS = 1_800;
 const MAX_COMPACT_AGENTS_INSTRUCTIONS_CONTEXT_CHARS = 900;
-const PERSISTED_HISTORY_TRUNCATION_NOTICE =
-  "[chat history truncated for storage]";
+const LEGACY_HISTORY_TRUNCATION_NOTICE_PATTERN =
+  /(?:\r?\n){0,2}\[(?:chat history truncated for storage|(?:chat|conversation)(?: history)? truncated due to memory)\]\s*/gi;
+const PERSISTED_HISTORY_SHORTENED_NOTICE =
+  "[message shortened for saved chat]";
 const PROMPT_BUDGET_TRUNCATION_NOTICE =
   "\n[context truncated for prompt budget]";
 const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
@@ -356,20 +358,36 @@ class AIAgent {
     return "codeJanitor.ai.chatSessions";
   }
 
+  _normalizePersistedHistoryContent(content) {
+    return String(content || "")
+      .replace(LEGACY_HISTORY_TRUNCATION_NOTICE_PATTERN, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
   _sanitizeHistoryEntries(history) {
     if (!Array.isArray(history)) return [];
     return history
-      .filter(
-        (entry) =>
-          entry &&
-          (entry.role === "user" || entry.role === "assistant") &&
-          typeof entry.content === "string" &&
-          entry.content.trim().length > 0
-      )
-      .map((entry) => ({
-        role: entry.role,
-        content: entry.content.trim()
-      }))
+      .map((entry) => {
+        if (
+          !entry ||
+          (entry.role !== "user" && entry.role !== "assistant") ||
+          typeof entry.content !== "string"
+        ) {
+          return null;
+        }
+
+        const content = this._normalizePersistedHistoryContent(entry.content);
+        if (!content) {
+          return null;
+        }
+
+        return {
+          role: entry.role,
+          content
+        };
+      })
+      .filter(Boolean)
       .slice(-MAX_SESSION_PERSISTED_ENTRIES);
   }
 
@@ -1028,20 +1046,27 @@ ${resolvedMessage}`;
 
   _prepareHistoryEntriesForPersistence(history) {
     return this._sanitizeHistoryEntries(history).map((entry) => {
-      const content = String(entry.content || "").trim();
+      const content = this._normalizePersistedHistoryContent(entry.content);
       if (content.length <= MAX_PERSISTED_HISTORY_ENTRY_CHARS) {
-        return entry;
+        return {
+          ...entry,
+          content
+        };
       }
 
-      const suffix = `\n\n${PERSISTED_HISTORY_TRUNCATION_NOTICE}`;
-      const headLimit = Math.max(
+      const separator = `\n\n${PERSISTED_HISTORY_SHORTENED_NOTICE}\n\n`;
+      const availableChars = Math.max(
         0,
-        MAX_PERSISTED_HISTORY_ENTRY_CHARS - suffix.length
+        MAX_PERSISTED_HISTORY_ENTRY_CHARS - separator.length
       );
+      const headChars = Math.ceil(availableChars * 0.65);
+      const tailChars = availableChars - headChars;
 
       return {
         ...entry,
-        content: `${content.slice(0, headLimit).trimEnd()}${suffix}`
+        content: `${content.slice(0, headChars).trimEnd()}${separator}${content
+          .slice(-tailChars)
+          .trimStart()}`
       };
     });
   }

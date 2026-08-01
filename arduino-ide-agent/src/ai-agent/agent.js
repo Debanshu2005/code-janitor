@@ -10,6 +10,7 @@ const MAX_OPEN_TAB_SNIPPETS = 1  // Reduced from 2
 const MAX_HISTORY_ENTRIES = 3  // Reduced from 4
 const MAX_SESSION_RECENT_ENTRIES = 8
 const MAX_SESSION_PERSISTED_ENTRIES = 24
+const MAX_PERSISTED_HISTORY_ENTRY_CHARS = 24_000
 const MAX_SESSION_SUMMARY_CHARS = 2_400
 const MAX_CHAT_SESSIONS = 12
 const RELEVANT_FILE_CACHE_LIMIT = 30
@@ -18,6 +19,10 @@ const REPETITION_WINDOW_HEAVY = 300  // Reduced from 400
 const SCAN_STALE_MS = 45_000  // Increased from 30000 to reduce rescans
 const MAX_COMMAND_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_COMMAND_OUTPUT_CHARS = 12_000
+const LEGACY_HISTORY_TRUNCATION_NOTICE_PATTERN =
+  /(?:\r?\n){0,2}\[(?:chat history truncated for storage|(?:chat|conversation)(?: history)? truncated due to memory)\]\s*/gi
+const PERSISTED_HISTORY_SHORTENED_NOTICE =
+  "[message shortened for saved chat]"
 const SUPPORTED_CHAT_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -153,21 +158,64 @@ class AIAgent {
     return "codeJanitor.arduino.chatSessions"
   }
 
+  _normalizePersistedHistoryContent(content) {
+    return String(content || "")
+      .replace(LEGACY_HISTORY_TRUNCATION_NOTICE_PATTERN, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  }
+
   _sanitizeHistoryEntries(history) {
     if (!Array.isArray(history)) return []
     return history
-      .filter(
-        (entry) =>
-          entry &&
-          (entry.role === "user" || entry.role === "assistant") &&
-          typeof entry.content === "string" &&
-          entry.content.trim().length > 0
-      )
-      .map((entry) => ({
-        role: entry.role,
-        content: entry.content.trim()
-      }))
+      .map((entry) => {
+        if (
+          !entry ||
+          (entry.role !== "user" && entry.role !== "assistant") ||
+          typeof entry.content !== "string"
+        ) {
+          return null
+        }
+
+        const content = this._normalizePersistedHistoryContent(entry.content)
+        if (!content) {
+          return null
+        }
+
+        return {
+          role: entry.role,
+          content
+        }
+      })
+      .filter(Boolean)
       .slice(-MAX_SESSION_PERSISTED_ENTRIES)
+  }
+
+  _prepareHistoryEntriesForPersistence(history) {
+    return this._sanitizeHistoryEntries(history).map((entry) => {
+      const content = this._normalizePersistedHistoryContent(entry.content)
+      if (content.length <= MAX_PERSISTED_HISTORY_ENTRY_CHARS) {
+        return {
+          ...entry,
+          content
+        }
+      }
+
+      const separator = `\n\n${PERSISTED_HISTORY_SHORTENED_NOTICE}\n\n`
+      const availableChars = Math.max(
+        0,
+        MAX_PERSISTED_HISTORY_ENTRY_CHARS - separator.length
+      )
+      const headChars = Math.ceil(availableChars * 0.65)
+      const tailChars = availableChars - headChars
+
+      return {
+        ...entry,
+        content: `${content.slice(0, headChars).trimEnd()}${separator}${content
+          .slice(-tailChars)
+          .trimStart()}`
+      }
+    })
   }
 
   _createSessionId() {
@@ -270,7 +318,9 @@ class AIAgent {
       .map((session) =>
         this._createSessionRecord({
           ...session,
-          history: session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES),
+          history: this._prepareHistoryEntriesForPersistence(
+            session.history.slice(-MAX_SESSION_PERSISTED_ENTRIES)
+          ),
           summary: String(session.summary || "").slice(0, MAX_SESSION_SUMMARY_CHARS)
         })
       )

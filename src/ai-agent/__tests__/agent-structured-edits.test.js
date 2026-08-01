@@ -681,9 +681,9 @@ describe("AIAgent structured edit parsing", () => {
     expect(agent._buildHistorySafeAssistantEntry(longReply)).toBe(longReply);
   });
 
-  test("caps oversized persisted history entries with a storage notice", () => {
+  test("shortens oversized persisted history entries without chat truncation warning", () => {
     const agent = new AIAgent();
-    const oversized = "x".repeat(25_500);
+    const oversized = `${"head".repeat(7_000)}TAIL-CONTENT`;
 
     const prepared = agent._prepareHistoryEntriesForPersistence([
       { role: "assistant", content: oversized }
@@ -691,9 +691,32 @@ describe("AIAgent structured edit parsing", () => {
 
     expect(prepared).toHaveLength(1);
     expect(prepared[0].content.length).toBeLessThanOrEqual(24_000);
-    expect(prepared[0].content).toContain(
-      "[chat history truncated for storage]"
-    );
+    expect(prepared[0].content).toContain("[message shortened for saved chat]");
+    expect(prepared[0].content).toContain("TAIL-CONTENT");
+    expect(prepared[0].content).not.toContain("chat history truncated");
+    expect(prepared[0].content).not.toContain("due to memory");
+  });
+
+  test("strips legacy chat truncation sentinels from saved history", () => {
+    const agent = new AIAgent();
+
+    const prepared = agent._sanitizeHistoryEntries([
+      {
+        role: "assistant",
+        content: "Useful answer\n\n[chat history truncated for storage]"
+      },
+      {
+        role: "assistant",
+        content: "[chat truncated due to memory]"
+      }
+    ]);
+
+    expect(prepared).toEqual([
+      {
+        role: "assistant",
+        content: "Useful answer"
+      }
+    ]);
   });
 
   test("normalizes multimodal mismatch errors into an image-support hint", () => {
