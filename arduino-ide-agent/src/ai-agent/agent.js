@@ -765,19 +765,19 @@ class AIAgent {
 
   _pickNvidiaModel(models, currentModel) {
     const normalizedCurrent = this._sanitizeNvidiaModel(currentModel)
-    if (Array.isArray(models) && models.includes(normalizedCurrent)) {
+    if (!Array.isArray(models) || models.length === 0 || models.includes(normalizedCurrent)) {
       return normalizedCurrent
     }
-
     for (const candidate of NVIDIA_FALLBACK_MODELS) {
-      if (Array.isArray(models) && models.includes(candidate)) {
+      if (models.includes(candidate)) {
         return candidate
       }
     }
-
-    return Array.isArray(models) && models.length > 0
-      ? models[0]
-      : normalizedCurrent
+    const smartFallback = models.find(m => /llama|mistral|nemotron|qwen/i.test(m))
+    if (smartFallback) {
+      return smartFallback
+    }
+    return normalizedCurrent
   }
 
   async getAvailableModelsForProvider(
