@@ -3563,8 +3563,12 @@ Continue from the real MCP evidence above:
           systemOverlay,
           onStatus: (text) => {
             if (this._shouldSuppressInternalStatus(text)) {
-              return;
-            }
+                    return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
+                  }
             this._postMessage({
               type: "status",
               text: `MCP follow-up: ${text}`
@@ -4310,8 +4314,12 @@ ${priorReplyBlock}${this._buildRecoveryFileContext(action.path, currentContent)}
       skipHistory: true,
       onStatus: (text) => {
         if (this._shouldSuppressInternalStatus(text)) {
-          return;
-        }
+                    return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
+                  }
         this._postMessage({
           type: "status",
           text: `${label}: ${text}`
@@ -5165,8 +5173,12 @@ Now continue the professional edit loop:
         skipHistory: true,
         onStatus: (text) => {
           if (this._shouldSuppressInternalStatus(text)) {
-            return;
-          }
+                    return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
+                  }
           this._postMessage({
             type: "status",
             text: `Inspection follow-up: ${text}`
@@ -5386,8 +5398,12 @@ Continue from the real evidence above:
         systemOverlay,
         onStatus: (text) => {
           if (this._shouldSuppressInternalStatus(text)) {
-            return;
-          }
+                    return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
+                  }
           this._postMessage({
             type: "status",
             text: `Tool follow-up: ${text}`
@@ -6022,8 +6038,12 @@ ${trimmedText}`;
         skipHistory: true,
         onStatus: (text) => {
           if (this._shouldSuppressInternalStatus(text)) {
-            return;
-          }
+                    return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
+                  }
           this._postMessage({
             type: "status",
             text: `README retry: ${text}`
@@ -7138,7 +7158,7 @@ ${trimmedText}`;
             if (this.abortController && !this.abortController.signal.aborted) {
               this._postMessage({ 
                 type: "status", 
-                text: `Model is taking longer than expected. This may be normal for ${config.model}. You can stop generation anytime.` 
+                text: `Model is taking longer than expected. This may be normal for ${activeRuntimeConfig.model}. You can stop generation anytime.` 
               });
             }
           }, 30000); // Warn after 30 seconds
@@ -7184,6 +7204,10 @@ ${trimmedText}`;
                 onStatus: (text) => {
                   if (this._shouldSuppressInternalStatus(text)) {
                     return;
+                  }
+                  const fallbackMatch = text.match(/was unavailable\. Using ([^\s]+) instead\./);
+                  if (fallbackMatch && fallbackMatch[1] && activeRuntimeConfig) {
+                    activeRuntimeConfig.model = fallbackMatch[1];
                   }
                   this._postMessage({ type: "status", text });
                 }

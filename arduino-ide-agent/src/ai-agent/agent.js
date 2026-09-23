@@ -1237,8 +1237,7 @@ class AIAgent {
           stream: true,
           temperature: 0.2,
           max_tokens: maxTokens,
-          top_p: 0.9,
-          frequency_penalty: 0.2
+          top_p: 0.9
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null
@@ -2281,6 +2280,7 @@ ${resolvedMessage}`
       let sawFirstToken = false
 
       const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        idleTimeoutMs: 15000,
         parseChunk: (line) => {
           const token = reqOpts.parseChunk(line)
           if (token === null) {

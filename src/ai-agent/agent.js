@@ -2192,7 +2192,7 @@ ${resolvedMessage}`;
           ],
           stream: true,
           temperature: requestTemperature,
-          max_tokens: optimizedMaxTokens,
+          max_tokens: Math.min(optimizedMaxTokens, 4096),
           top_p: requestTopP
         }),
         parseChunk: (line) => {
@@ -2254,9 +2254,8 @@ ${resolvedMessage}`;
           ],
           stream: true,
           temperature: requestTemperature,
-          max_tokens: optimizedMaxTokens,
-          top_p: requestTopP,
-          frequency_penalty: isExecutionIntent ? 0.25 : 0.2
+          max_tokens: Math.min(optimizedMaxTokens, 4096),
+          top_p: requestTopP
         }),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -3971,6 +3970,7 @@ ${resolvedMessage}`;
             }
           }
           const initialResponse = await this._readResponseOutput(reqOpts, response, {
+        idleTimeoutMs: 15000,
             parseChunk: (line) => {
               const token = reqOpts.parseChunk(line);
               if (token === null) return null;
