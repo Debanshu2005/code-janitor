@@ -2,7 +2,7 @@
   "name": "code-janitor",
   "displayName": "Code Janitor",
   "description": "Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML. Features Alt+D instant syntax fix with NVIDIA/Ollama/Groq AI, live preview, intelligent code analysis, and Graphify project visualization.",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "publisher": "Debanshu2005",
   "icon": "src/images/code-janitor.jpg",
   "license": "MIT",
@@ -155,7 +155,7 @@
         },
         "codeJanitor.ai.nvidiaModel": {
           "type": "string",
-          "default": "meta/llama-3.1-8b-instruct",
+          "default": "meta/llama-3.3-70b-instruct",
           "description": "NVIDIA NIM model id. When an NVIDIA API key is available, Code Janitor fetches the current supported NVIDIA model list at runtime."
         },
         "codeJanitor.ai.groqApiKey": {

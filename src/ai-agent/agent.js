@@ -139,7 +139,7 @@ const NVIDIA_MODEL_ALIASES = new Map([
   ["nvidia/mistral-nemo-minitron-8b-8k-instruct", "mistralai/mistral-nemotron"],
   ["nvidia/llama-3.1-nemotron-51b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
   ["minimaxai/minimax-m2.7", "minimaxai/minimax-m2.7"],
-  ["meta/llama-3.1-8b-instruct", "meta/llama-3.1-8b-instruct"],
+  ["meta/llama-3.3-70b-instruct", "meta/llama-3.3-70b-instruct"],
   ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-70b-instruct"],
   ["mistralai/mistral-nemotron", "mistralai/mistral-nemotron"]
 ]);
@@ -156,7 +156,7 @@ const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.2-3b-instruct",
   "mistralai/mistral-nemo-12b-instruct",
   "google/gemma-2-9b-it",
-  "meta/llama-3.1-8b-instruct"
+  "meta/llama-3.3-70b-instruct"
 ];
 const OLLAMA_GENERAL_PREFERRED_MODELS = [
   "qwen2.5-coder:3b",

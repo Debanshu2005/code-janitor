@@ -31,14 +31,7 @@ const MODELS_BY_PROVIDER = {
     "mistralai/mistral-7b-instruct:free"
   ],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
-  nvidia: [
-    "meta/llama-3.1-8b-instruct",
-    "nvidia/nvidia-nemotron-nano-9b-v2",
-    "minimaxai/minimax-m2.7",
-    "mistralai/mistral-nemotron",
-    "meta/llama-3.1-70b-instruct",
-    "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-  ]
+  nvidia: ["meta/llama-3.3-70b-instruct", "meta/llama-3.2-3b-instruct", "mistralai/mistral-nemo-12b-instruct", "google/gemma-2-9b-it", "meta/llama-3.3-70b-instruct"]
 };
 
 class ChatPanel {
@@ -3344,7 +3337,7 @@ ${trimmedText}`;
 
     await this._updateAiConfig("provider", defaultProvider);
     await this._updateAiConfig("model", defaultModel);
-    await this._updateAiConfig("nvidiaModel", "meta/llama-3.1-8b-instruct");
+    await this._updateAiConfig("nvidiaModel", "meta/llama-3.3-70b-instruct");
 
     await this.context.globalState.update("codeJanitor.ai.provider", defaultProvider);
     await this.context.globalState.update("codeJanitor.ai.model", defaultModel);
