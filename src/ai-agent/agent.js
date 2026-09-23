@@ -152,11 +152,11 @@ const DEFAULT_AI_RATE_LIMIT = {
   fallbackCooldownMs: 10_000
 };
 const NVIDIA_FALLBACK_MODELS = [
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+  "nvidia/minimax-m2.7",
+  "nvidia/llama-3.1-nemotron-51b-instruct",
   "meta/llama-3.1-8b-instruct",
-  "nvidia/nvidia-nemotron-nano-9b-v2",
-  "minimaxai/minimax-m2.7",
-  "mistralai/mistral-nemotron",
-  "meta/llama-3.1-70b-instruct",
   "nvidia/llama-3.3-nemotron-super-49b-v1.5"
 ];
 const OLLAMA_GENERAL_PREFERRED_MODELS = [
