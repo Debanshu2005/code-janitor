@@ -74,12 +74,11 @@ const NVIDIA_MODEL_ALIASES = new Map([
 ])
 const NVIDIA_MODEL_DISCOVERY_TTL_MS = 5 * 60 * 1000
 const NVIDIA_FALLBACK_MODELS = [
-  "nvidia/llama-3.1-nemotron-70b-instruct",
-  "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-  "nvidia/minimax-m2.7",
-  "nvidia/llama-3.1-nemotron-51b-instruct",
-  "meta/llama-3.1-8b-instruct",
-  "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+  "meta/llama-3.3-70b-instruct",
+  "meta/llama-3.2-3b-instruct",
+  "mistralai/mistral-nemo-12b-instruct",
+  "google/gemma-2-9b-it",
+  "meta/llama-3.1-8b-instruct"
 ]
 const MODELS_BY_PROVIDER = {
   groq: ["llama-3.1-8b-instant"],
@@ -884,7 +883,10 @@ class AIAgent {
         return `NVIDIA error: ${message}. NVIDIA NIM free tier has rate limits. Wait a moment and try again, or try a different model like meta/llama-3.1-8b-instruct.`
       }
       if (/\b404\b|page not found|not found/i.test(message)) {
-        return `NVIDIA error: ${message}. This usually means the selected model is no longer available. Refresh the NVIDIA model list or switch to meta/llama-3.1-8b-instruct.`
+        return `NVIDIA error: ${message}
+      if (/\b410\b|gone/i.test(message)) {
+        return `NVIDIA error: ${message}. This model has been completely deprecated and removed by NVIDIA (410 Gone). Switch to a newer model like meta/llama-3.3-70b-instruct.`;
+      }. This usually means the selected model is no longer available. Refresh the NVIDIA model list or switch to meta/llama-3.1-8b-instruct.`
       }
       if (/\b401\b|unauthorized|invalid.*key|authentication/i.test(message)) {
         return `NVIDIA error: ${message}. Your API key may be invalid or expired. Get a new key from https://build.nvidia.com/explore/discover`
