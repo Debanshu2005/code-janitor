@@ -4104,13 +4104,13 @@ ${resolvedMessage}`;
           if (!cleanedText && finalText.includes("<think>")) {
             const thinkMatch = finalText.match(/<think>([\s\S]*?)<\/think>/i);
             if (thinkMatch && thinkMatch[1].trim()) {
-              // Extract the thoughts, but prepend "> " so Code Janitor doesn't parse any accidental commands from it
-              let hint = "";
-              if (/^(?:READ:|CMD:|FILE:|PATCH:|MKDIR:)/mi.test(thinkMatch[1])) {
-                hint = "\n\n**Hint:** It looks like the AI tried to execute a command inside its `<think>` block. The extension ignores commands inside the thinking process. The AI needs to be reminded to put commands outside the `<think>` block.";
+              const thoughts = thinkMatch[1].trim();
+              if (/^(?:READ:|CMD:|FILE:|PATCH:|MKDIR:)/mi.test(thoughts)) {
+                cleanedText = "> **[Auto-Correction]** The AI incorrectly placed its executable commands inside the `<think>` block. They have been forcefully extracted to allow the agent to continue.\n\n" + thoughts;
+              } else {
+                cleanedText = "[Model only generated reasoning. No final answer provided.]\n\n" + 
+                              thoughts.split("\n").map(line => "> " + line).join("\n");
               }
-              cleanedText = "[Model only generated reasoning. No final answer provided.]\n\n" + 
-                            thinkMatch[1].trim().split("\n").map(line => "> " + line).join("\n") + hint;
             }
           }
 
