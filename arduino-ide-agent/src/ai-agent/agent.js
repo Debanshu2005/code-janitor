@@ -81,7 +81,7 @@ const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.3-70b-instruct"
 ]
 const MODELS_BY_PROVIDER = {
-  groq: ["llama-3.1-8b-instant"],
+  groq: ["llama-3.3-70b-versatile","llama-3.1-8b-instant","mixtral-8x7b-32768","gemma2-9b-it"],
   openrouter: [
     "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
@@ -1238,7 +1238,6 @@ class AIAgent {
           ],
           stream: true,
           temperature: 0.2,
-          max_tokens: maxTokens,
           top_p: 0.9
         }),
         parseChunk: (line) => {

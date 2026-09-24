@@ -2201,7 +2201,6 @@ ${resolvedMessage}`;
           ],
           stream: true,
           temperature: requestTemperature,
-          max_tokens: Math.min(optimizedMaxTokens, 4096),
           top_p: requestTopP
         }),
         parseChunk: (line) => {
@@ -2263,7 +2262,6 @@ ${resolvedMessage}`;
           ],
           stream: true,
           temperature: requestTemperature,
-          max_tokens: Math.min(optimizedMaxTokens, 4096),
           top_p: requestTopP
         }),
         parseChunk: (line) => {
