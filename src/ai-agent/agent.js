@@ -4105,8 +4105,12 @@ ${resolvedMessage}`;
             const thinkMatch = finalText.match(/<think>([\s\S]*?)<\/think>/i);
             if (thinkMatch && thinkMatch[1].trim()) {
               // Extract the thoughts, but prepend "> " so Code Janitor doesn't parse any accidental commands from it
+              let hint = "";
+              if (/^(?:READ:|CMD:|FILE:|PATCH:|MKDIR:)/mi.test(thinkMatch[1])) {
+                hint = "\n\n**Hint:** It looks like the AI tried to execute a command inside its `<think>` block. The extension ignores commands inside the thinking process. The AI needs to be reminded to put commands outside the `<think>` block.";
+              }
               cleanedText = "[Model only generated reasoning. No final answer provided.]\n\n" + 
-                            thinkMatch[1].trim().split("\n").map(line => "> " + line).join("\n");
+                            thinkMatch[1].trim().split("\n").map(line => "> " + line).join("\n") + hint;
             }
           }
 
@@ -6324,6 +6328,7 @@ ${resolvedMessage}`;
       "- When real workspace or tool evidence is needed, emit the smallest structured inspection/tool action first, then continue from those results.",
       "- Use FILE: only when the user asks to change files.",
       "- Avoid unrelated context or speculation.",
+      "- CRITICAL FOR REASONING MODELS: If you use a `<think>` block, you MUST emit your executable commands (e.g., READ:, CMD:, FILE:) OUTSIDE and AFTER the `</think>` tag. Commands inside the think block will be ignored.",
       "- Write production-grade code: robust error handling, proper validation, clean architecture, no placeholders or TODOs.",
       "- You have FULL internet access via FETCH: action. When users ask about current events, news, or time-sensitive topics:",
       "  * Output FETCH: https://www.reuters.com on its own line",
@@ -6379,6 +6384,7 @@ ${resolvedMessage}`;
       "- When the user asks for an automated code quality pass on a specific file, use `ANALYZE_FILE_QUALITY:` with a JSON payload.",
       "- When the user wants GitHub repository, issue, or pull request context, use `GITHUB_CONTEXT:` with a JSON payload.",
       "- When MCP tools are listed in the active system overlay and you need external tool output, use `MCP_TOOL:` with a JSON payload.",
+      "- CRITICAL FOR REASONING MODELS: If you use a `<think>` block, you MUST emit your executable commands (e.g., READ:, CMD:, FILE:) OUTSIDE and AFTER the `</think>` tag. Commands inside the think block will be ignored.",
       "- CRITICAL: All generated code must be production-grade by default:",
       "  * Comprehensive error handling and input validation",
       "  * Security best practices (sanitization, authentication, authorization where applicable)",
