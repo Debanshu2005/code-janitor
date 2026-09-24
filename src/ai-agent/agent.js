@@ -2264,7 +2264,10 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
         { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
         { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
+        { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
       ];
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
@@ -2289,6 +2292,9 @@ ${resolvedMessage}`;
                    if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
                    if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                   if (tc.name === "lint") flushed += "\nLINT: active\n";
+                   if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
                  } catch (e) {}
               }
               return flushed || null;
@@ -2328,7 +2334,10 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
         { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
         { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
+        { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
       ];
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
@@ -2354,6 +2363,9 @@ ${resolvedMessage}`;
                    if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
                    if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                   if (tc.name === "lint") flushed += "\nLINT: active\n";
+                   if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
                  } catch (e) {}
               }
               return flushed || null;
@@ -2415,7 +2427,10 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
         { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
         { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
+        { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
       ];
       
       return {
@@ -2459,6 +2474,9 @@ ${resolvedMessage}`;
                    if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
                    if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                   if (tc.name === "lint") flushed += "\nLINT: active\n";
+                   if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
                  } catch (e) {}
               }
               return flushed || null;
