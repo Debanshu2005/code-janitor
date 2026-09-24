@@ -6,7 +6,7 @@ const { ArduinoDiagnostics } = require("./arduino-diagnostics");
 const { computeMinimalReplacement } = require("../utils/minimal-diff");
 
 const MODELS_BY_PROVIDER = {
-  groq: ["llama-3.3-70b-versatile","llama-3.1-8b-instant","mixtral-8x7b-32768","gemma2-9b-it"],
+  groq: ["openai/gpt-oss-120b","openai/gpt-oss-20b","qwen/qwen3.8-27b","allam-2-7b"],
   openrouter: [
     "qwen/qwen-2.5-coder-32b-instruct",
     "qwen/qwen3-coder:free",

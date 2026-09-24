@@ -81,7 +81,7 @@ const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.3-70b-instruct"
 ]
 const MODELS_BY_PROVIDER = {
-  groq: ["llama-3.3-70b-versatile","llama-3.1-8b-instant","mixtral-8x7b-32768","gemma2-9b-it"],
+  groq: ["openai/gpt-oss-120b","openai/gpt-oss-20b","qwen/qwen3.8-27b","allam-2-7b"],
   openrouter: [
     "google/gemini-2.5-flash-image",
     "mistralai/mistral-7b-instruct:free",
@@ -600,7 +600,7 @@ class AIAgent {
   }
   
   _getDefaultModelForProvider(provider) {
-    if (provider === "groq") return "llama-3.1-8b-instant"
+    if (provider === "groq") return "openai/gpt-oss-20b"
     if (provider === "openrouter") return "mistralai/mistral-7b-instruct:free"
     if (provider === "anthropic") return "claude-3-5-haiku-20241022"
     if (provider === "nvidia") return NVIDIA_FALLBACK_MODELS[0]

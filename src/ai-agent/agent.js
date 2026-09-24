@@ -1144,7 +1144,7 @@ ${resolvedMessage}`;
   }
 
   _getDefaultModelForProvider(provider) {
-    if (provider === "groq") return "llama-3.1-8b-instant";
+    if (provider === "groq") return "openai/gpt-oss-20b";
     if (provider === "openrouter") {
       return "meta-llama/llama-3.1-8b-instruct:free";
     }
