@@ -2247,103 +2247,144 @@ ${resolvedMessage}`;
     }
     if (config.provider === "groq") {
       const apiKey = config.groqApiKey;
-      console.log("[Agent] Groq request - API key configured:", !!apiKey);
-      
       let safeUserContent = userMessageContent;
-      if (typeof safeUserContent === "string" && safeUserContent.length > 16000) {
-        safeUserContent = "...[Context truncated to fit Groq 64KB API limit]\n\n" + safeUserContent.slice(-16000);
+      const MAX_GROQ_CHARS = 12000;
+      let safeSysContent = sysContent;
+      if (safeSysContent.length > MAX_GROQ_CHARS) {
+        safeSysContent = safeSysContent.slice(0, MAX_GROQ_CHARS) + '\n\n...[System context truncated]';
       }
+      if (typeof safeUserContent === 'string' && safeUserContent.length > MAX_GROQ_CHARS) {
+        safeUserContent = "...[Context truncated]\n\n" + safeUserContent.slice(-MAX_GROQ_CHARS);
+      } else if (Array.isArray(safeUserContent) && safeUserContent.length > 0 && safeUserContent[0].type === 'text') {
+        if (safeUserContent[0].text && safeUserContent[0].text.length > MAX_GROQ_CHARS) {
+           safeUserContent[0].text = "...[Context truncated]\n\n" + safeUserContent[0].text.slice(-MAX_GROQ_CHARS);
+        }
+      }
+      const agentTools = [
+        { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
+        { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
+        { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+      ];
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: config.model,
-          messages: [
-            { role: "system", content: sysContent },
-            { role: "user", content: safeUserContent }
-          ],
-          stream: true,
-          temperature: requestTemperature,
-          top_p: requestTopP
+          messages: [{ role: "system", content: safeSysContent + "\n\nYou have access to native tools. Use them to manage files and run commands." }, { role: "user", content: safeUserContent }],
+          stream: true, temperature: requestTemperature, top_p: requestTopP, tools: agentTools
         }),
-        parseChunk: (line) => {
-          if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
-          try {
-            return (
-              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
-            );
-          } catch {
-            return null;
-          }
-        }
+        parseChunk: (() => {
+          let hasInjectedThinkStart = false;
+          let hasInjectedThinkEnd = false;
+          let toolCallState = {};
+          return (line) => {
+            if (line === "data: [DONE]") {
+              let flushed = "";
+              for (const index in toolCallState) {
+                 const tc = toolCallState[index];
+                 try {
+                   const args = JSON.parse(tc.args);
+                   if (tc.name === "cmd") flushed += `\nCMD: ${args.command}\n`;
+                   if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
+                   if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
+                   if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                 } catch (e) {}
+              }
+              return flushed || null;
+            }
+            if (!line.startsWith("data: ")) return null;
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
+              const delta = parsed.choices?.[0]?.delta;
+              if (!delta) return null;
+              if (delta.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                   if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
+                   else {
+                     if (tc.function?.name) toolCallState[tc.index].name += tc.function.name;
+                     if (tc.function?.arguments) toolCallState[tc.index].args += tc.function.arguments;
+                   }
+                }
+                return null;
+              }
+              if (delta.reasoning) {
+                 if (!hasInjectedThinkStart) { hasInjectedThinkStart = true; return "<think>\n" + delta.reasoning; }
+                 return delta.reasoning;
+              } else if (delta.content !== undefined && delta.content !== null) {
+                 if (hasInjectedThinkStart && !hasInjectedThinkEnd) { hasInjectedThinkEnd = true; return "</think>\n" + delta.content; }
+                 return delta.content;
+              }
+              return null;
+            } catch { return null; }
+          };
+        })()
       };
     }
     if (config.provider === "openrouter") {
-      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(
-        config.model,
-        userContent,
-        images,
-        intent
-      );
+      const requestImageOutput = this._shouldRequestOpenRouterImageOutput(config.model, userContent, images, intent);
+      const agentTools = [
+        { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
+        { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
+        { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+      ];
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.openrouterApiKey}`,
-          "HTTP-Referer": "https://github.com/Debanshu2005/code-janitor",
-          "X-Title": "Code Janitor"
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.openrouterApiKey}`, "HTTP-Referer": "https://github.com/Debanshu2005/code-janitor", "X-Title": "Code Janitor" },
         body: JSON.stringify({
           model: config.model,
-          messages: [
-            { role: "system", content: sysContent },
-            { role: "user", content: userMessageContent }
-          ],
-          stream: !requestImageOutput,
-          temperature: requestTemperature,
-          max_tokens: optimizedMaxTokens,
-          top_p: requestTopP,
-          ...(requestImageOutput
-            ? {
-                modalities: ["image", "text"]
-              }
-            : {})
+          messages: [{ role: "system", content: sysContent + "\n\nYou have access to native tools. Use them to manage files and run commands." }, { role: "user", content: userMessageContent }],
+          stream: !requestImageOutput, temperature: requestTemperature, max_tokens: optimizedMaxTokens, top_p: requestTopP, tools: agentTools,
+          ...(requestImageOutput ? { modalities: ["image", "text"] } : {})
         }),
-        parseChunk: (line) => {
-          if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
-          try {
-            return (
-              JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null
-            );
-          } catch {
-            return null;
-          }
-        },
-        parseResponseBody: requestImageOutput
-          ? async (response, options = {}) => {
-              const data = await response.json();
-              const message = data?.choices?.[0]?.message || {};
-              const generatedImages = this._extractOpenAiCompatibleImages(
-                message.images || []
-              );
-              const text =
-                this._extractTextFromStructuredContent(message.content) ||
-                this._buildGeneratedImageSummary(generatedImages);
-              if (
-                generatedImages.length > 0 &&
-                typeof options.streamCallback === "function"
-              ) {
-                options.streamCallback(text);
+        parseChunk: (() => {
+          let hasInjectedThinkStart = false;
+          let hasInjectedThinkEnd = false;
+          let toolCallState = {};
+          return (line) => {
+            if (line === "data: [DONE]") {
+              let flushed = "";
+              for (const index in toolCallState) {
+                 const tc = toolCallState[index];
+                 try {
+                   const args = JSON.parse(tc.args);
+                   if (tc.name === "cmd") flushed += `\nCMD: ${args.command}\n`;
+                   if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
+                   if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
+                   if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                 } catch (e) {}
               }
-              return {
-                text,
-                images: generatedImages
-              };
+              return flushed || null;
             }
-          : null
+            if (!line.startsWith("data: ")) return null;
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
+              const delta = parsed.choices?.[0]?.delta;
+              if (!delta) return null;
+              if (delta.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                   if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
+                   else {
+                     if (tc.function?.name) toolCallState[tc.index].name += tc.function.name;
+                     if (tc.function?.arguments) toolCallState[tc.index].args += tc.function.arguments;
+                   }
+                }
+                return null;
+              }
+              if (delta.reasoning) {
+                 if (!hasInjectedThinkStart) { hasInjectedThinkStart = true; return "<think>\n" + delta.reasoning; }
+                 return delta.reasoning;
+              } else if (delta.content !== undefined && delta.content !== null) {
+                 if (hasInjectedThinkStart && !hasInjectedThinkEnd) { hasInjectedThinkEnd = true; return "</think>\n" + delta.content; }
+                 return delta.content;
+              }
+              return null;
+            } catch { return null; }
+          };
+        })()
       };
     }
     if (config.provider === "nvidia") {
@@ -2370,6 +2411,13 @@ ${resolvedMessage}`;
         presence_penalty: 0.0
       } : {};
       
+      const agentTools = [
+        { type: "function", function: { name: "cmd", description: "Execute a bash/powershell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
+        { type: "function", function: { name: "file", description: "Create/overwrite file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
+        { type: "function", function: { name: "read", description: "Read file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+        { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } }
+      ];
+      
       return {
         url: "https://integrate.api.nvidia.com/v1/chat/completions",
         headers: {
@@ -2379,7 +2427,7 @@ ${resolvedMessage}`;
         body: JSON.stringify({
           model: resolvedModel,
           messages: [
-            { role: "system", content: sysContent },
+            { role: "system", content: sysContent + "\n\nYou have access to native tools. Use them to manage files and run commands." },
             { role: "user", content: userMessageContent }
           ],
           stream: true,
@@ -2393,19 +2441,59 @@ ${resolvedMessage}`;
           max_tokens: optimizedMaxTokens,
           ...minimaxOptimizations,
           ...llama70bOptimizations,
-          ...nemotronOptimizations
+          ...nemotronOptimizations,
+          tools: agentTools
         }),
-        parseChunk: (line) => {
-          if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
-          try {
-            const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || null;
-            if (!token) return null;
-            const visibleToken = this._stripThinkTaggedTextChunk(token, thinkState);
-            return visibleToken || null;
-          } catch {
-            return null;
-          }
-        },
+        parseChunk: (() => {
+          let hasInjectedThinkStart = false;
+          let hasInjectedThinkEnd = false;
+          let toolCallState = {};
+          return (line) => {
+            if (line === "data: [DONE]") {
+              let flushed = "";
+              for (const index in toolCallState) {
+                 const tc = toolCallState[index];
+                 try {
+                   const args = JSON.parse(tc.args);
+                   if (tc.name === "cmd") flushed += `\nCMD: ${args.command}\n`;
+                   if (tc.name === "read") flushed += `\nREAD: ${args.path}\n`;
+                   if (tc.name === "file") flushed += "\nFILE: " + args.path + "\n```\n" + args.content + "\n```\n";
+                   if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
+                 } catch (e) {}
+              }
+              return flushed || null;
+            }
+            if (!line.startsWith("data: ")) return null;
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
+              const delta = parsed.choices?.[0]?.delta;
+              if (!delta) return null;
+              if (delta.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                   if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
+                   else {
+                     if (tc.function?.name) toolCallState[tc.index].name += tc.function.name;
+                     if (tc.function?.arguments) toolCallState[tc.index].args += tc.function.arguments;
+                   }
+                }
+                return null;
+              }
+              if (delta.reasoning) {
+                 if (!hasInjectedThinkStart) { hasInjectedThinkStart = true; return "<think>\n" + delta.reasoning; }
+                 return delta.reasoning;
+              } else if (delta.content !== undefined && delta.content !== null) {
+                 // For NVIDIA, some models like Minimax have their own think tags in text. We use the shared fallback state instead.
+                 if (hasInjectedThinkStart && !hasInjectedThinkEnd) { hasInjectedThinkEnd = true; return "</think>\n" + delta.content; }
+                 
+                 // If no native reasoning field but thinkState handles it
+                 const visibleToken = this._stripThinkTaggedTextChunk(delta.content, thinkState);
+                 return visibleToken || null;
+              }
+              return null;
+            } catch { return null; }
+          };
+        })(),
         smoothStreaming: isNemotron  // Flag for smoother streaming
       };
     }
@@ -4007,7 +4095,20 @@ ${resolvedMessage}`;
           finalText = repetitionDetected
             ? `${fullResponse}\n\nStopped because the response started repeating.`
             : fullResponse || this._getEmptyResponseFallback(mode);
+          if (finalText.includes("<think>") && !finalText.includes("</think>")) {
+            finalText += "</think>";
+          }
           cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+          
+          // Fallback: If the model ONLY output a <think> block and nothing else
+          if (!cleanedText && finalText.includes("<think>")) {
+            const thinkMatch = finalText.match(/<think>([\s\S]*?)<\/think>/i);
+            if (thinkMatch && thinkMatch[1].trim()) {
+              // Extract the thoughts, but prepend "> " so Code Janitor doesn't parse any accidental commands from it
+              cleanedText = "[Model only generated reasoning. No final answer provided.]\n\n" + 
+                            thinkMatch[1].trim().split("\n").map(line => "> " + line).join("\n");
+            }
+          }
 
           return {
             responseChars: cleanedText.length,
