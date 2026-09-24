@@ -2197,7 +2197,7 @@ ${resolvedMessage}`;
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userMessageContent }
+            { role: "user", content: safeUserContent }
           ],
           stream: true,
           temperature: requestTemperature,
@@ -2248,6 +2248,11 @@ ${resolvedMessage}`;
     if (config.provider === "groq") {
       const apiKey = config.groqApiKey;
       console.log("[Agent] Groq request - API key configured:", !!apiKey);
+      
+      let safeUserContent = userMessageContent;
+      if (typeof safeUserContent === "string" && safeUserContent.length > 45000) {
+        safeUserContent = "...[Context truncated to fit Groq 64KB API limit]\n\n" + safeUserContent.slice(-45000);
+      }
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
         headers: {
@@ -2258,7 +2263,7 @@ ${resolvedMessage}`;
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
-            { role: "user", content: userMessageContent }
+            { role: "user", content: safeUserContent }
           ],
           stream: true,
           temperature: requestTemperature,
