@@ -3055,7 +3055,21 @@ ${fileContent}
       }
 
       console.log(`[ChatPanel] Persisting API key for ${provider} in SecretStorage`);
-      await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
+      try {
+        await this.context.secrets.store(this._getApiSecretKey(provider), sanitized);
+        const verify = await this.context.secrets.get(this._getApiSecretKey(provider));
+        if (verify !== sanitized) {
+          throw new Error("SecretStorage verification failed (returned empty or mismatched key).");
+        }
+      } catch (storeError) {
+        console.warn(`[ChatPanel] SecretStorage issue for ${provider}:`, storeError.message);
+        if (configKey) {
+          console.log(`[ChatPanel] Falling back to plaintext config for ${provider}`);
+          const cfg = vscode.workspace.getConfiguration("codeJanitor.ai");
+          const target = this._getConfigTargetForKey(configKey);
+          await cfg.update(configKey, sanitized, target);
+        }
+      }
       this._rememberProviderPresence({ [provider]: true });
       if (!configKey) {
         this._syncCustomProviderForCli(provider, sanitized);
@@ -3106,21 +3120,32 @@ ${fileContent}
 
       console.log(`[ChatPanel] Restoring ${provider}: config=${!!configValue}, secret=${!!secretValue}`);
 
+      let secretStorageWorks = false;
       if (!secretValue && configValue) {
-        await this.context.secrets.store(this._getApiSecretKey(provider), configValue);
+        try {
+          await this.context.secrets.store(this._getApiSecretKey(provider), configValue);
+          const verify = await this.context.secrets.get(this._getApiSecretKey(provider));
+          if (verify === configValue) {
+            secretStorageWorks = true;
+          }
+        } catch (e) {
+          console.warn('[ChatPanel] SecretStorage migration failed:', e.message);
+        }
         effectiveValue = configValue;
+      } else if (secretValue) {
+        secretStorageWorks = true;
       }
 
       if (effectiveValue) {
         cliConfigPatch[configKey] = effectiveValue;
       }
 
-      if (configValue) {
+      if (configValue && secretStorageWorks) {
         try {
           const target = this._getConfigTargetForKey(configKey);
           await cfg.update(configKey, "", target);
         } catch (error) {
-          console.warn(`[ChatPanel] Failed to remove plaintext ${configKey} from settings:`, error);
+          console.warn('[ChatPanel] Failed to remove plaintext', configKey, 'from settings:', error);
         }
       }
 
