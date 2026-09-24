@@ -810,7 +810,7 @@ function hasWebAppSignals(packageJson = {}, projectDir = "") {
   };
   const depNames = Object.keys(combinedDeps);
   const hasKnownWebDependency = depNames.some((dep) =>
-    /^(vite|next|react|react-dom|@vitejs\/|vue|svelte|astro|parcel|webpack|@angular\/core|@remix-run\/)/i.test(dep)
+    /^(vite|next|react|react-dom|@vitejs\/|vue|svelte|astro|parcel|webpack|@angular\/core|@remix-run\/|expo)/i.test(dep)
   );
   const hasKnownConfig = [
     "vite.config.js",
@@ -828,7 +828,7 @@ function hasWebAppSignals(packageJson = {}, projectDir = "") {
 
 function pickPreviewScript(packageJson = {}) {
   const scripts = packageJson.scripts || {};
-  for (const name of ["dev", "start", "serve", "preview"]) {
+  for (const name of ["dev", "web", "start", "serve", "preview"]) {
     if (typeof scripts[name] === "string" && scripts[name].trim()) {
       return { name, command: scripts[name].trim() };
     }
@@ -854,6 +854,7 @@ function detectPreviewPort(scriptCommand = "", packageJson = {}) {
   if (command.includes("next") || deps.next) return 3000;
   if (command.includes("react-scripts") || deps["react-scripts"]) return 3000;
   if (command.includes("webpack") || deps.webpack) return 8080;
+  if (command.includes("expo") || deps.expo) return 8081;
   return 3000;
 }
 
