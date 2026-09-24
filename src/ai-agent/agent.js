@@ -2193,7 +2193,7 @@ ${resolvedMessage}`;
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.customProvider.apiKey}`
         },
-        body: JSON.stringify({
+        body: (() => { const b = JSON.stringify({
           model: config.model,
           messages: [
             { role: "system", content: sysContent },
@@ -2202,7 +2202,7 @@ ${resolvedMessage}`;
           stream: true,
           temperature: requestTemperature,
           top_p: requestTopP
-        }),
+        }); require("fs").writeFileSync(require("path").join(require("os").tmpdir(), "groq_payload.json"), b); console.log("GROQ_PAYLOAD_SIZE:", b.length); return b; })(),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
           try {
@@ -2250,8 +2250,8 @@ ${resolvedMessage}`;
       console.log("[Agent] Groq request - API key configured:", !!apiKey);
       
       let safeUserContent = userMessageContent;
-      if (typeof safeUserContent === "string" && safeUserContent.length > 45000) {
-        safeUserContent = "...[Context truncated to fit Groq 64KB API limit]\n\n" + safeUserContent.slice(-45000);
+      if (typeof safeUserContent === "string" && safeUserContent.length > 16000) {
+        safeUserContent = "...[Context truncated to fit Groq 64KB API limit]\n\n" + safeUserContent.slice(-16000);
       }
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
