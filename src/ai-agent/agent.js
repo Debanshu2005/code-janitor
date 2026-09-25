@@ -2305,7 +2305,7 @@ ${resolvedMessage}`;
               if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
               const delta = parsed.choices?.[0]?.delta;
               if (!delta) return null;
-              if (delta.tool_calls) {
+              if (delta.tool_calls && delta.tool_calls.length > 0) {
                 for (const tc of delta.tool_calls) {
                    if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
                    else {
@@ -2376,7 +2376,7 @@ ${resolvedMessage}`;
               if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
               const delta = parsed.choices?.[0]?.delta;
               if (!delta) return null;
-              if (delta.tool_calls) {
+              if (delta.tool_calls && delta.tool_calls.length > 0) {
                 for (const tc of delta.tool_calls) {
                    if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
                    else {
@@ -2487,7 +2487,7 @@ ${resolvedMessage}`;
               if (parsed.error) return "\n[API Error: " + (parsed.error.message || JSON.stringify(parsed.error)) + "]\n";
               const delta = parsed.choices?.[0]?.delta;
               if (!delta) return null;
-              if (delta.tool_calls) {
+              if (delta.tool_calls && delta.tool_calls.length > 0) {
                 for (const tc of delta.tool_calls) {
                    if (!toolCallState[tc.index]) toolCallState[tc.index] = { name: tc.function?.name || "", args: tc.function?.arguments || "" };
                    else {
