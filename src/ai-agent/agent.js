@@ -195,13 +195,14 @@ class AIAgent {
     this._rateLimitBuckets = new Map();
     this._rateLimitQueues = new Map();
     this._lastPipelineMetrics = null;
+    this.context = context;
     this._runStore = new AgentRunStore(context);
     this.showThinking = false;
     this.errorHandler = new SelfDiagnosingErrorHandler(this);
     this._syncCurrentSessionReferences();
 
     // Enable performance optimizations
-    createOptimizedAgent(this);
+    createOptimizedAgent(this, this.context);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") {
@@ -587,6 +588,55 @@ class AIAgent {
       .join("\n");
   }
 
+  async _summarizeCompactedHistoryWithModel(oldSummary, compactedEntries, session) {
+    try {
+      const systemInstruction = "You are an AI assistant summarizing a developer's chat session.\n\n### USER_MESSAGE ###\n";
+      let prompt = systemInstruction + "Please concisely summarize the following conversation history. Focus on open threads, decisions made, files touched, and what has been attempted. Do not include raw code or full logs, just a working summary for an AI agent to resume from.\n";
+      if (oldSummary) {
+         prompt += `\n\nPrevious Summary:\n${oldSummary}`;
+      }
+      prompt += "\n\nRecent History:\n";
+      for (const entry of compactedEntries) {
+         prompt += `[${entry.role.toUpperCase()}]: ${this._condenseHistoryEntry(entry.content, 999999)}\n`;
+      }
+      
+      const runtimeConfig = this.getConfig();
+      let config = runtimeConfig;
+      if (typeof this._prepareRuntimeConfig === "function") {
+         config = await this._prepareRuntimeConfig(runtimeConfig, null, "general").catch(() => runtimeConfig);
+      }
+      
+      const reqOpts = this._buildRequestOptions(config, prompt, "fast", "general", []);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
+      const response = await this._fetchWithRateLimit(
+        reqOpts.url,
+        {
+          method: "POST",
+          headers: reqOpts.headers,
+          signal: controller.signal,
+          body: reqOpts.body
+        },
+        config
+      );
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+         return; 
+      }
+
+      const parsed = await this._readResponseOutput(reqOpts, response, {});
+      if (parsed && parsed.text && parsed.text.trim()) {
+         session.summary = parsed.text.trim();
+         session.summaryIsModelGenerated = true;
+      }
+    } catch (e) {
+      // Fail silently
+    }
+  }
+
   _mergeSessionSummary(existingSummary, nextChunk) {
     const sections = [String(existingSummary || "").trim(), String(nextChunk || "").trim()]
       .filter(Boolean)
@@ -595,7 +645,18 @@ class AIAgent {
     if (sections.length <= MAX_SESSION_SUMMARY_CHARS) {
       return sections;
     }
-    return sections.slice(sections.length - MAX_SESSION_SUMMARY_CHARS);
+    const cutText = sections.slice(sections.length - MAX_SESSION_SUMMARY_CHARS);
+    const newlineIdx = cutText.indexOf('\n');
+    const periodIdx = cutText.indexOf('. ');
+    let cutIdx = -1;
+    if (newlineIdx !== -1 && periodIdx !== -1) {
+      cutIdx = Math.min(newlineIdx, periodIdx + 2);
+    } else if (newlineIdx !== -1) {
+      cutIdx = newlineIdx;
+    } else if (periodIdx !== -1) {
+      cutIdx = periodIdx + 2;
+    }
+    return cutIdx !== -1 ? cutText.slice(cutIdx).trim() : cutText;
   }
 
   _compactCurrentSessionHistory() {
@@ -612,12 +673,17 @@ class AIAgent {
       return false;
     }
 
+    const oldSummary = session.summary || "";
     const summaryChunk = this._buildHistorySummaryChunk(compactedEntries);
     session.summary = this._mergeSessionSummary(session.summary, summaryChunk);
     session.compactedCount =
       Number(session.compactedCount || 0) + compactedEntries.length;
     session.history = session.history.slice(-MAX_SESSION_RECENT_ENTRIES);
     this.conversationHistory = session.history;
+    
+    // Fire and forget model summarization
+    this._summarizeCompactedHistoryWithModel(oldSummary, compactedEntries, session);
+
     return true;
   }
 

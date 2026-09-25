@@ -123,7 +123,7 @@ class ChatPanel {
     global.performanceMonitor = this.performanceMonitor;
 
     // Enable performance optimizations
-    createOptimizedChatPanel(this);
+    createOptimizedChatPanel(this, this.context);
 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.uri.scheme === "file") this.lastActiveEditor = editor;

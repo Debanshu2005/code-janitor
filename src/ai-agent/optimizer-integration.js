@@ -9,9 +9,9 @@ const { FeedbackLoopOptimizer } = require("./feedback-loop-optimizer");
 /**
  * Create optimized version of agent methods
  */
-function createOptimizedAgent(agent) {
+function createOptimizedAgent(agent, context = null) {
   const optimizer = new PerformanceOptimizer();
-  const feedbackOptimizer = new FeedbackLoopOptimizer();
+  const feedbackOptimizer = getSharedFeedbackOptimizer(context);
   const normalizeWorkspaceRelativePath =
     typeof agent._normalizeWorkspaceRelativePath === "function"
       ? agent._normalizeWorkspaceRelativePath.bind(agent)
@@ -249,9 +249,9 @@ function createOptimizedAgent(agent) {
 /**
  * Create optimized version of chat panel methods
  */
-function createOptimizedChatPanel(chatPanel) {
+function createOptimizedChatPanel(chatPanel, context = null) {
   const optimizer = new PerformanceOptimizer();
-  const feedbackOptimizer = new FeedbackLoopOptimizer();
+  const feedbackOptimizer = getSharedFeedbackOptimizer(context);
 
   // Optimized patch matching with smart recovery
   chatPanel._buildPatchedContentOptimized = async function(currentContent, searchContent, replaceContent) {

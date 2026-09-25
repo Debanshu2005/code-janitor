@@ -8,12 +8,59 @@
  * Reduces unnecessary retries and improves success rates
  */
 class SmartRetryStrategy {
-  constructor() {
+  constructor(context = null) {
+    this.context = context;
     this.retryHistory = new Map(); // Track retry patterns
     this.successPatterns = new Map(); // Learn from successful retries
     this.maxRetries = 3;
     this.retryCount = 0;
     this.failureCount = 0;
+    this.persistedUpdates = 0;
+    this._hydrate();
+  }
+
+  _hydrate() {
+    if (!this.context || !this.context.globalState) return;
+    try {
+      const data = this.context.globalState.get("codeJanitor.retryStrategy.v1");
+      if (data) {
+        if (Array.isArray(data.retryHistory)) {
+          this.retryHistory = new Map(data.retryHistory);
+        }
+        if (Array.isArray(data.successPatterns)) {
+          this.successPatterns = new Map(data.successPatterns);
+        }
+      }
+    } catch (e) {}
+  }
+
+  _persist() {
+    if (!this.context || !this.context.globalState) return;
+    this.persistedUpdates++;
+    if (this.persistedUpdates % 5 !== 0) return; // Debounce write
+    
+    // Cap size
+    this._capMap(this.retryHistory, 200);
+    this._capMap(this.successPatterns, 200);
+    
+    try {
+      this.context.globalState.update("codeJanitor.retryStrategy.v1", {
+        retryHistory: Array.from(this.retryHistory.entries()),
+        successPatterns: Array.from(this.successPatterns.entries())
+      });
+    } catch (e) {}
+  }
+
+  _capMap(map, maxSize) {
+    if (map.size > maxSize) {
+      const toDelete = map.size - maxSize;
+      let count = 0;
+      for (const key of map.keys()) {
+        map.delete(key);
+        count++;
+        if (count >= toDelete) break;
+      }
+    }
   }
 
   /**
@@ -170,6 +217,7 @@ No placeholders, no truncation, no "rest of code unchanged" comments.`;
     } else {
       this.failureCount++;
     }
+    this._persist();
   }
 
   /**
@@ -462,8 +510,8 @@ The file currently has ${content.split("\n").length} lines. Your FILE: action mu
  * Main Feedback Loop Optimizer
  */
 class FeedbackLoopOptimizer {
-  constructor() {
-    this.retryStrategy = new SmartRetryStrategy();
+  constructor(context = null) {
+    this.retryStrategy = new SmartRetryStrategy(context);
     this.inspectionOptimizer = new InspectionLoopOptimizer();
     this.recoveryOptimizer = new RecoveryLoopOptimizer();
   }
