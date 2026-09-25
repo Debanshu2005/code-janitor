@@ -6,6 +6,17 @@
 const { PerformanceOptimizer } = require("./performance-optimizer");
 const { FeedbackLoopOptimizer } = require("./feedback-loop-optimizer");
 
+let sharedFeedbackOptimizer = null;
+function getSharedFeedbackOptimizer(context) {
+  if (!sharedFeedbackOptimizer) {
+    sharedFeedbackOptimizer = new FeedbackLoopOptimizer(context);
+  } else if (context && (!sharedFeedbackOptimizer.retryStrategy.context)) {
+    sharedFeedbackOptimizer.retryStrategy.context = context;
+    sharedFeedbackOptimizer.retryStrategy._hydrate();
+  }
+  return sharedFeedbackOptimizer;
+}
+
 /**
  * Create optimized version of agent methods
  */

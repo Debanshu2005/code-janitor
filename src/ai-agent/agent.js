@@ -2270,7 +2270,7 @@ ${resolvedMessage}`;
           ],
           stream: true,
           temperature: requestTemperature,
-          top_p: requestTopP
+          top_p: requestTopP, frequency_penalty: 0.4, presence_penalty: 0.4, frequency_penalty: 0.4, presence_penalty: 0.4
         }); require("fs").writeFileSync(require("path").join(require("os").tmpdir(), "groq_payload.json"), b); console.log("GROQ_PAYLOAD_SIZE:", b.length); return b; })(),
         parseChunk: (line) => {
           if (!line.startsWith("data: ") || line === "data: [DONE]") return null;
@@ -2344,7 +2344,7 @@ ${resolvedMessage}`;
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: "system", content: safeSysContent + "\n\nYou have access to native tools. Use them to manage files and run commands." }, { role: "user", content: safeUserContent }],
-          stream: true, temperature: requestTemperature, top_p: requestTopP, tools: agentTools
+          stream: true, temperature: requestTemperature, top_p: requestTopP, frequency_penalty: 0.4, presence_penalty: 0.4, frequency_penalty: 0.4, presence_penalty: 0.4
         }),
         parseChunk: (() => {
           let hasInjectedThinkStart = false;
@@ -2414,7 +2414,7 @@ ${resolvedMessage}`;
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: "system", content: sysContent + "\n\nYou have access to native tools. Use them to manage files and run commands." }, { role: "user", content: userMessageContent }],
-          stream: !requestImageOutput, temperature: requestTemperature, max_tokens: optimizedMaxTokens, top_p: requestTopP, tools: agentTools,
+          stream: !requestImageOutput, temperature: requestTemperature, max_tokens: optimizedMaxTokens, top_p: requestTopP, frequency_penalty: 0.4, presence_penalty: 0.4,
           ...(requestImageOutput ? { modalities: ["image", "text"] } : {})
         }),
         parseChunk: (() => {
@@ -2526,7 +2526,7 @@ ${resolvedMessage}`;
           ...minimaxOptimizations,
           ...llama70bOptimizations,
           ...nemotronOptimizations,
-          tools: agentTools
+          
         }),
         parseChunk: (() => {
           let hasInjectedThinkStart = false;
@@ -2599,7 +2599,7 @@ ${resolvedMessage}`;
           temperature: requestTemperature,
           num_predict: optimizedMaxTokens,
           top_k: 15,
-          top_p: requestTopP,
+          top_p: requestTopP, frequency_penalty: 0.4, presence_penalty: 0.4,
           num_ctx: optimizedContextWindow,
           repeat_penalty: isExecutionIntent ? 1.2 : 1.15
         }
@@ -9821,3 +9821,6 @@ ${userMessage}`;
 }
 
 module.exports = AIAgent;
+
+
+
