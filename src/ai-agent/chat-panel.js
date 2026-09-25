@@ -8895,12 +8895,23 @@ ${trimmedText}`;
                 this._postMessage({ type: "status", text: `Auto-running ${validation.classification} command: ${action.command}` });
               }
               this._postMessage({ type: "status", text: `Running: ${action.command}` });
-              let result = await this.agent.executeCommand(action.command, workspaceFolder);
+              // Report the start of the execution to the UI
+              const executionCardId = "exec_" + Math.random().toString(36).substring(7);
+              this._postMessage({
+                type: "execution_card_start",
+                id: executionCardId,
+                command: action.command
+              });
+
+              let result = await this.agent.executeCommandPersistent(action.command, workspaceFolder);
               
               // Autonomous Retry Loop
               let attempts = 1;
               let lastStderr = result.error || "";
+              let attemptHistory = [];
               while (!result.success && attempts < 3) {
+                 attemptHistory.push({ attempt: attempts, command: action.command, exitCode: result.exitCode, output: result.output, error: result.error });
+                 this._postMessage({ type: "status", text: `Command failed. Autonomous self-correction attempt ${attempts}/3...` });
                  this._postMessage({ type: "status", text: `Command failed. Autonomous self-correction attempt ${attempts}/3...` });
                  
                  const retryPrompt = `The command \`${action.command}\` failed with exit code ${result.exitCode}.\n\nOutput:\n${result.output}\n\nError:\n${result.error}\n\nPlease analyze the error and output a NEW \`CMD:\` to fix this issue. Do not explain, just output the command.`;
@@ -8922,7 +8933,7 @@ ${trimmedText}`;
                    if (!allowed) break;
                  }
                  
-                 result = await this.agent.executeCommand(action.command, workspaceFolder);
+                 result = await this.agent.executeCommandPersistent(action.command, workspaceFolder);
                  
                  if (!result.success && (result.error || "") === lastStderr) {
                    this._postMessage({ type: "status", text: `Identical error repeated. Aborting autonomous retry.` });
@@ -8942,12 +8953,14 @@ ${trimmedText}`;
               // Report the final execution card to the UI
               this._postMessage({
                 type: "execution_card",
+                id: executionCardId,
                 command: action.command,
                 status: result.success ? "success" : "failed",
                 stdout: result.output || "",
                 stderr: result.error || "",
                 exitCode: result.exitCode,
-                retries: attempts > 1 ? attempts - 1 : 0
+                retries: attempts > 1 ? attempts - 1 : 0,
+                attemptHistory: attemptHistory
               });
             }
           }

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-__CSP_NONCE__'; img-src __CSP_SOURCE__ https: data:; media-src https:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src https:;" />
     <style>
+
       *,
       *::before,
       *::after {
@@ -3070,7 +3071,9 @@
           grid-template-columns: 1fr;
         }
       }
-    </style>
+    
+@keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
   </head>
   <body>
     <div id="progress-bar-wrap" aria-live="polite">
@@ -6995,12 +6998,50 @@
           wrap.appendChild(cb);
           wrap.appendChild(btns);
           addRow(wrap, "ai");
+        } else if (msg.type === "execution_card_start") {
+          addActivity("Running: " + msg.command, "info");
+          
+          var wrap = document.createElement("div");
+          wrap.id = msg.id;
+          wrap.className = "exec-card running";
+          wrap.style.cssText = "background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.02)); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px; margin-top: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);";
+          
+          var header = document.createElement("div");
+          header.className = "exec-header";
+          header.style.cssText = "display: flex; align-items: center; justify-content: space-between; font-weight: bold; margin-bottom: 8px;";
+          
+          var title = document.createElement("span");
+          title.className = "exec-title";
+          title.innerHTML = "<span class='spinner' style='display:inline-block; animation: spin 1s linear infinite;'>⏳</span> " + msg.command;
+          
+          var badge = document.createElement("span");
+          badge.className = "exec-badge";
+          badge.style.cssText = "font-size: 0.8em; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); color: #ccc;";
+          badge.textContent = "Running...";
+          
+          header.appendChild(title);
+          header.appendChild(badge);
+          wrap.appendChild(header);
+          
+          if (!window._execCards) window._execCards = {};
+          window._execCards[msg.id] = wrap;
+          
+          addRow(wrap, "ai");
         } else if (msg.type === "execution_card") {
           addActivity(`Command ${msg.status}: ${msg.command}`, msg.status === "success" ? "success" : "error");
           
-          var wrap = document.createElement("div");
-          wrap.className = "exec-card " + msg.status;
-          wrap.style.cssText = "background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 12px; margin-top: 8px;";
+          var wrap = window._execCards && window._execCards[msg.id];
+          if (!wrap) {
+             // Fallback if start wasn't received
+             wrap = document.createElement("div");
+             wrap.className = "exec-card";
+             wrap.style.cssText = "background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.02)); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px; margin-top: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);";
+             addRow(wrap, "ai");
+          } else {
+             wrap.innerHTML = ""; // Clear pending state
+          }
+          wrap.classList.remove("running");
+          wrap.classList.add(msg.status);
           
           var header = document.createElement("div");
           header.style.cssText = "display: flex; align-items: center; justify-content: space-between; font-weight: bold; margin-bottom: 8px;";
@@ -7010,29 +7051,69 @@
           title.textContent = `${icon} ${msg.command}`;
           
           var badge = document.createElement("span");
-          badge.style.cssText = `font-size: 0.8em; padding: 2px 6px; border-radius: 4px; background: ${msg.status === 'success' ? '#1b5e20' : '#b71c1c'};`;
+          badge.style.cssText = `font-size: 0.8em; padding: 2px 6px; border-radius: 4px; background: ${msg.status === 'success' ? 'rgba(27, 94, 32, 0.7)' : 'rgba(183, 28, 28, 0.7)'}; color: #fff;`;
           badge.textContent = `Exit: ${msg.exitCode}${msg.retries ? ' (' + msg.retries + ' retries)' : ''}`;
           
           header.appendChild(title);
           header.appendChild(badge);
           wrap.appendChild(header);
           
-          if (msg.stdout) {
-             var outLabel = document.createElement("div");
-             outLabel.textContent = "stdout";
-             outLabel.style.cssText = "font-size: 0.8em; opacity: 0.7; margin-top: 8px;";
-             wrap.appendChild(outLabel);
-             wrap.appendChild(makeCodeBlock("log", msg.stdout));
-          }
-          if (msg.stderr) {
-             var errLabel = document.createElement("div");
-             errLabel.textContent = "stderr";
-             errLabel.style.cssText = "font-size: 0.8em; opacity: 0.7; margin-top: 8px; color: #ff8a80;";
-             wrap.appendChild(errLabel);
-             wrap.appendChild(makeCodeBlock("log", msg.stderr));
+          if (msg.attemptHistory && msg.attemptHistory.length > 0) {
+             var historyDiv = document.createElement("div");
+             historyDiv.style.cssText = "margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;";
+             var historyLabel = document.createElement("div");
+             historyLabel.textContent = "Autonomous Retries (" + msg.attemptHistory.length + ")";
+             historyLabel.style.cssText = "font-size: 0.85em; opacity: 0.8; font-weight: bold; margin-bottom: 8px;";
+             historyDiv.appendChild(historyLabel);
+             
+             msg.attemptHistory.forEach(function(att) {
+                var attDetails = document.createElement("details");
+                attDetails.style.cssText = "margin-top: 4px; padding: 4px; background: rgba(0,0,0,0.2); border-radius: 4px;";
+                var attSummary = document.createElement("summary");
+                attSummary.textContent = "Attempt " + att.attempt + ": " + att.command + " (Exit " + att.exitCode + ")";
+                attSummary.style.cssText = "font-size: 0.8em; opacity: 0.7; color: #ff8a80; cursor: pointer;";
+                attDetails.appendChild(attSummary);
+                if (att.output && att.output.trim()) {
+                   var attOutLabel = document.createElement("div");
+                   attOutLabel.textContent = "stdout:";
+                   attOutLabel.style.fontSize = "0.75em";
+                   attDetails.appendChild(attOutLabel);
+                   attDetails.appendChild(makeCodeBlock("log", att.output));
+                }
+                if (att.error && att.error.trim()) {
+                   var attErrLabel = document.createElement("div");
+                   attErrLabel.textContent = "stderr:";
+                   attErrLabel.style.fontSize = "0.75em";
+                   attDetails.appendChild(attErrLabel);
+                   attDetails.appendChild(makeCodeBlock("log", att.error));
+                }
+                historyDiv.appendChild(attDetails);
+             });
+             wrap.appendChild(historyDiv);
           }
           
-          addRow(wrap, "ai");
+          if (msg.stdout && msg.stdout.trim()) {
+             var outDetails = document.createElement("details");
+             outDetails.style.cssText = "margin-top: 8px;";
+             if (msg.status === "success") outDetails.open = true;
+             var outSummary = document.createElement("summary");
+             outSummary.textContent = "Final stdout";
+             outSummary.style.cssText = "font-size: 0.8em; opacity: 0.7; cursor: pointer;";
+             outDetails.appendChild(outSummary);
+             outDetails.appendChild(makeCodeBlock("log", msg.stdout));
+             wrap.appendChild(outDetails);
+          }
+          if (msg.stderr && msg.stderr.trim()) {
+             var errDetails = document.createElement("details");
+             errDetails.style.cssText = "margin-top: 8px;";
+             if (msg.status !== "success") errDetails.open = true;
+             var errSummary = document.createElement("summary");
+             errSummary.textContent = "Final stderr";
+             errSummary.style.cssText = "font-size: 0.8em; opacity: 0.7; color: #ff8a80; cursor: pointer;";
+             errDetails.appendChild(errSummary);
+             errDetails.appendChild(makeCodeBlock("log", msg.stderr));
+             wrap.appendChild(errDetails);
+          }
         } else if (msg.type === "error") {
           addActivity(msg.text, "error");
           hideProgress();

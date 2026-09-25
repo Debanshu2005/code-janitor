@@ -13,7 +13,9 @@ class PersistentShell extends EventEmitter {
     this.shellPath = process.env.SHELL || (this.isWindows ? "powershell.exe" : "/bin/bash");
     
     // Spawn
-    this.process = spawn(this.shellPath, [], {
+    const isPwsh = this.isWindows && this.shellPath.toLowerCase().includes("powershell");
+    const args = isPwsh ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"] : [];
+    this.process = spawn(this.shellPath, args, {
       cwd: this.cwd,
       env: { ...process.env, CI: "true", NO_COLOR: "1" },
       stdio: ["pipe", "pipe", "pipe"],
@@ -40,6 +42,19 @@ class PersistentShell extends EventEmitter {
         this.currentCommand = null;
       }
     });
+    
+    this.process.on("close", (code) => {
+      if (this.currentCommand) {
+        this.currentCommand.resolve({
+          stdout: this.stdoutBuffer,
+          stderr: this.stderrBuffer + `\nShell closed unexpectedly with code ${code}`,
+          exitCode: code || -1,
+          durationMs: Date.now() - this.currentCommand.startTime,
+          timedOut: false
+        });
+        this.currentCommand = null;
+      }
+    });
   }
 
   _onStdout(data) {
@@ -59,7 +74,7 @@ class PersistentShell extends EventEmitter {
     if (!this.currentCommand) return;
     
     const sentinel = this.currentCommand.sentinel;
-    const regex = new RegExp(`${sentinel}\r?\n([\\-\\d]+)`);
+    const regex = new RegExp(`${sentinel}[\\r\\n]+([\\-\\d]+)`);
     
     const match = this.stdoutBuffer.match(regex);
     if (match) {
@@ -99,11 +114,10 @@ class PersistentShell extends EventEmitter {
       
       let shellCmd;
       if (this.isWindows) {
+        // ALWAYS use PowerShell formatting on Windows if we spawn powershell, but check shellPath just in case.
         if (this.shellPath.toLowerCase().includes("powershell")) {
-          // PowerShell
-          shellCmd = `${command}\r\nWrite-Output "${sentinel}"\r\nWrite-Output $LASTEXITCODE\r\n`;
+          shellCmd = `${command}\r\n$err = if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }\r\nWrite-Output "${sentinel}"\r\nWrite-Output $err\r\n`;
         } else {
-          // CMD
           shellCmd = `${command}\r\necho ${sentinel}\r\necho %errorlevel%\r\n`;
         }
       } else {

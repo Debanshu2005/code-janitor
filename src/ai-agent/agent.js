@@ -9100,7 +9100,7 @@ ${userMessage}`;
 
     // Explicitly blocked (never allowed)
     const blockedPatterns = [
-      /\bnpm\s+install\s+-g\b/,
+      /\bnpm\s+(?:install|i)\s+-g\b/,
       /\byarn\s+global\b/,
       /\bchoco\s+install\b/,
       /\bwinget\s+install\b/,
@@ -9114,12 +9114,20 @@ ${userMessage}`;
       };
     }
 
-    // Highly destructive or interactive commands that cannot be auto-run
+    // Highly destructive or interactive commands that require explicit confirmation
     const destructivePatterns = [
       /\brm\s+-rf\b/,
       /\bgit\s+push\s+--force\b/,
       /\bgit\s+reset\s+--hard\b/,
-      /\bdel\s+\/f\b/
+      /\bdel\s+\/f\b/,
+      /\|\s*(?:sh|bash|powershell|pwsh|cmd)/i, // Piping into an interpreter
+      /\s>\s+(?!\/?dev\/null)/, // Output redirection to a file (excluding > /dev/null)
+      /\bchmod\s+-R\b/i,
+      /\bgit\s+clean\s+-fd\b/i,
+      //\\brm\\s+.*?([*?]|-r|-f|\\/|\\\\)/i, // Bare rm with wildcards, recursive, force, or paths
+      /\bmv\s+-f\b/i,
+      /`.*?`/, // Command substitution
+      /\$\(.*?\)/ // Command substitution
     ];
 
     if (destructivePatterns.some((pattern) => pattern.test(normalized))) {
