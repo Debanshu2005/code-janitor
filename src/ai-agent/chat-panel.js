@@ -8883,23 +8883,71 @@ ${trimmedText}`;
                 this._postMessage({ type: "status", text: `Blocked: ${validation.reason}` });
                 continue;
               }
-              this._postMessage({ type: "confirm", command: action.command });
-              const allowed = await new Promise((resolve) => { this._confirmResolve = resolve; });
-              if (!allowed) {
-                this._postMessage({ type: "status", text: `Denied: ${action.command}` });
-                continue;
+              
+              if (validation.classification === 'destructive') {
+                this._postMessage({ type: "confirm", command: action.command, classification: validation.classification });
+                const allowed = await new Promise((resolve) => { this._confirmResolve = resolve; });
+                if (!allowed) {
+                  this._postMessage({ type: "status", text: `Denied: ${action.command}` });
+                  continue;
+                }
+              } else {
+                this._postMessage({ type: "status", text: `Auto-running ${validation.classification} command: ${action.command}` });
               }
               this._postMessage({ type: "status", text: `Running: ${action.command}` });
-              const result = await this.agent.executeCommand(action.command, workspaceFolder);
+              let result = await this.agent.executeCommand(action.command, workspaceFolder);
+              
+              // Autonomous Retry Loop
+              let attempts = 1;
+              let lastStderr = result.error || "";
+              while (!result.success && attempts < 3) {
+                 this._postMessage({ type: "status", text: `Command failed. Autonomous self-correction attempt ${attempts}/3...` });
+                 
+                 const retryPrompt = `The command \`${action.command}\` failed with exit code ${result.exitCode}.\n\nOutput:\n${result.output}\n\nError:\n${result.error}\n\nPlease analyze the error and output a NEW \`CMD:\` to fix this issue. Do not explain, just output the command.`;
+                 
+                 const retryResponse = await this.agent.chat(retryPrompt, workspaceFolder, null, this.abortController?.signal, { mode: this.chatMode, skipHistory: true });
+                 
+                 if (retryResponse.error) break;
+                 
+                 const newCmdMatch = (retryResponse.text || "").match(/CMD:\s*(.+)/i);
+                 if (!newCmdMatch) break;
+                 
+                 action.command = newCmdMatch[1].trim();
+                 
+                 const val = this.agent.validateCommand(action.command);
+                 if (!val.allowed) break;
+                 if (val.classification === 'destructive') {
+                   this._postMessage({ type: "confirm", command: action.command, classification: val.classification });
+                   const allowed = await new Promise((res) => { this._confirmResolve = res; });
+                   if (!allowed) break;
+                 }
+                 
+                 result = await this.agent.executeCommand(action.command, workspaceFolder);
+                 
+                 if (!result.success && (result.error || "") === lastStderr) {
+                   this._postMessage({ type: "status", text: `Identical error repeated. Aborting autonomous retry.` });
+                   break;
+                 }
+                 lastStderr = result.error || "";
+                 attempts++;
+              }
+
               const resultText = result.success
                 ? (result.output || "Done.")
                 : `${result.error}${result.output ? `\n${result.output}` : ""}`;
               const suffix = result.outputTruncated
                 ? "\n[Command output was truncated for safety.]"
                 : "";
+              
+              // Report the final execution card to the UI
               this._postMessage({
-                type: result.success ? "applied" : "error",
-                text: `${resultText}${suffix}`
+                type: "execution_card",
+                command: action.command,
+                status: result.success ? "success" : "failed",
+                stdout: result.output || "",
+                stderr: result.error || "",
+                exitCode: result.exitCode,
+                retries: attempts > 1 ? attempts - 1 : 0
               });
             }
           }
