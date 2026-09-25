@@ -5858,12 +5858,19 @@
         var normalized = String(text || "").replace(/\r\n/g, "\n").trim();
         if (!normalized) return null;
 
-        var thinkMatch = normalized.match(/^<think>\s*([\s\S]*?)\s*<\/think>\s*([\s\S]*)$/i);
-        if (thinkMatch) {
-          return {
-            thinking: (thinkMatch[1] || "").trim(),
-            answer: (thinkMatch[2] || "").trim()
-          };
+        if (normalized.startsWith("<think>")) {
+          var closeIdx = normalized.indexOf("</think>");
+          if (closeIdx !== -1) {
+            return {
+              thinking: normalized.substring(7, closeIdx).trim(),
+              answer: normalized.substring(closeIdx + 8).trim()
+            };
+          } else {
+            return {
+              thinking: normalized.substring(7).trim(),
+              answer: ""
+            };
+          }
         }
 
         var match = normalized.match(/^(?:(?:#{1,6}\s*)|\*\*)?Thinking(?:\*\*)?\s*:?\s*\n([\s\S]*?)\n(?:(?:#{1,6}\s*)|\*\*)?Answer(?:\*\*)?\s*:?\s*\n([\s\S]*)$/i);
@@ -5875,12 +5882,13 @@
         };
       }
 
-      function renderSection(title, body, className) {
+      function renderSection(title, body, className, isOpen) {
         var section = document.createElement("div");
         section.className = "assistant-section " + className;
 
         if (className === "thinking") {
           var details = document.createElement("details");
+          if (isOpen) details.open = true;
           details.style.marginBottom = "8px";
           var summary = document.createElement("summary");
           summary.style.cursor = "pointer";
@@ -6297,9 +6305,11 @@
         } else {
           wrap.className = "assistant-sections";
           if (sections.thinking) {
-            wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking"));
+            wrap.appendChild(renderSection("Thinking", sections.thinking, "thinking", !sections.answer));
           }
-          wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
+          if (sections.answer) {
+            wrap.appendChild(renderSection("Answer", sections.answer || "", "answer"));
+          }
         }
 
         if (hasBlocks) {
