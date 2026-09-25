@@ -8912,7 +8912,6 @@ ${trimmedText}`;
               while (!result.success && attempts < 3) {
                  attemptHistory.push({ attempt: attempts, command: action.command, exitCode: result.exitCode, output: result.output, error: result.error });
                  this._postMessage({ type: "status", text: `Command failed. Autonomous self-correction attempt ${attempts}/3...` });
-                 this._postMessage({ type: "status", text: `Command failed. Autonomous self-correction attempt ${attempts}/3...` });
                  
                  const retryPrompt = `The command \`${action.command}\` failed with exit code ${result.exitCode}.\n\nOutput:\n${result.output}\n\nError:\n${result.error}\n\nPlease analyze the error and output a NEW \`CMD:\` to fix this issue. Do not explain, just output the command.`;
                  

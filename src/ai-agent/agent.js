@@ -9124,7 +9124,7 @@ ${userMessage}`;
       /\s>\s+(?!\/?dev\/null)/, // Output redirection to a file (excluding > /dev/null)
       /\bchmod\s+-R\b/i,
       /\bgit\s+clean\s+-fd\b/i,
-      //\\brm\\s+.*?([*?]|-r|-f|\\/|\\\\)/i, // Bare rm with wildcards, recursive, force, or paths
+      /\brm\s+(?:.*[*?]|.*-[a-z]*[rf]|.*\/|.*\\)/i, // Bare rm with wildcards, recursive, force, or paths
       /\bmv\s+-f\b/i,
       /`.*?`/, // Command substitution
       /\$\(.*?\)/ // Command substitution
@@ -9523,6 +9523,35 @@ ${userMessage}`;
         handleResult
       );
     });
+  }
+
+  async executeCommandPersistent(command, workspaceFolder, options = {}) {
+    const validation = this.validateCommand(command);
+    if (!validation.allowed) {
+      if (global.performanceMonitor) {
+        global.performanceMonitor.recordIssue("blocked_command", {
+          command,
+          reason: validation.reason,
+          workspace: workspaceFolder
+        });
+      }
+      return { success: false, error: validation.reason };
+    }
+
+    const { getShellSession } = require("./shell-session");
+    const shell = getShellSession(workspaceFolder || process.cwd());
+    const result = await shell.execute(command, options);
+
+    const rawOutput = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    const outputInfo = this._truncateCommandOutput(rawOutput);
+
+    return {
+      success: result.exitCode === 0,
+      output: outputInfo.text,
+      error: result.stderr,
+      exitCode: result.exitCode,
+      outputTruncated: outputInfo.truncated
+    };
   }
 
   _truncateCommandOutput(rawOutput) {
