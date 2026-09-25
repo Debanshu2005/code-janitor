@@ -48,7 +48,7 @@ const MODELS_BY_PROVIDER = {
   groq: ["openai/gpt-oss-120b","openai/gpt-oss-20b","qwen/qwen3.8-27b","allam-2-7b"],
   openrouter: ["qwen/qwen-2.5-coder-32b-instruct","qwen/qwen3-coder:free","qwen/qwen3-coder","qwen/qwen3-32b","qwen/qwen3-14b","qwen/qwen3-8b","qwen/qwq-32b","qwen/qwen2.5-coder-7b-instruct","qwen/qwen-2.5-72b-instruct","deepseek/deepseek-r1-distill-qwen-32b","meta-llama/llama-3.3-70b-instruct","meta-llama/llama-3.1-8b-instruct:free","google/gemini-2.0-flash-exp:free","mistralai/mistral-7b-instruct:free"],
   anthropic: ["claude-opus-4-5","claude-sonnet-4-5","claude-3-5-sonnet-20241022","claude-3-5-haiku-20241022","claude-3-opus-20240229"],
-  nvidia: ["meta/llama-3.3-70b-instruct","meta/llama-3.1-8b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemotron","nvidia/llama-3.3-nemotron-super-49b-v1.5"]
+  nvidia: ["meta/llama-3.1-8b-instruct","meta/llama-3.3-70b-instruct","nvidia/nvidia-nemotron-nano-9b-v2","minimaxai/minimax-m2.7","mistralai/mistral-nemo-12b-instruct","google/gemma-2-9b-it"]
 };
 const OLLAMA_FALLBACK_MODELS = [
   "qwen2.5-coder:7b",
