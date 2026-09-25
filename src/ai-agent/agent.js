@@ -4119,21 +4119,9 @@ ${resolvedMessage}`;
           if (finalText.includes("<think>") && !finalText.includes("</think>")) {
             finalText += "</think>";
           }
-          cleanedText = finalText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-          
-          // Fallback: If the model ONLY output a <think> block and nothing else
-          if (!cleanedText && finalText.includes("<think>")) {
-            const thinkMatch = finalText.match(/<think>([\s\S]*?)<\/think>/i);
-            if (thinkMatch && thinkMatch[1].trim()) {
-              const thoughts = thinkMatch[1].trim();
-              if (/^(?:READ:|CMD:|FILE:|PATCH:|MKDIR:)/mi.test(thoughts)) {
-                cleanedText = "> **[Auto-Correction]** The AI incorrectly placed its executable commands inside the `<think>` block. They have been forcefully extracted to allow the agent to continue.\n\n" + thoughts;
-              } else {
-                cleanedText = "[Model only generated reasoning. No final answer provided.]\n\n" + 
-                              thoughts.split("\n").map(line => "> " + line).join("\n");
-              }
-            }
-          }
+          // We no longer strip <think> blocks from finalText, 
+          // because the UI now renders them in beautiful accordions!
+          cleanedText = finalText;
 
           return {
             responseChars: cleanedText.length,
@@ -8350,6 +8338,9 @@ ${userMessage}`;
   }
 
   _parseResponse(response) {
+    if (typeof response === "string") {
+      response = response.replace(/<think>[\s\S]*?<\/think>/gi, "");
+    }
     const actions = [];
     const warnings = [];
     const consumedRanges = [];
