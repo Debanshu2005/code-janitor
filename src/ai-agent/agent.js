@@ -153,10 +153,11 @@ const DEFAULT_AI_RATE_LIMIT = {
 };
 const NVIDIA_FALLBACK_MODELS = [
   "meta/llama-3.3-70b-instruct",
-  "meta/llama-3.2-3b-instruct",
-  "mistralai/mistral-nemo-12b-instruct",
-  "google/gemma-2-9b-it",
-  "meta/llama-3.3-70b-instruct"
+  "meta/llama-3.1-8b-instruct",
+  "nvidia/nvidia-nemotron-nano-9b-v2",
+  "minimaxai/minimax-m2.7",
+  "mistralai/mistral-nemotron",
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5"
 ];
 const OLLAMA_GENERAL_PREFERRED_MODELS = [
   "qwen2.5-coder:3b",
