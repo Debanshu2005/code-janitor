@@ -1242,7 +1242,9 @@ ${resolvedMessage}`;
       "asr",
       "tts",
       "ocr",
-      "object-detection"
+      "object-detection",
+      "codellama",
+      "yi-large"
     ];
 
     return !blockedFragments.some((fragment) => value.includes(fragment));
