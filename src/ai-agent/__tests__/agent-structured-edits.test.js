@@ -1253,10 +1253,10 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     expect(agent.validateCommand("pip list --format=json")).toEqual({
-      allowed: true
+      allowed: true, classification: "expected"
     });
     expect(agent.validateCommand("arduino-cli lib list --format json")).toEqual({
-      allowed: true
+      allowed: true, classification: "expected"
     });
     expect(agent.validateCommand("npm test && git status")).toEqual({
       allowed: false,
@@ -1268,13 +1268,13 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     expect(agent.validateCommand("Get-ChildItem")).toEqual({
-      allowed: true
+      allowed: true, classification: "safe"
     });
     expect(agent.validateCommand("Get-Content package.json")).toEqual({
-      allowed: true
+      allowed: true, classification: "safe"
     });
     expect(agent.validateCommand("Select-String -Path src/ai-agent/agent.js -Pattern thinking")).toEqual({
-      allowed: true
+      allowed: true, classification: "safe"
     });
   });
 
@@ -1282,10 +1282,10 @@ describe("AIAgent structured edit parsing", () => {
     const agent = new AIAgent();
 
     expect(agent.validateCommand("npm --version")).toEqual({
-      allowed: true
+      allowed: true, classification: "safe"
     });
     expect(agent.validateCommand("npm run lint -- --fix")).toEqual({
-      allowed: true
+      allowed: true, classification: "expected"
     });
     expect(agent.validateCommand("npm exec jest -- --runInBand")).toEqual({
       allowed: false,
@@ -1310,15 +1310,13 @@ describe("AIAgent structured edit parsing", () => {
     });
     expect(agent.validateCommand("python app.py")).toEqual({
       allowed: false,
-      reason: "Only project-scoped read, test, and build commands are allowed"
+      reason: "Blocked unsafe, global, or network command"
     });
     expect(agent.validateCommand("git push origin main")).toEqual({
       allowed: false,
       reason: "Blocked unsafe, global, or network command"
     });
-    expect(agent.validateCommand("git status --short")).toEqual({
-      allowed: true
-    });
+    expect(agent.validateCommand("git status --short")).toEqual({ allowed: true, classification: "safe" });
   });
 
   test("runs JSON syntax checks without shelling out to node -e", async () => {
@@ -2839,3 +2837,4 @@ describe("AIAgent structured edit parsing", () => {
     expect(agent._isRepeatingResponse(text, "fast")).toBe(true);
   });
 });
+

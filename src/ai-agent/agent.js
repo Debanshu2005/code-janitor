@@ -9164,19 +9164,31 @@ ${userMessage}`;
       };
     }
 
+    if (/(&&|;\s*(?!(?:$))|\|\|)/.test(raw)) {
+      return {
+        allowed: false,
+        reason: "Use one project-scoped command per CMD line (no chaining)"
+      };
+    }
+
     // Explicitly blocked (never allowed)
     const blockedPatterns = [
       /\bnpm\s+(?:install|i)\s+-g\b/,
       /\byarn\s+global\b/,
       /\bchoco\s+install\b/,
       /\bwinget\s+install\b/,
-      /\bapt(?:-get)?\s+install\b/
+      /\bapt(?:-get)?\s+install\b/,
+      /^node\s+-e\b/i,
+      /^git\s+push\b/i,
+      /^npm\s+exec\b/i,
+      /^npm\s+publish\b/i,
+      /^python(?:3)?\s+(?!-m\b).*\.py\b/i
     ];
 
     if (blockedPatterns.some((pattern) => pattern.test(normalized))) {
       return {
         allowed: false,
-        reason: "Blocked globally destructive command"
+        reason: "Blocked unsafe, global, or network command"
       };
     }
 
@@ -9190,7 +9202,6 @@ ${userMessage}`;
       /\s>\s+(?!\/?dev\/null)/, // Output redirection to a file (excluding > /dev/null)
       /\bchmod\s+-R\b/i,
       /\bgit\s+clean\s+-fd\b/i,
-      /\brm\s+(?:.*[*?]|.*-[a-z]*[rf]|.*\/|.*\\)/i, // Bare rm with wildcards, recursive, force, or paths
       /\bmv\s+-f\b/i,
       /`.*?`/, // Command substitution
       /\$\(.*?\)/ // Command substitution
