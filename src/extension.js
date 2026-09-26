@@ -37,6 +37,16 @@ const FRONTEND_VALIDATION_EXTENSIONS = [
 ];
 
 function getPreferredWorkspaceRoot() {
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders && folders.length > 0) {
+    const fsSync = require("fs");
+    for (const folder of folders) {
+      if (fsSync.existsSync(path.join(folder.uri.fsPath, ".git"))) {
+        return folder.uri.fsPath;
+      }
+    }
+  }
+
   const editor = vscode.window.activeTextEditor;
   const activeWorkspaceFolder =
     editor?.document?.uri?.scheme === "file"
@@ -44,7 +54,7 @@ function getPreferredWorkspaceRoot() {
       : null;
   return (
     activeWorkspaceFolder?.uri?.fsPath ||
-    vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ||
+    folders?.[0]?.uri?.fsPath ||
     ""
   );
 }

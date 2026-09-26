@@ -3068,7 +3068,30 @@ ${resolvedMessage}`;
     return fullResponse || this._extractTextFromRawProviderBody(rawResponse);
   }
 
+  _resolveRepositoryRoot(workspaceFolder) {
+    if (!workspaceFolder) {
+      return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || "";
+    }
+    
+    let current = workspaceFolder;
+    for (let i = 0; i < 5; i++) {
+      if (
+        fsSync.existsSync(path.join(current, ".git")) ||
+        fsSync.existsSync(path.join(current, "graphify-out")) ||
+        fsSync.existsSync(path.join(current, "workspace.json"))
+      ) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    
+    return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || workspaceFolder;
+  }
+
   async scanCodebase(workspaceFolder) {
+    workspaceFolder = this._resolveRepositoryRoot(workspaceFolder);
     this.codebaseContext.clear();
     this.scanVersion += 1;
     this.workspaceRoot = workspaceFolder;
@@ -3100,6 +3123,7 @@ ${resolvedMessage}`;
   }
 
   async ensureCodebaseScanned(workspaceFolder, force = false) {
+    workspaceFolder = this._resolveRepositoryRoot(workspaceFolder);
     const scanIsFresh =
       this.workspaceRoot === workspaceFolder &&
       Date.now() - this.lastScanAt < SCAN_STALE_MS &&
@@ -3141,6 +3165,7 @@ ${resolvedMessage}`;
   }
 
   async getCodebaseOverview(workspaceFolder) {
+    workspaceFolder = this._resolveRepositoryRoot(workspaceFolder);
     if (!workspaceFolder) {
       return "No workspace is open, so I can't scan the codebase yet.";
     }
@@ -3439,22 +3464,41 @@ ${resolvedMessage}`;
 
 
   async _getKnowledgeGraphAssets(workspaceFolder) {
+    workspaceFolder = this._resolveRepositoryRoot(workspaceFolder);
     if (!workspaceFolder) return null;
 
-    const reportPath = path.join(
-      workspaceFolder,
-      "graphify-out",
-      "GRAPH_REPORT.md"
-    );
-    const graphJsonPath = path.join(
-      workspaceFolder,
-      "graphify-out",
-      "graph.json"
-    );
-    const reportExists = fsSync.existsSync(reportPath);
-    const graphExists = fsSync.existsSync(graphJsonPath);
+    let foundDir = null;
+    let reportPath = null;
+    let graphJsonPath = null;
+    let reportExists = false;
+    let graphExists = false;
 
-    if (!reportExists && !graphExists) {
+    let currentDir = workspaceFolder;
+    for (let i = 0; i < 5; i++) {
+      const pReport = path.join(currentDir, "graphify-out", "GRAPH_REPORT.md");
+      const pGraph = path.join(currentDir, "graphify-out", "graph.json");
+      const hasReport = fsSync.existsSync(pReport);
+      const hasGraph = fsSync.existsSync(pGraph);
+
+      if (hasReport || hasGraph) {
+        foundDir = currentDir;
+        reportPath = pReport;
+        graphJsonPath = pGraph;
+        reportExists = hasReport;
+        graphExists = hasGraph;
+        break;
+      }
+
+      if (fsSync.existsSync(path.join(currentDir, ".git"))) {
+        break;
+      }
+
+      const parent = path.dirname(currentDir);
+      if (parent === currentDir) break;
+      currentDir = parent;
+    }
+
+    if (!foundDir) {
       this._knowledgeGraphCache.delete(workspaceFolder);
       return null;
     }
@@ -4589,6 +4633,14 @@ ${resolvedMessage}`;
     try {
       const graphAssets = await this._getKnowledgeGraphAssets(workspaceFolder);
       if (!graphAssets) {
+        if (
+          intent === "scan" ||
+          intent === "show_graph" ||
+          this._isExplicitRepoContextRequest(userMessage)
+        ) {
+          const repoRoot = this._resolveRepositoryRoot(workspaceFolder);
+          return `[SYSTEM NOTE: No graphify-out/GRAPH_REPORT.md was found under ${repoRoot} or its parent directories. Run \`Code Janitor: Graphify\` to generate one, or open the folder that contains it.]`;
+        }
         return "";
       }
 
@@ -4662,6 +4714,7 @@ ${resolvedMessage}`;
   }
 
   async _loadWorkspaceMemory(workspaceFolder, userMessage, intent) {
+    workspaceFolder = this._resolveRepositoryRoot(workspaceFolder);
     if (!workspaceFolder) return "";
 
     const explicitHistoryRequest =
