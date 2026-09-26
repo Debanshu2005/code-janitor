@@ -3992,6 +3992,17 @@ Continue from the real MCP evidence above:
       /\b(inspect|study|analy[sz]e|check|debug|fix|issue|problem|error|broken)\b/i.test(text);
   }
 
+  _isGraphifyPanelOpen() {
+    if (!vscode.window.tabGroups?.all) return false;
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (tab.input?.viewType === "codeJanitorGraphify") {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   _shouldInjectGraphifyContext(message) {
     const text = String(message || "");
@@ -7258,7 +7269,7 @@ ${trimmedText}`;
             const mcpSystemOverlay = await this._buildMcpSystemOverlay(
               workspaceFolder
             );
-            const graphifySystemOverlay = this._shouldInjectGraphifyContext(requestText)
+            const graphifySystemOverlay = (this._isGraphifyPanelOpen() || this._shouldInjectGraphifyContext(requestText))
               ? await this._buildGraphifySystemOverlay(workspaceFolder)
               : null;
             const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay, graphifySystemOverlay]
@@ -7403,7 +7414,7 @@ ${trimmedText}`;
           const mcpSystemOverlay = await this._buildMcpSystemOverlay(
             workspaceFolder
           );
-          const graphifySystemOverlay = this._shouldInjectGraphifyContext(requestText)
+          const graphifySystemOverlay = (this._isGraphifyPanelOpen() || this._shouldInjectGraphifyContext(requestText))
             ? await this._buildGraphifySystemOverlay(workspaceFolder)
             : null;
           const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay, graphifySystemOverlay]
@@ -8669,6 +8680,7 @@ ${trimmedText}`;
                 console.log("[ChatPanel] Calling vscode.commands.executeCommand('codeJanitor.openGraphify')");
                 await vscode.commands.executeCommand("codeJanitor.openGraphify");
                 console.log("[ChatPanel] Graphify command executed successfully");
+                await this._buildGraphifySystemOverlay(workspaceFolder);
                 this._postMessage({
                   type: "applied",
                   text: "\u2705 Graphify panel opened. You can now visualize the codebase structure."
