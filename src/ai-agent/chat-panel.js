@@ -7345,6 +7345,7 @@ ${trimmedText}`;
               response.text ||
               "Structured edit output was incomplete, so Code Janitor blocked the generated file changes."
           });
+          this._postMessage({ type: "done" });
           return;
         }
 
@@ -7391,6 +7392,7 @@ ${trimmedText}`;
                 type: "error",
                 text: response?.error || "Tool follow-up failed."
               });
+              this._postMessage({ type: "done" });
               return;
             }
           }
@@ -7421,8 +7423,9 @@ ${trimmedText}`;
             this._postMessage({ type: "done" });
             return;
           }
+        } // Close the evidence rounds block
 
-streamController?.ensureFinalTextVisible(
+        streamController?.ensureFinalTextVisible(
           this._buildVisibleAssistantText(response, {
             preferStructuredSummary: isEditLikeIntent
           }),
@@ -7435,6 +7438,7 @@ streamController?.ensureFinalTextVisible(
         this._postMessage({ type: "done" });
         this._postSessionState();
 
+        if (response.actions && response.actions.length > 0) {
           const hasFileAction = response.actions.some(
             (action) =>
               (action.type === "file" &&
