@@ -3992,6 +3992,41 @@ Continue from the real MCP evidence above:
       /\b(inspect|study|analy[sz]e|check|debug|fix|issue|problem|error|broken)\b/i.test(text);
   }
 
+
+  _shouldInjectGraphifyContext(message) {
+    const text = String(message || "");
+    return /\b(codebase|repo|repository|project|architecture|structure|overview|graph|dependencies|modules?)\b/i.test(text) &&
+      /\b(show|explain|describe|summarize|overview|understand|analyze|analyse|what does|how (is|does)|structure of)\b/i.test(text);
+  }
+
+  async _buildGraphifySystemOverlay(workspaceFolder) {
+    if (!workspaceFolder) return null;
+    if (this._lastGraphifySummary && this._lastGraphifySummary.workspaceFolder === workspaceFolder) {
+      return this._lastGraphifySummary.text;
+    }
+    const fs = require("fs");
+    const path = require("path");
+    const reportPath = path.join(workspaceFolder, "graphify-out", "GRAPH_REPORT.md");
+    if (!fs.existsSync(reportPath)) return null;
+    try {
+      const content = fs.readFileSync(reportPath, "utf8");
+      const sections = content.split(/^## /m);
+      let extracted = "";
+      for (const section of sections) {
+        if (section.trim().startsWith("Overview") || section.trim().startsWith("God Nodes")) {
+          extracted += "## " + section.trim() + "\n\n";
+        }
+      }
+      if (!extracted) return null;
+      const text = `Current Graphify knowledge graph for this workspace (use this to answer codebase-wide/architecture questions accurately):\n${extracted.trim()}`;
+      this._lastGraphifySummary = { text, workspaceFolder, generatedAt: Date.now() };
+      return text;
+    } catch (err) {
+      console.warn("Failed to read graphify report for system overlay:", err);
+      return null;
+    }
+  }
+
   _previewDiagnosticsHasIssues(diagnostics) {
     if (!diagnostics) return false;
     return (
@@ -7223,7 +7258,10 @@ ${trimmedText}`;
             const mcpSystemOverlay = await this._buildMcpSystemOverlay(
               workspaceFolder
             );
-            const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay]
+            const graphifySystemOverlay = this._shouldInjectGraphifyContext(requestText)
+              ? await this._buildGraphifySystemOverlay(workspaceFolder)
+              : null;
+            const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay, graphifySystemOverlay]
               .filter(Boolean)
               .join("\n\n");
             response = await this.agent.chat(
@@ -7365,7 +7403,10 @@ ${trimmedText}`;
           const mcpSystemOverlay = await this._buildMcpSystemOverlay(
             workspaceFolder
           );
-          const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay]
+          const graphifySystemOverlay = this._shouldInjectGraphifyContext(requestText)
+            ? await this._buildGraphifySystemOverlay(workspaceFolder)
+            : null;
+          const combinedSystemOverlay = [systemOverlay, mcpSystemOverlay, graphifySystemOverlay]
             .filter(Boolean)
             .join("\n\n");
           let evidenceRounds = 0;
