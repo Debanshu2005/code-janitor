@@ -5398,7 +5398,8 @@ Continue from the real evidence above:
     workspaceFolder,
     runtimeConfig,
     requestMode,
-    systemOverlay = ""
+    systemOverlay = "",
+    streamController = null
   ) {
     const evidenceActions = Array.isArray(actions)
       ? actions.filter((action) => this._isEvidenceGatheringAction(action))
@@ -5431,7 +5432,7 @@ Continue from the real evidence above:
     return this.agent.chat(
       this._buildEvidenceFollowUpPrompt(originalRequest, toolResults),
       workspaceFolder,
-      null,
+      streamController ? (chunk) => streamController.push(chunk) : null,
       null,
       {
         mode: nextMode,
@@ -7287,18 +7288,6 @@ ${trimmedText}`;
           return;
         }
 
-        streamController?.ensureFinalTextVisible(
-          this._buildVisibleAssistantText(response, {
-            preferStructuredSummary: isEditLikeIntent
-          }),
-          {
-            rawText: typeof response.text === "string" ? response.text : ""
-          }
-        );
-        this._postAssistantImages(response.images);
-
-        this._postMessage({ type: "done" });
-        this._postSessionState();
 
         if (this.chatMode === "audit") {
           if (Array.isArray(response.actions) && response.actions.length > 0) {
@@ -7394,7 +7383,8 @@ ${trimmedText}`;
               workspaceFolder,
               activeRuntimeConfig || (await this._getEffectiveAiConfig()),
               requestMode,
-              combinedSystemOverlay
+              combinedSystemOverlay,
+              streamController
             );
             if (!response || response.error) {
               this._postMessage({
@@ -7428,8 +7418,22 @@ ${trimmedText}`;
               type: "error",
               text: response.error
             });
+            this._postMessage({ type: "done" });
             return;
           }
+
+streamController?.ensureFinalTextVisible(
+          this._buildVisibleAssistantText(response, {
+            preferStructuredSummary: isEditLikeIntent
+          }),
+          {
+            rawText: typeof response.text === "string" ? response.text : ""
+          }
+        );
+        this._postAssistantImages(response.images);
+
+        this._postMessage({ type: "done" });
+        this._postSessionState();
 
           const hasFileAction = response.actions.some(
             (action) =>
