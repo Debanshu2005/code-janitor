@@ -9506,6 +9506,10 @@ ${userMessage}`;
       return false;
     }
 
+    if (/^(dir|findstr|cmd|tree|type|copy|xcopy|del|ren|move)\b/.test(normalized)) {
+      return false;
+    }
+
     return true;
   }
 

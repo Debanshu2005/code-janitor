@@ -4848,7 +4848,7 @@ ${this._buildRecoveryFileContext(action.path, currentContent)}`;
     if (!normalized) return false;
     return /^(rg|grep|findstr|select-string|sls|get-content|gc|get-childitem|gci|get-item|gi|resolve-path|dir|ls|pwd|tree|type|cat|head|tail|find|which|where)\b/.test(
       normalized
-    ) || /^(git\s+(status|diff|show|log|branch|rev-parse)\b)/.test(normalized) ||
+    ) || /^(git\s+(status|diff|show|log|branch|rev-parse|ls-files|ls-tree)\b)/.test(normalized) ||
       /^(npm(\.cmd)?\s+(list|ls|outdated|audit|explain|query|pkg|root|prefix|view)\b)/.test(normalized) ||
       /^(pnpm(\.cmd)?\s+(list|outdated|why)\b)/.test(normalized) ||
       /^(yarn(\.cmd)?\s+(list|why|info)\b)/.test(normalized);
