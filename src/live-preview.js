@@ -1106,12 +1106,29 @@ async function livePreviewer(context, options = {}) {
   if (options.targetFile) {
     const fs = require('fs');
     const path = require('path');
-    const fullPath = path.isAbsolute(options.targetFile) 
+    let fullPath = path.isAbsolute(options.targetFile) 
       ? options.targetFile 
       : path.join(options.workspaceFolder || "", options.targetFile);
+      
+    if (!fs.existsSync(fullPath)) {
+      const globPath = options.targetFile.replace(/\\/g, '/');
+      let foundFiles = await vscode.workspace.findFiles(`**/${globPath}`, '**/node_modules/**', 1);
+      if (foundFiles.length === 0) {
+        // Fall back to just the filename if the full relative path was wrong
+        const basename = path.basename(globPath);
+        foundFiles = await vscode.workspace.findFiles(`**/${basename}`, '**/node_modules/**', 1);
+      }
+      if (foundFiles.length > 0) {
+        fullPath = foundFiles[0].fsPath;
+      }
+    }
+
     if (fs.existsSync(fullPath)) {
       const doc = await vscode.workspace.openTextDocument(fullPath);
       editor = await vscode.window.showTextDocument(doc, { preview: false });
+    } else {
+      vscode.window.showErrorMessage(`Live Preview failed: Could not find file matching "${options.targetFile}"`);
+      return { success: false, error: "not_found" };
     }
   }
 

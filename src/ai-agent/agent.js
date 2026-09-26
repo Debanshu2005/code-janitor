@@ -2336,7 +2336,7 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
         { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
         { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
-        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project or a specific file.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional path to the file to preview." } }, required: [] } } }
       ];
       return {
         url: "https://api.groq.com/openai/v1/chat/completions",
@@ -2363,7 +2363,7 @@ ${resolvedMessage}`;
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
                    if (tc.name === "lint") flushed += "\nLINT: active\n";
                    if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
-                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open" + (args.path ? " " + args.path : "") + "\n";
                  } catch (e) {}
               }
               return flushed || null;
@@ -2406,7 +2406,7 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
         { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
         { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
-        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project or a specific file.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional path to the file to preview." } }, required: [] } } }
       ];
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
@@ -2434,7 +2434,7 @@ ${resolvedMessage}`;
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
                    if (tc.name === "lint") flushed += "\nLINT: active\n";
                    if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
-                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open" + (args.path ? " " + args.path : "") + "\n";
                  } catch (e) {}
               }
               return flushed || null;
@@ -2499,7 +2499,7 @@ ${resolvedMessage}`;
         { type: "function", function: { name: "patch", description: "Edit file using exact search and replace", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" } }, required: ["path", "search", "replace"] } } },
         { type: "function", function: { name: "lint", description: "Run the Code Janitor native linter on the active file", parameters: { type: "object", properties: {}, required: [] } } },
         { type: "function", function: { name: "graphify", description: "Open the Graphify project architecture visualizer", parameters: { type: "object", properties: {}, required: [] } } },
-        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project", parameters: { type: "object", properties: {}, required: [] } } }
+        { type: "function", function: { name: "preview", description: "Start the Live Preview/DevServer for the current project or a specific file.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional path to the file to preview." } }, required: [] } } }
       ];
       
       return {
@@ -2545,7 +2545,7 @@ ${resolvedMessage}`;
                    if (tc.name === "patch") flushed += `\nPATCH: ${args.path}\n<<<< SEARCH\n${args.search}\n==== REPLACE\n${args.replace}\n>>>>\n`;
                    if (tc.name === "lint") flushed += "\nLINT: active\n";
                    if (tc.name === "graphify") flushed += "\nGRAPHIFY: open\n";
-                   if (tc.name === "preview") flushed += "\nPREVIEW: open\n";
+                   if (tc.name === "preview") flushed += "\nPREVIEW: open" + (args.path ? " " + args.path : "") + "\n";
                  } catch (e) {}
               }
               return flushed || null;
@@ -9001,12 +9001,14 @@ ${userMessage}`;
       actions.push({ type: "validate_frontend" });
     }
 
-    if (hasStandaloneToken(/PREVIEW\s*:\s*inspect/i)) {
-      actions.push({ type: "preview_inspect" });
+    const inspectMatch = response.match(/PREVIEW\s*:\s*inspect(?:\s+([^\n\r]+))?/i);
+    if (inspectMatch && !isWithinConsumedRange(inspectMatch.index)) {
+      actions.push({ type: "preview_inspect", path: inspectMatch[1] ? inspectMatch[1].trim() : undefined });
     }
 
-    if (hasStandaloneToken(/PREVIEW\s*:\s*open/i)) {
-      actions.push({ type: "preview" });
+    const previewMatch = response.match(/PREVIEW\s*:\s*open(?:\s+([^\n\r]+))?/i);
+    if (previewMatch && !isWithinConsumedRange(previewMatch.index)) {
+      actions.push({ type: "preview", path: previewMatch[1] ? previewMatch[1].trim() : undefined });
     }
 
     if (hasStandaloneToken(/PERFORMANCE\s*:\s*show/i)) {
