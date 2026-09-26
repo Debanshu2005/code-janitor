@@ -969,13 +969,13 @@ async function activate(context) {
   // 4. Live Preview Command (Enhanced for React)
   const previewDisposable = vscode.commands.registerCommand(
     "codeJanitor.livePreview",
-    () => livePreviewer(context)
+    (options) => livePreviewer(context, options)
   );
   context.subscriptions.push(previewDisposable);
   const inspectPreviewDisposable = vscode.commands.registerCommand(
-    "codeJanitor.inspectLivePreview",
-    () => livePreviewer(context, { inspect: true })
-  );
+      "codeJanitor.inspectLivePreview",
+      (options = {}) => livePreviewer(context, { inspect: true, ...options })
+    );
   context.subscriptions.push(inspectPreviewDisposable);
   console.log("[OK] Enhanced Live Preview command registered.");
 

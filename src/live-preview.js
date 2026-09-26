@@ -976,7 +976,7 @@ async function startDevServerPreview(context, { document, packageJsonPath, packa
       url,
       projectDir,
       script: script.name,
-      documentPath: document.fileName
+      documentPath: document?.fileName
     };
   }
 
@@ -1020,8 +1020,84 @@ async function startDevServerPreview(context, { document, packageJsonPath, packa
     url,
     projectDir,
     script: script.name,
-    documentPath: document.fileName
+    documentPath: document?.fileName
   };
+}
+
+
+function findWorkspaceEntryPoint(workspaceRoot) {
+  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) {
+    return { type: "none" };
+  }
+
+  // 1. Check root package.json
+  const rootPackageJsonPath = path.join(workspaceRoot, "package.json");
+  const rootPackageJson = readPackageJson(rootPackageJsonPath);
+  if (rootPackageJson && pickPreviewScript(rootPackageJson) && hasWebAppSignals(rootPackageJson, workspaceRoot)) {
+    return { type: "devServer", packageJsonPath: rootPackageJsonPath, packageJson: rootPackageJson };
+  }
+
+  // 2. Check root static html
+  if (hasStaticHtmlEntry(workspaceRoot)) {
+    const entries = ["index.html", "public/index.html", "dist/index.html"];
+    for (const entry of entries) {
+      const filePath = path.join(workspaceRoot, entry);
+      if (fs.existsSync(filePath)) {
+        return { type: "staticHtml", filePath };
+      }
+    }
+  }
+
+  // 3. Monorepo / subdirectories check
+  const subDirs = ["frontend", "client", "web", "app", "ui"];
+  const packagesDir = path.join(workspaceRoot, "packages");
+  if (fs.existsSync(packagesDir) && fs.statSync(packagesDir).isDirectory()) {
+    try {
+      const pkgs = fs.readdirSync(packagesDir)
+        .filter(p => fs.statSync(path.join(packagesDir, p)).isDirectory())
+        .map(p => path.join("packages", p));
+      subDirs.push(...pkgs);
+    } catch (e) {}
+  }
+
+  const candidates = [];
+  
+  for (const subDir of subDirs) {
+    const fullPath = path.join(workspaceRoot, subDir);
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isDirectory()) continue;
+
+    const pkgJsonPath = path.join(fullPath, "package.json");
+    const pkgJson = readPackageJson(pkgJsonPath);
+    if (pkgJson && pickPreviewScript(pkgJson) && hasWebAppSignals(pkgJson, fullPath)) {
+      candidates.push(subDir);
+      continue;
+    }
+
+    if (hasStaticHtmlEntry(fullPath)) {
+      candidates.push(subDir);
+    }
+  }
+
+  if (candidates.length === 1) {
+    const subDir = candidates[0];
+    const fullPath = path.join(workspaceRoot, subDir);
+    const pkgJsonPath = path.join(fullPath, "package.json");
+    const pkgJson = readPackageJson(pkgJsonPath);
+    if (pkgJson && pickPreviewScript(pkgJson) && hasWebAppSignals(pkgJson, fullPath)) {
+      return { type: "devServer", packageJsonPath: pkgJsonPath, packageJson: pkgJson };
+    }
+    const entries = ["index.html", "public/index.html", "dist/index.html"];
+    for (const entry of entries) {
+      const filePath = path.join(fullPath, entry);
+      if (fs.existsSync(filePath)) {
+        return { type: "staticHtml", filePath };
+      }
+    }
+  } else if (candidates.length > 1) {
+    return { type: "ambiguous", candidates };
+  }
+
+  return { type: "none" };
 }
 
 async function livePreviewer(context, options = {}) {
@@ -1294,3 +1370,4 @@ livePreviewer._test = {
 };
 
 module.exports = livePreviewer;
+

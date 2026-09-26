@@ -4092,7 +4092,7 @@ ${document.getText()}
 
     let verification = null;
     try {
-      verification = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+      verification = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview", { autoDiscover: true, workspaceFolder });
     } catch (error) {
       verification = { success: false, error: error.message };
     }
@@ -8647,7 +8647,11 @@ ${trimmedText}`;
               if (shouldInspectPreview) {
                 this._postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
                 try {
-                  const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+                  const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview", { autoDiscover: true, workspaceFolder });
+                if (inspection && inspection.error === "ambiguous") {
+                  this._postMessage({ type: "error", text: `Found multiple possible frontends: ${inspection.candidates.join(", ")} — which one?` });
+                  break;
+                }
                   const diagnostics = inspection?.diagnostics || null;
                   this._postMessage({
                     type: "applied",
@@ -8709,7 +8713,11 @@ ${trimmedText}`;
               } else {
                 this._postMessage({ type: "status", text: "Opening live preview..." });
                 try {
-                  await vscode.commands.executeCommand("codeJanitor.livePreview");
+                  const previewResult = await vscode.commands.executeCommand("codeJanitor.livePreview", { autoDiscover: true, workspaceFolder });
+                  if (previewResult && previewResult.error === "ambiguous") {
+                    this._postMessage({ type: "error", text: `Found multiple possible frontends: ${previewResult.candidates.join(", ")} — which one?` });
+                    break;
+                  }
                   this._postMessage({
                     type: "applied",
                     text: "Live preview command executed."
@@ -8724,7 +8732,11 @@ ${trimmedText}`;
             } else if (action.type === "preview_inspect") {
               this._postMessage({ type: "status", text: "Opening live preview and inspecting it for issues..." });
               try {
-                const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview");
+                const inspection = await vscode.commands.executeCommand("codeJanitor.inspectLivePreview", { autoDiscover: true, workspaceFolder });
+                if (inspection && inspection.error === "ambiguous") {
+                  this._postMessage({ type: "error", text: `Found multiple possible frontends: ${inspection.candidates.join(", ")} — which one?` });
+                  break;
+                }
                 const diagnostics = inspection?.diagnostics || null;
                 this._postMessage({
                   type: "applied",
