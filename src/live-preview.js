@@ -1101,7 +1101,31 @@ function findWorkspaceEntryPoint(workspaceRoot) {
 }
 
 async function livePreviewer(context, options = {}) {
-  const editor = vscode.window.activeTextEditor;
+  let editor = vscode.window.activeTextEditor;
+
+  if ((!editor || options.autoDiscover) && options.workspaceFolder) {
+    const discovered = findWorkspaceEntryPoint(options.workspaceFolder);
+
+    if (discovered.type === "ambiguous") {
+      return { success: false, error: "ambiguous", candidates: discovered.candidates };
+    }
+    if (discovered.type === "devServer") {
+      return startDevServerPreview(context, {
+        document: editor?.document,
+        packageJsonPath: discovered.packageJsonPath,
+        packageJson: discovered.packageJson
+      });
+    }
+    if (discovered.type === "staticHtml") {
+      const doc = await vscode.workspace.openTextDocument(discovered.filePath);
+      editor = await vscode.window.showTextDocument(doc, { preview: false });
+    }
+    if (discovered.type === "none") {
+      vscode.window.showInformationMessage("Couldn't find a frontend entry point in this workspace — is there an index.html or a package.json with a dev script?");
+      return { success: false, error: "no_entry_point" };
+    }
+  }
+
   if (!editor) {
     return vscode.window.showInformationMessage(
       "Open a supported file to start the live preview."
