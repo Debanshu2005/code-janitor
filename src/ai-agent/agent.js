@@ -42,7 +42,7 @@ const MAX_FAST_EXECUTION_ASSIST_CONTEXT_CHARS = 1_200;
 const MAX_FAST_EXECUTION_HISTORY_CHARS = 500;
 const MAX_RELEVANT_FILES = 3;
 const MAX_OPEN_TAB_SNIPPETS = 1;
-const MAX_HISTORY_ENTRIES = 3;
+const MAX_HISTORY_ENTRIES = 8;
 const MAX_SESSION_RECENT_ENTRIES = 8;
 const MAX_SESSION_PERSISTED_ENTRIES = 24;
 const MAX_PERSISTED_HISTORY_ENTRY_CHARS = 24_000;
@@ -633,7 +633,7 @@ class AIAgent {
          session.summaryIsModelGenerated = true;
       }
     } catch (e) {
-      // Fail silently
+      console.warn("Failed to summarize compacted history with model:", e);
     }
   }
 
@@ -661,7 +661,7 @@ class AIAgent {
 
   _compactCurrentSessionHistory() {
     const session = this._getCurrentSession();
-    if (session.history.length <= MAX_SESSION_RECENT_ENTRIES + 4) {
+    if (session.history.length <= MAX_HISTORY_ENTRIES) {
       return false;
     }
 
@@ -886,7 +886,7 @@ class AIAgent {
     const historyText = recentEntries
       .map(
         (entry) =>
-          `${entry.role === "user" ? "User" : "Assistant"}: ${entry.content.slice(0, 300)}`
+          `${entry.role === "user" ? "User" : "Assistant"}: ${this._condenseHistoryEntry(entry.content, 1200)}`
       )
       .join("\n\n");
     if (historyText) {
