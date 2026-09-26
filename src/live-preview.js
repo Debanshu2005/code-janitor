@@ -1103,7 +1103,19 @@ function findWorkspaceEntryPoint(workspaceRoot) {
 async function livePreviewer(context, options = {}) {
   let editor = vscode.window.activeTextEditor;
 
-  if ((!editor || options.autoDiscover) && options.workspaceFolder) {
+  if (options.targetFile) {
+    const fs = require('fs');
+    const path = require('path');
+    const fullPath = path.isAbsolute(options.targetFile) 
+      ? options.targetFile 
+      : path.join(options.workspaceFolder || "", options.targetFile);
+    if (fs.existsSync(fullPath)) {
+      const doc = await vscode.workspace.openTextDocument(fullPath);
+      editor = await vscode.window.showTextDocument(doc, { preview: false });
+    }
+  }
+
+  if ((!editor || (options.autoDiscover && !options.targetFile)) && options.workspaceFolder) {
     const discovered = findWorkspaceEntryPoint(options.workspaceFolder);
 
     if (discovered.type === "ambiguous") {
