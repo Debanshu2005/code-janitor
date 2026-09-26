@@ -1555,21 +1555,40 @@ class ChatPanel {
 
 
   _getEffectiveWorkspaceFolder() {
+    const folders = vscode.workspace.workspaceFolders;
+
+    if (folders && folders.length > 0) {
+      const activeEditor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
+      if (activeEditor?.document?.uri?.scheme === "file") {
+        const activeWorkspace = vscode.workspace.getWorkspaceFolder?.(
+          activeEditor.document.uri
+        )?.uri?.fsPath;
+        if (activeWorkspace) {
+          return activeWorkspace;
+        }
+      }
+      return folders[0].uri.fsPath;
+    }
+
     const activeEditor = this._getCurrentFileEditor() || vscode.window.activeTextEditor;
     if (activeEditor?.document?.uri?.scheme === "file") {
       const activeFilePath = activeEditor.document.fileName;
-      const activeWorkspace = vscode.workspace.getWorkspaceFolder?.(
-        activeEditor.document.uri
-      )?.uri?.fsPath;
-      if (activeWorkspace) {
-        return activeWorkspace;
-      }
-      if (activeFilePath) {
-        return path.dirname(activeFilePath);
-      }
+      return this._findProjectRootUpward(activeFilePath) || path.dirname(activeFilePath);
     }
 
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+    return null;
+  }
+
+  _findProjectRootUpward(startPath) {
+    let dir = path.dirname(startPath);
+    const root = path.parse(dir).root;
+    while (dir && dir !== root) {
+      if (fsSync.existsSync(path.join(dir, ".git")) || fsSync.existsSync(path.join(dir, "package.json"))) {
+        return dir;
+      }
+      dir = path.dirname(dir);
+    }
+    return null;
   }
 
   _withWorkspaceRoot(writeOptions = {}, workspaceFolder) {

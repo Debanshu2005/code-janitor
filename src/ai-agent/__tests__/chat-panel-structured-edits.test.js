@@ -460,7 +460,7 @@ describe("ChatPanel structured edit helpers", () => {
     expect(panel._getEffectiveWorkspaceFolder()).toBe("/workspace-two");
   });
 
-  test("effective workspace falls back to the active file directory when the file is outside any workspace", () => {
+  test("effective workspace falls back to the first workspace folder when the file is outside any workspace", () => {
     const panel = Object.create(ChatPanel.prototype);
     vscode.workspace.workspaceFolders = [
       { uri: { fsPath: "/workspace-one" } }
@@ -473,7 +473,7 @@ describe("ChatPanel structured edit helpers", () => {
     };
     vscode.workspace.getWorkspaceFolder.mockReturnValue(undefined);
 
-    expect(panel._getEffectiveWorkspaceFolder()).toBe("/external/project/src");
+    expect(panel._getEffectiveWorkspaceFolder()).toBe("/workspace-one");
   });
 
   test("resolves relative action paths against the effective workspace fallback", () => {
@@ -490,7 +490,7 @@ describe("ChatPanel structured edit helpers", () => {
     vscode.workspace.getWorkspaceFolder.mockReturnValue(undefined);
 
     expect(panel._resolveActionFilePath(null, "utils/helper.js")).toBe(
-      path.resolve("/external/project/src", "utils/helper.js")
+      path.resolve("/workspace-one", "utils/helper.js")
     );
   });
 
