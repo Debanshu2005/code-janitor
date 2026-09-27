@@ -1,22 +1,16 @@
-<div align="center">
-  <h1>Code Janitor</h1>
-  <p><em>🧹 Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML.</em></p>
-</div>
+<h1 align="center">Code Janitor</h1>
 
 <p align="center">
-  <a href="https://github.com/Debanshu2005/code-janitor/stargazers"><img src="https://img.shields.io/github/stars/Debanshu2005/code-janitor?style=flat-square&color=blue" alt="Stars"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor"><img src="https://img.shields.io/visual-studio-marketplace/v/Debanshu2005.code-janitor?style=flat-square&label=version" alt="Version"></a>
-  <a href="https://github.com/Debanshu2005/code-janitor/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Debanshu2005/code-janitor?style=flat-square&color=green" alt="License"></a>
-  <a href="https://github.com/Debanshu2005/code-janitor/pulse"><img src="https://img.shields.io/github/commit-activity/m/Debanshu2005/code-janitor?style=flat-square&color=blue" alt="Commits"></a>
-  <a href="https://github.com/Debanshu2005"><img src="https://img.shields.io/github/followers/Debanshu2005?label=follow&style=flat-square&color=red" alt="Follow"></a>
-  <a href="https://code-janitor-web.vercel.app/"><img src="https://img.shields.io/badge/chat-website-blueviolet?style=flat-square" alt="Chat"></a>
+  🧹 Professional code formatter and AI-powered syntax fixer for C, C++, Arduino, Java, JavaScript, Python, and HTML.
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor"><img src="https://img.shields.io/badge/VSCode-%3E%3D1.80-blue?logo=visual-studio-code&style=flat-square" alt="VS Code"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor"><img src="https://img.shields.io/badge/Arduino%20IDE-2.x-00979D?logo=arduino&style=flat-square" alt="Arduino IDE"></a>
-  <img src="https://img.shields.io/badge/Node-%3E%3D20-brightgreen?logo=node.js&style=flat-square" alt="Node">
-  <a href="https://github.com/Debanshu2005/code-janitor/actions/workflows/ci.yml"><img src="https://github.com/Debanshu2005/code-janitor/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
+  <a href="https://github.com/Debanshu2005/code-janitor/stargazers"><img src="https://img.shields.io/github/stars/Debanshu2005/code-janitor?style=flat-square&label=stars&color=007ec6" alt="Stars"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=Debanshu2005.code-janitor"><img src="https://img.shields.io/visual-studio-marketplace/v/Debanshu2005.code-janitor?style=flat-square&label=version&color=007ec6" alt="Version"></a>
+  <a href="https://github.com/Debanshu2005/code-janitor/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Debanshu2005/code-janitor?style=flat-square&label=license&color=007ec6" alt="License"></a>
+  <a href="https://github.com/Debanshu2005/code-janitor/pulse"><img src="https://img.shields.io/github/commit-activity/m/Debanshu2005/code-janitor?style=flat-square&label=commit%20activity&color=007ec6" alt="Commits"></a>
+  <a href="https://github.com/Debanshu2005"><img src="https://img.shields.io/github/followers/Debanshu2005?style=flat-square&label=follow&color=ea4335" alt="Follow"></a>
+  <a href="https://code-janitor-web.vercel.app/"><img src="https://img.shields.io/badge/chat-website-8a2be2?style=flat-square" alt="Chat"></a>
 </p>
 
 <p align="center">
